@@ -16,7 +16,7 @@ import App.Route (Route(..), routeCodec)
 import Client.Upload as Upload
 import Data.Array (filter, find)
 import Data.Either (Either(..))
-import Data.Maybe (Maybe(..), isJust, isNothing)
+import Data.Maybe (Maybe(..), isJust, isNothing, maybe)
 import Data.String.Common (trim)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
@@ -68,6 +68,8 @@ mkUpdate nav sendMessage model = case _ of
         else case mRoute of
           Just Drive ->
             Tuple base [ pure $ Just LoadDrive ]
+          Just (FileDetail _) ->
+            Tuple (base { files = Loading }) [ loadFilesAff Nothing ]
           Just Login ->
             -- Redirect authenticated users away from the login page
             if isJust model.session then
@@ -95,6 +97,8 @@ mkUpdate nav sendMessage model = case _ of
             Just Drive ->
               -- Session established after hydration → load drive data now
               Tuple m [ pure $ Just LoadDrive ]
+            Just (FileDetail _) ->
+              Tuple (m { files = Loading }) [ loadFilesAff Nothing ]
             _ -> noMessages m
       Nothing ->
         let
@@ -151,7 +155,7 @@ mkUpdate nav sendMessage model = case _ of
       [ loadFilesAff model.selectedFolder, foldersAff, billingAff ]
 
   FilesLoaded result ->
-    if model.route == Just Drive then noMessages $ case result of
+    if maybe false isProtectedRoute model.route then noMessages $ case result of
       Right files -> model { files = Loaded files }
       Left err -> model { files = Failed err, errorMessage = Just err }
     else noMessages model

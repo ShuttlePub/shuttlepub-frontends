@@ -48,6 +48,23 @@ test("upload file updates file list and quota", async ({ page }) => {
     .not.toBe(quotaBefore);
 });
 
+test("file detail supports navigation and direct reload", async ({ page }) => {
+  await loginViaUi(page);
+  await page.getByRole("link", { name: fileName, exact: true }).click();
+  await expect(page).toHaveURL(/\/drive\/files\/[^/]+$/);
+  await expect(page.getByTestId("file-detail-page")).toContainText("text/plain");
+  await page.reload();
+  await expect(page.getByTestId("file-detail-page")).toContainText(fileName);
+  await page.getByRole("link", { name: "Drive に戻る" }).click();
+  await expect(page.getByTestId("file-list")).toContainText(fileName);
+});
+
+test("missing file detail shows a not-found state", async ({ page }) => {
+  await loginViaUi(page);
+  await page.goto("/drive/files/missing-file");
+  await expect(page.getByTestId("file-detail-page")).toContainText("ファイルが見つかりません");
+});
+
 test("download file serves the presigned URL", async ({ page }) => {
   await loginViaUi(page);
   acceptDialogs(page);
