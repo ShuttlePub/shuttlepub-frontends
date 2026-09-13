@@ -55,6 +55,10 @@ export function createMockBooskiffClient(config: MockBooskiffConfig = {}): Boosk
   }
 
   return {
+    async getFile(id): Promise<FileItem> {
+      return requireFile(id);
+    },
+
     async listFiles(folderId): Promise<readonly FileItem[]> {
       return folderId === undefined ? [...files] : files.filter((f) => f.folderId === folderId);
     },

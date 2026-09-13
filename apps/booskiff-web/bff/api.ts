@@ -86,6 +86,9 @@ async function dispatch(req: Request, pathname: string, client: BooskiffClient, 
   }
 
   const fileMatch = /^\/api\/files\/([^/]+)$/.exec(pathname);
+  if (fileMatch && method === "GET") {
+    return jsonResponse(await client.getFile(decodeURIComponent(fileMatch[1])), setCookie);
+  }
   if (fileMatch && method === "DELETE") {
     await client.deleteFile(decodeURIComponent(fileMatch[1]));
     return emptyResponse(204, setCookie);

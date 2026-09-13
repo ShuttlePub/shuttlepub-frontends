@@ -52,6 +52,7 @@ export class BooskiffApiError extends Error {
 }
 
 export interface BooskiffClient {
+  getFile(id: string): Promise<FileItem>;
   listFiles(folderId?: string): Promise<readonly FileItem[]>;
   uploadFile(input: UploadInput): Promise<FileItem>;
   deleteFile(id: string): Promise<void>;

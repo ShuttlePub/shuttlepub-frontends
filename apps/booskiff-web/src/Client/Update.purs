@@ -68,8 +68,8 @@ mkUpdate nav sendMessage model = case _ of
         else case mRoute of
           Just Drive ->
             Tuple base [ pure $ Just LoadDrive ]
-          Just (FileDetail _) ->
-            Tuple (base { files = Loading }) [ loadFilesAff Nothing ]
+          Just (FileDetail fileId) ->
+            Tuple (base { files = Loading }) [ loadFileDetailAff fileId ]
           Just Login ->
             -- Redirect authenticated users away from the login page
             if isJust model.session then
@@ -97,8 +97,8 @@ mkUpdate nav sendMessage model = case _ of
             Just Drive ->
               -- Session established after hydration → load drive data now
               Tuple m [ pure $ Just LoadDrive ]
-            Just (FileDetail _) ->
-              Tuple (m { files = Loading }) [ loadFilesAff Nothing ]
+            Just (FileDetail fileId) ->
+              Tuple (m { files = Loading }) [ loadFileDetailAff fileId ]
             _ -> noMessages m
       Nothing ->
         let
@@ -326,6 +326,11 @@ logoutAff = do
 loadFilesAff :: Maybe String -> Aff (Maybe Message)
 loadFilesAff mFolderId = do
   result <- Drive.listFiles mFolderId
+  pure $ Just $ FilesLoaded result
+
+loadFileDetailAff :: String -> Aff (Maybe Message)
+loadFileDetailAff fileId = do
+  result <- Drive.fileDetail fileId
   pure $ Just $ FilesLoaded result
 
 foldersAff :: Aff (Maybe Message)

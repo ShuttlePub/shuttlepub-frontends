@@ -63,9 +63,26 @@ test("file detail supports navigation and direct reload", async ({ page }, testI
   await expect(page.getByTestId("file-list")).toContainText(fileName);
 });
 
+test("folder-contained file detail survives direct reload", async ({ page }) => {
+  await loginViaUi(page);
+  await folderRow(page, folderName).getByRole("button", { name: folderName, exact: true }).click();
+  await page.getByTestId("upload-input").setInputFiles({ name: "inside.txt", mimeType: "text/plain", buffer: Buffer.from("inside folder") });
+  await page.getByTestId("upload-submit").click();
+  const detailResponse = page.waitForResponse((response) => /\/api\/files\/[^/?]+$/.test(response.url()) && response.request().method() === "GET");
+  await page.getByRole("link", { name: "inside.txt", exact: true }).click();
+  expect((await detailResponse).status()).toBe(200);
+  await expect(page.getByTestId("file-detail-page")).toContainText("inside.txt");
+  await page.reload();
+  await expect(page.getByTestId("file-detail-page")).toContainText("inside.txt");
+  await page.getByRole("link", { name: "Drive に戻る" }).click();
+  await folderRow(page, folderName).getByRole("button", { name: folderName, exact: true }).click();
+  await page.getByTestId("delete-file-inside.txt").click();
+  await expect(page.getByTestId("file-list")).not.toContainText("inside.txt");
+});
+
 test("missing file detail shows a not-found state", async ({ page }) => {
   await loginViaUi(page);
-  await page.goto("/drive/files/missing-file");
+  await page.goto("/drive/files/00000000-0000-0000-0000-000000000000");
   await expect(page.getByTestId("file-detail-page")).toContainText("ファイルが見つかりません");
 });
 

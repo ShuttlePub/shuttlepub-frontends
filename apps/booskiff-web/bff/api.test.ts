@@ -220,6 +220,15 @@ describe("POST /api/files (streaming upload)", () => {
 });
 
 describe("file download / delete", () => {
+  test("GET file detail fetches a folder-contained file directly", async () => {
+    const { calls } = stubFetch(() => jsonResponse(200, wireFile));
+    const cookie = await cookieFor(makeSession());
+    const res = await api(new Request("http://localhost:3000/api/files/file_1", { headers: { cookie } }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual(camelFile);
+    expect(calls.map((call) => call.url)).toEqual([`${CORE}/v1/files/file_1`]);
+  });
+
   test("GET /api/files/:id/download → 302 Location to core-provided URL", async () => {
     const { calls } = stubFetch((call) => {
       expect(call.method).toBe("GET");
