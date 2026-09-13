@@ -8,12 +8,13 @@ import Data.Argonaut.Encode.Class (class EncodeJson)
 import Data.Argonaut.Encode.Generic (genericEncodeJson)
 import Data.Generic.Rep (class Generic)
 import Data.Show.Generic (genericShow)
-import Routing.Duplex (RouteDuplex', prefix, root)
+import Routing.Duplex (RouteDuplex', prefix, root, segment)
 import Routing.Duplex.Generic (noArgs, sum)
 
 data Route
   = Login
   | Drive
+  | FileDetail String
 
 derive instance Generic Route _
 derive instance Eq Route
@@ -34,4 +35,5 @@ routeCodec :: RouteDuplex' Route
 routeCodec = root $ sum
   { "Login": prefix "login" noArgs
   , "Drive": prefix "drive" noArgs
+  , "FileDetail": prefix "drive" (prefix "files" segment)
   }

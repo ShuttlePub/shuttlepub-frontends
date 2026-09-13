@@ -42,6 +42,15 @@ export async function handleAuthRequest(req: Request, deps: AuthDeps): Promise<R
   const { pathname } = new URL(req.url);
   if (!pathname.startsWith("/auth/")) return null;
 
+  const methods: Readonly<Record<string, string>> = {
+    "/auth/login": "POST", "/auth/logout": "POST", "/auth/oauth/start": "GET",
+    "/auth/callback": "GET", "/auth/session": "GET",
+  };
+  const allowed = methods[pathname];
+  if (allowed && req.method !== allowed) {
+    return Response.json({ error: "Method not allowed" }, { status: 405, headers: { Allow: allowed } });
+  }
+
   switch (pathname) {
     case "/auth/login":
       return deps.mode.kind === "mock"

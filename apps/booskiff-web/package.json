@@ -7,7 +7,8 @@
     "@shuttlepub/auth-bun": "workspace:*",
     "@shuttlepub/auth-core": "workspace:*",
     "@shuttlepub/design-tokens": "workspace:*",
-    "@shuttlepub/styles": "workspace:*"
+    "@shuttlepub/styles": "workspace:*",
+    "jose": "6.2.2"
   },
   "devDependencies": {
     "spago": "^1.0.3",

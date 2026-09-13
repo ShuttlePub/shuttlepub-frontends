@@ -15,7 +15,7 @@ import Data.Generic.Rep (class Generic)
 import Data.Maybe (Maybe(..), maybe)
 import Data.Show.Generic (genericShow)
 
-data PageModel = Login | Drive | NotFound
+data PageModel = Login | Drive | FileDetail String | NotFound
 
 derive instance Generic PageModel _
 derive instance Eq PageModel
@@ -217,12 +217,14 @@ pageForRoute :: Route -> PageModel
 pageForRoute = case _ of
   Route.Login -> Login
   Route.Drive -> Drive
+  Route.FileDetail fileId -> FileDetail fileId
 
 -- | Check if a route requires authentication
 isProtectedRoute :: Route -> Boolean
 isProtectedRoute = case _ of
   Route.Login -> false
   Route.Drive -> true
+  Route.FileDetail _ -> true
 
 pageForMaybeRoute :: Maybe Route -> PageModel
 pageForMaybeRoute = maybe NotFound pageForRoute

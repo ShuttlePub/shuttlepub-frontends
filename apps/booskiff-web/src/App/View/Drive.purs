@@ -4,6 +4,7 @@ import Prelude
 
 import App.Format (humanize)
 import App.Message (Message(..))
+import App.Route (Route(..), routeCodec)
 import App.Model (Billing(..), FileItem(..), Folder(..), Model, RemoteData(..), UploadState)
 import Data.Int (floor)
 import Data.Maybe (Maybe(..), isJust, maybe)
@@ -13,11 +14,13 @@ import Flame (Html)
 import Flame.Html.Attribute as HA
 import Flame.Html.Element as HE
 import ShuttlePub.UI.Theme as T
+import Routing.Duplex (print)
 
 view :: Model -> Html Message
 view model =
   HE.div
-    [ HA.class' "space-y-8"
+    [ HA.key "drive"
+    , HA.class' "space-y-8"
     , HA.createAttribute "data-testid" "drive-page"
     ]
     [ HE.h1
@@ -213,14 +216,14 @@ folderRow model (Folder folder) =
           , HA.type' "text"
           , HA.value model.folderForm.name
           , HA.onInput FolderNameChanged
-          , HA.createAttribute "data-testid" ("folder-rename-input-" <> folder.name)
+          , HA.createAttribute "data-testid" ("folder-rename-input-" <> folder.id)
           ]
       , HE.button
           [ HA.class'
               ( "px-3 py-1.5 text-sm text-white " <> T.bgAccent <> " " <> T.roundedTheme
               )
           , HA.onClick SubmitRenameFolder
-          , HA.createAttribute "data-testid" ("folder-rename-save-" <> folder.name)
+          , HA.createAttribute "data-testid" ("folder-rename-save-" <> folder.id)
           ]
           [ HE.text "保存" ]
       ]
@@ -283,8 +286,10 @@ fileRow (FileItem file) =
         )
     ]
     [ HE.div [ HA.class' "flex items-center gap-3 min-w-0" ]
-        [ HE.span
-            [ HA.class' ("text-sm font-medium truncate " <> T.textPrimary) ]
+        [ HE.a
+            [ HA.class' ("text-sm font-medium truncate " <> T.navLink)
+            , HA.href (print routeCodec (FileDetail file.id))
+            ]
             [ HE.text file.name ]
         , HE.span
             [ HA.class' ("text-xs " <> T.textMuted) ]

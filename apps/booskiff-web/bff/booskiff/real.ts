@@ -92,6 +92,11 @@ export function createBooskiffClient(config: RealBooskiffConfig, accessToken: st
   }
 
   return {
+    async getFile(id): Promise<FileItem> {
+      const resp = await fetch(`${base}/v1/files/${encodeURIComponent(id)}`, { headers: authHeaders() });
+      return toFile(await expectJson<WireFile>(resp, [200]));
+    },
+
     async listFiles(folderId): Promise<readonly FileItem[]> {
       const query = new URLSearchParams();
       if (folderId !== undefined) query.set("folder_id", folderId);

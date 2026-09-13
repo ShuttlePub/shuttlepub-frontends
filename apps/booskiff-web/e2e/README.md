@@ -35,7 +35,7 @@ The script:
 | Service  | Image / build                              | Notes                                       |
 | -------- | ------------------------------------------ | ------------------------------------------- |
 | postgres | postgres:16                                | no host ports                               |
-| minio    | minio/minio:latest                         | `127.0.0.1:19000 -> 19000` (browser-reachable presigned URLs); core shares this netns (`network_mode: service:minio`) so SigV4 presign host matches |
+| minio    | minio/minio (digest pinned in compose.e2e.yml) | `127.0.0.1:19000 -> 19000` (browser-reachable presigned URLs); core shares this netns (`network_mode: service:minio`) so SigV4 presign host matches |
 | core     | built from `$BOOSKIFF_CORE_DIR`            | in-network API on the minio alias (`http://minio:8080`); self-creates the bucket at startup, so there is no mc-init service |
 | web      | built from `apps/booskiff-web/Containerfile` | `127.0.0.1:3210 -> 3100`                 |
 
@@ -45,6 +45,9 @@ this project publishes only 3210 and 19000, both loopback-only.
 ## Fixtures (`e2e/fixtures/`)
 
 TEST-ONLY, committed (mirroring Booskiff core's committed test keys):
+These public fixtures are not secrets and MUST NOT be trusted by production
+issuers or used to sign production tokens. Their private key is intentionally
+committed for reproducible local tests, not deployment.
 `jwtRS256.pkcs8.pem` + `jwks.json` (`kid: test-key`, matching the BFF signing
 key id). Regenerate and
 verify with the exact commands in `e2e/fixtures/README.md`; `bun

@@ -48,6 +48,44 @@ test("upload file updates file list and quota", async ({ page }) => {
     .not.toBe(quotaBefore);
 });
 
+test("file detail supports navigation and direct reload", async ({ page }, testInfo) => {
+  await loginViaUi(page);
+  await page.getByRole("link", { name: fileName, exact: true }).click();
+  await expect(page).toHaveURL(/\/drive\/files\/[^/]+$/);
+  await expect(page.getByTestId("file-detail-page")).toContainText("text/plain");
+  await page.reload();
+  await expect(page.getByTestId("file-detail-page")).toContainText(fileName);
+  for (const width of [375, 768, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.screenshot({ path: testInfo.outputPath(`detail-${width}.png`), fullPage: true });
+  }
+  await page.getByRole("link", { name: "Drive に戻る" }).click();
+  await expect(page.getByTestId("file-list")).toContainText(fileName);
+});
+
+test("folder-contained file detail survives direct reload", async ({ page }) => {
+  await loginViaUi(page);
+  await folderRow(page, folderName).getByRole("button", { name: folderName, exact: true }).click();
+  await page.getByTestId("upload-input").setInputFiles({ name: "inside.txt", mimeType: "text/plain", buffer: Buffer.from("inside folder") });
+  await page.getByTestId("upload-submit").click();
+  const detailResponse = page.waitForResponse((response) => /\/api\/files\/[^/?]+$/.test(response.url()) && response.request().method() === "GET");
+  await page.getByRole("link", { name: "inside.txt", exact: true }).click();
+  expect((await detailResponse).status()).toBe(200);
+  await expect(page.getByTestId("file-detail-page")).toContainText("inside.txt");
+  await page.reload();
+  await expect(page.getByTestId("file-detail-page")).toContainText("inside.txt");
+  await page.getByRole("link", { name: "Drive に戻る" }).click();
+  await folderRow(page, folderName).getByRole("button", { name: folderName, exact: true }).click();
+  await page.getByTestId("delete-file-inside.txt").click();
+  await expect(page.getByTestId("file-list")).not.toContainText("inside.txt");
+});
+
+test("missing file detail shows a not-found state", async ({ page }) => {
+  await loginViaUi(page);
+  await page.goto("/drive/files/00000000-0000-0000-0000-000000000000");
+  await expect(page.getByTestId("file-detail-page")).toContainText("ファイルが見つかりません");
+});
+
 test("download file serves the presigned URL", async ({ page }) => {
   await loginViaUi(page);
   acceptDialogs(page);
@@ -71,9 +109,12 @@ test("download file serves the presigned URL", async ({ page }) => {
 test("rename folder", async ({ page }) => {
   await loginViaUi(page);
   const row = folderRow(page, folderName);
+  const renameId = await row.getByTestId(/^rename-folder-/).getAttribute("data-testid");
+  if (!renameId) throw new Error("rename button has no stable id");
+  const folderId = renameId.slice("rename-folder-".length);
   await row.getByTestId(/^rename-folder-/).click();
-  await page.getByTestId(`folder-rename-input-${folderName}`).fill(renamedFolderName);
-  await page.getByTestId(`folder-rename-save-${folderName}`).click();
+  await page.getByTestId(`folder-rename-input-${folderId}`).fill(renamedFolderName);
+  await page.getByTestId(`folder-rename-save-${folderId}`).click();
 
   await expect(page.getByTestId("folder-list")).toContainText(renamedFolderName);
   await expect(page.getByTestId("folder-list")).not.toContainText(folderName);

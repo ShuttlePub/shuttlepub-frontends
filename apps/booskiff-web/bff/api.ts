@@ -6,7 +6,7 @@
 // そのままパススルーする。
 // ============================================================
 
-import type { SessionAdapter } from "@shuttlepub/auth-bun";
+import { csrfCheck, type SessionAdapter } from "@shuttlepub/auth-bun";
 import { BooskiffApiError, type BooskiffClient } from "./booskiff/client.ts";
 
 export type ApiDeps = {
@@ -44,6 +44,11 @@ export async function handleApiRequest(req: Request, deps: ApiDeps): Promise<Res
   const session = await deps.adapter.getSession(req);
   if (!session) return jsonError(401, "unauthorized", "authentication required", null);
 
+  if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+    const reject = csrfCheck(req);
+    if (reject) return jsonError(403, "forbidden", "CSRF check failed", null);
+  }
+
   const outcome = await deps.adapter.refreshSessionIfNeeded(session);
   if (outcome.kind === "refresh-failed-expired") {
     return jsonError(401, "unauthorized", "authentication required", outcome.sessionCookieHeader);
@@ -58,7 +63,7 @@ export async function handleApiRequest(req: Request, deps: ApiDeps): Promise<Res
       const headers = withCookie(new Headers({ "Content-Type": "application/json" }), refreshedCookie);
       return new Response(err.body, { status: err.status, headers });
     }
-    throw err;
+    return jsonError(502, "bad_gateway", "upstream request failed", refreshedCookie);
   }
 }
 
@@ -68,7 +73,7 @@ async function dispatch(req: Request, pathname: string, client: BooskiffClient, 
 
   if (pathname === "/api/files") {
     if (method === "GET") {
-      const folderId = url.searchParams.get("folder_id") ?? undefined;
+      const folderId = url.searchParams.get("folder_id") || undefined;
       return jsonResponse({ items: await client.listFiles(folderId) }, setCookie);
     }
     if (method === "POST") return upload(req, url, client, setCookie);
@@ -81,6 +86,9 @@ async function dispatch(req: Request, pathname: string, client: BooskiffClient, 
   }
 
   const fileMatch = /^\/api\/files\/([^/]+)$/.exec(pathname);
+  if (fileMatch && method === "GET") {
+    return jsonResponse(await client.getFile(decodeURIComponent(fileMatch[1])), setCookie);
+  }
   if (fileMatch && method === "DELETE") {
     await client.deleteFile(decodeURIComponent(fileMatch[1]));
     return emptyResponse(204, setCookie);
@@ -129,7 +137,7 @@ async function upload(req: Request, url: URL, client: BooskiffClient, setCookie:
   const file = await client.uploadFile({
     name,
     mime: url.searchParams.get("mime"),
-    folderId: url.searchParams.get("folder_id"),
+    folderId: url.searchParams.get("folder_id") || null,
     contentType: req.headers.get("content-type") ?? "application/octet-stream",
     contentLength,
     body: req.body ?? emptyStream(),

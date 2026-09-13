@@ -5,15 +5,23 @@ import Prelude
 import App.Format (humanize, mentionsSizeLimit, uploadErrorMessage)
 import App.Model (Billing(..), FileItem(..), Folder(..), Model, RemoteData(..), initialModel)
 import App.Route (Route(..), routeCodec)
+import App.Model as Model
+import App.Message (Message(..))
+import App.View as View
+import Client.Update (mkUpdate)
 import Data.Argonaut.Decode (class DecodeJson, decodeJson)
 import Data.Argonaut.Encode (class EncodeJson, encodeJson)
 import Data.Argonaut.Parser (jsonParser)
-import Data.Either (hush)
+import Data.Either (Either(..), hush)
 import Data.Maybe (Maybe(..))
+import Data.String (Pattern(..), contains)
+import Data.Tuple (fst)
 import Effect (Effect)
 import Effect.Class.Console (log)
 import Effect.Exception (throw)
+import Flame.Renderer.String (render)
 import Routing.Duplex (parse, print)
+import Foreign (unsafeToForeign)
 
 main :: Effect Unit
 main = do
@@ -25,6 +33,41 @@ main = do
   testBillingCamelCaseDecode
   testHumanize
   testUploadErrorMessage
+  testFileDetailView
+  testFileDetailLoaded
+  testFileDetailLink
+  testFolderRenameId
+
+testFolderRenameId :: Effect Unit
+testFolderRenameId = do
+  html <- render (View.view sampleModel)
+  assertEqual "rename input uses stable folder id" (contains (Pattern "folder-rename-input-fold1") html) true
+  assertEqual "rename save uses stable folder id" (contains (Pattern "folder-rename-save-fold1") html) true
+
+testFileDetailLink :: Effect Unit
+testFileDetailLink = do
+  html <- render (View.view sampleModel)
+  assertEqual "list links to dedicated file detail" (contains (Pattern "href=\"/drive/files/f1\"") html) true
+
+testFileDetailLoaded :: Effect Unit
+testFileDetailLoaded = do
+  let
+    nav =
+      { pushState: \_ _ -> pure unit
+      , replaceState: \_ _ -> pure unit
+      , locationState: pure { state: unsafeToForeign {}, path: "", pathname: "", search: "", hash: "" }
+      , listen: \_ -> pure (pure unit)
+      }
+  let model = (initialModel (Just (FileDetail "f1"))) { isHydrated = true, files = Loading }
+  let result = fst (mkUpdate nav (const (pure unit)) model (FilesLoaded (Right [ sampleFile ])))
+  assertEqual "file result is accepted on detail route" result.files (Loaded [ sampleFile ])
+
+testFileDetailView :: Effect Unit
+testFileDetailView = do
+  let model = sampleModel { route = Just (FileDetail "f1"), page = Model.FileDetail "f1" }
+  html <- render (View.view model)
+  assertEqual "detail view renders selected file MIME type" (contains (Pattern "text/plain") html) true
+  assertEqual "detail view is separate from list" (contains (Pattern "data-testid=\"file-detail-page\"") html) true
 
 assertEqual :: forall a. Eq a => Show a => String -> a -> a -> Effect Unit
 assertEqual label actual expected =
@@ -45,6 +88,9 @@ testRouteCodec :: Effect Unit
 testRouteCodec = do
   assertEqual "parse /login" (hush (parse routeCodec "/login")) (Just Login)
   assertEqual "parse /drive" (hush (parse routeCodec "/drive")) (Just Drive)
+  assertEqual "file detail path resolves when id exists in URL"
+    (map show (hush (parse routeCodec "/drive/files/f1")))
+    (Just "(FileDetail \"f1\")")
   assertEqual "parse / is unknown" (hush (parse routeCodec "/")) Nothing
   assertEqual "parse unknown path" (hush (parse routeCodec "/nope")) Nothing
   assertEqual "print Login" (print routeCodec Login) "/login"

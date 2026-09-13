@@ -3,10 +3,13 @@ module App.Api.Drive where
 import Prelude
 
 import App.Api.Client as Api
+import Affjax.Web as AX
+import Affjax.ResponseFormat as AXRF
 import App.Model (Billing, FileItem, Folder)
 import Data.Argonaut.Decode (class DecodeJson, decodeJson)
 import Data.Argonaut.Decode.Combinators ((.:))
-import Data.Either (Either)
+import Data.Either (Either(..))
+import Data.HTTP.Method (Method(..))
 import Data.Maybe (Maybe, maybe)
 import Effect.Aff (Aff)
 
@@ -26,6 +29,18 @@ unwrapItems (Items xs) = xs
 -- | GET /api/files, optionally filtered by folder
 listFiles :: Maybe String -> Aff (Either String (Array FileItem))
 listFiles mFolderId = map (map unwrapItems) $ Api.get $ maybe "/api/files" (\id -> "/api/files?folder_id=" <> id) mFolderId
+
+fileDetail :: String -> Aff (Either String (Array FileItem))
+fileDetail id = do
+  result <- Api.request $ AX.defaultRequest
+    { url = "/api/files/" <> id
+    , method = Left GET
+    , responseFormat = AXRF.json
+    }
+  pure $ case result of
+    Right file -> Right [ file ]
+    Left (Api.HttpError 404 _) -> Right []
+    Left err -> Left (Api.printApiError err)
 
 -- | GET /api/folders
 listFolders :: Aff (Either String (Array Folder))

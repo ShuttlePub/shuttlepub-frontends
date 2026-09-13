@@ -17,7 +17,7 @@ bun install
 
 | モード | 用途 | 認証 | 動作 |
 | ------ | ---- | ---- | ---- |
-| `mock` | UI 開発（既定） | 内蔵 mock | 監視、再バンドル、開発サーバーを起動 |
+| `mock` | mock 認証での UI 開発（既定、Booskiff core が必要） | 内蔵 mock（認証のみ） | データ操作は常に `CORE_API_URL` へ接続。監視、再バンドル、開発サーバーを起動 |
 | `dev` | 実サービスとの連携検証 | Hydra + Booskiff core | 監視、再バンドル、開発サーバーを起動。cookie secret は `scripts/.env.dev` に生成・永続化 |
 | `release` | 本番向け成果物の作成 | Hydra + Booskiff core | 最適化ビルドのみを行い、サーバーは起動しない。`COOKIE_SECRET_BASE64` が必要 |
 
@@ -65,7 +65,7 @@ Mock ログインのパスワードは `password` です（メールアドレス
 | `/api/files` | ファイル一覧・作成（アップロード、raw body のストリーミング中継）・削除。ダウンロードは presigned URL への `302` |
 | `/api/folders` | フォルダー一覧・作成・更新・削除 |
 | `/api/billing/status` | 課金ステータスの取得 |
-| `/.well-known/jwks.json` | mock / test-JWT モードのみの JWKS 公開 |
+| `/.well-known/jwks.json` | mock / test-JWT モードのみの JWKS 公開。`NODE_ENV=production` では常に 404 |
 
 ## テスト
 
