@@ -60,6 +60,7 @@ async function cookieFor(session: AppSession): Promise<string> {
 }
 
 async function api(req: Request, deps: ApiDeps = makeDeps()): Promise<Response> {
+  req.headers.set("origin", "http://localhost:3000");
   const res = await handleApiRequest(req, deps);
   if (!res) throw new Error(`not an API path: ${new URL(req.url).pathname}`);
   return res;

@@ -6,7 +6,7 @@
 // そのままパススルーする。
 // ============================================================
 
-import type { SessionAdapter } from "@shuttlepub/auth-bun";
+import { csrfCheck, type SessionAdapter } from "@shuttlepub/auth-bun";
 import { BooskiffApiError, type BooskiffClient } from "./booskiff/client.ts";
 
 export type ApiDeps = {
@@ -44,6 +44,11 @@ export async function handleApiRequest(req: Request, deps: ApiDeps): Promise<Res
   const session = await deps.adapter.getSession(req);
   if (!session) return jsonError(401, "unauthorized", "authentication required", null);
 
+  if (!["GET", "HEAD", "OPTIONS"].includes(req.method)) {
+    const reject = csrfCheck(req);
+    if (reject) return jsonError(403, "forbidden", "CSRF check failed", null);
+  }
+
   const outcome = await deps.adapter.refreshSessionIfNeeded(session);
   if (outcome.kind === "refresh-failed-expired") {
     return jsonError(401, "unauthorized", "authentication required", outcome.sessionCookieHeader);
@@ -58,7 +63,7 @@ export async function handleApiRequest(req: Request, deps: ApiDeps): Promise<Res
       const headers = withCookie(new Headers({ "Content-Type": "application/json" }), refreshedCookie);
       return new Response(err.body, { status: err.status, headers });
     }
-    throw err;
+    return jsonError(502, "bad_gateway", "upstream request failed", refreshedCookie);
   }
 }
 
