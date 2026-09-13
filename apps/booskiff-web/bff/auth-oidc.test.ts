@@ -9,7 +9,7 @@ import { TEST_COOKIE_SECRET_BASE64 } from "./test-setup.ts";
 const keys = await generateKeyPair("RS256");
 const wrongKeys = await generateKeyPair("RS256");
 const jwk = await exportJWK(keys.publicKey);
-let idToken = "";
+let idToken: string | undefined = "";
 const server = Bun.serve({
   port: 0,
   fetch(req) {
@@ -47,6 +47,17 @@ test.each(["signature", "issuer", "audience", "expiry"])("rejects callback witho
     headers: { cookie: headers.getSetCookie().map((value) => value.split(";")[0]).join("; ") },
   }), { adapter, mode: config });
   expect(response?.headers.get("location")).toStartWith("/login?error=");
+  expect(response?.headers.getSetCookie().some((cookie) => cookie.startsWith("booskiff_session="))).toBe(false);
+});
+
+test("rejects missing ID token without issuing a session", async () => {
+  idToken = undefined;
+  const headers = new Headers();
+  await setOAuthCookie(headers, { v: 1, state: "missing", codeVerifier: "verifier", returnTo: "/drive", expiresAt: Math.floor(Date.now() / 1000) + 300 });
+  const response = await handleAuthRequest(new Request("http://localhost:3000/auth/callback?code=code&state=missing", {
+    headers: { cookie: headers.getSetCookie().map((value) => value.split(";")[0]).join("; ") },
+  }), { adapter, mode: config });
+  expect(response?.headers.get("location")).toBe("/login?error=missing_id_token");
   expect(response?.headers.getSetCookie().some((cookie) => cookie.startsWith("booskiff_session="))).toBe(false);
 });
 

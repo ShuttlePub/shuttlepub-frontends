@@ -200,6 +200,8 @@ export async function realOAuthCallback(req: Request, config: RealAuthConfig, ad
       id_token?: string;
     };
 
+    if (!tokens.id_token) return oauthErrorRedirect("missing_id_token");
+
     let email: string | undefined;
     let sub: string | undefined;
     if (tokens.id_token) {
