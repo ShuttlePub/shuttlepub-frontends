@@ -73,7 +73,7 @@ async function dispatch(req: Request, pathname: string, client: BooskiffClient, 
 
   if (pathname === "/api/files") {
     if (method === "GET") {
-      const folderId = url.searchParams.get("folder_id") ?? undefined;
+      const folderId = url.searchParams.get("folder_id") || undefined;
       return jsonResponse({ items: await client.listFiles(folderId) }, setCookie);
     }
     if (method === "POST") return upload(req, url, client, setCookie);
@@ -134,7 +134,7 @@ async function upload(req: Request, url: URL, client: BooskiffClient, setCookie:
   const file = await client.uploadFile({
     name,
     mime: url.searchParams.get("mime"),
-    folderId: url.searchParams.get("folder_id"),
+    folderId: url.searchParams.get("folder_id") || null,
     contentType: req.headers.get("content-type") ?? "application/octet-stream",
     contentLength,
     body: req.body ?? emptyStream(),

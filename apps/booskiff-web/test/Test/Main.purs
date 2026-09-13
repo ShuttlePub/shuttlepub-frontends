@@ -36,6 +36,13 @@ main = do
   testFileDetailView
   testFileDetailLoaded
   testFileDetailLink
+  testFolderRenameId
+
+testFolderRenameId :: Effect Unit
+testFolderRenameId = do
+  html <- render (View.view sampleModel)
+  assertEqual "rename input uses stable folder id" (contains (Pattern "folder-rename-input-fold1") html) true
+  assertEqual "rename save uses stable folder id" (contains (Pattern "folder-rename-save-fold1") html) true
 
 testFileDetailLink :: Effect Unit
 testFileDetailLink = do

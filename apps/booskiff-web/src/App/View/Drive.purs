@@ -216,14 +216,14 @@ folderRow model (Folder folder) =
           , HA.type' "text"
           , HA.value model.folderForm.name
           , HA.onInput FolderNameChanged
-            , HA.createAttribute "data-testid" ("folder-rename-input-" <> folder.name)
+          , HA.createAttribute "data-testid" ("folder-rename-input-" <> folder.id)
           ]
       , HE.button
           [ HA.class'
               ( "px-3 py-1.5 text-sm text-white " <> T.bgAccent <> " " <> T.roundedTheme
               )
           , HA.onClick SubmitRenameFolder
-          , HA.createAttribute "data-testid" ("folder-rename-save-" <> folder.name)
+          , HA.createAttribute "data-testid" ("folder-rename-save-" <> folder.id)
           ]
           [ HE.text "保存" ]
       ]

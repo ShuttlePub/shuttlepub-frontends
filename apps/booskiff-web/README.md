@@ -65,7 +65,7 @@ Mock ログインのパスワードは `password` です（メールアドレス
 | `/api/files` | ファイル一覧・作成（アップロード、raw body のストリーミング中継）・削除。ダウンロードは presigned URL への `302` |
 | `/api/folders` | フォルダー一覧・作成・更新・削除 |
 | `/api/billing/status` | 課金ステータスの取得 |
-| `/.well-known/jwks.json` | mock / test-JWT モードのみの JWKS 公開 |
+| `/.well-known/jwks.json` | mock / test-JWT モードのみの JWKS 公開。`NODE_ENV=production` では常に 404 |
 
 ## テスト
 

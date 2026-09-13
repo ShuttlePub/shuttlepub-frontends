@@ -12,7 +12,6 @@
 // ============================================================
 
 import {
-  base64UrlDecode,
   clearCookieHeader,
   CookieJar,
   csrfCheck,
@@ -27,6 +26,7 @@ import {
   type SessionAdapter,
 } from "@shuttlepub/auth-bun";
 import type { RealAuthConfig } from "./routes.ts";
+import { createRemoteJWKSet, errors, jwtVerify } from "jose";
 
 type ParsedLogin =
   | { kind: "invalid-json" }
@@ -200,21 +200,18 @@ export async function realOAuthCallback(req: Request, config: RealAuthConfig, ad
       id_token?: string;
     };
 
-    // id_token からユーザー情報を取り出す (Hydra から受け取った直後の JWT)
     let email: string | undefined;
     let sub: string | undefined;
-    const idTokenParts = tokens.id_token?.split(".") ?? [];
-    if (idTokenParts.length === 3 && idTokenParts[1]) {
-      try {
-        const payload = JSON.parse(new TextDecoder().decode(base64UrlDecode(idTokenParts[1]))) as {
-          sub?: string;
-          email?: string;
-        };
-        sub = payload.sub;
-        email = payload.email;
-      } catch (err) {
-        console.warn("malformed id_token payload:", err);
-      }
+    if (tokens.id_token) {
+      const jwks = createRemoteJWKSet(new URL(`${config.hydraPublicUrl}/.well-known/jwks.json`), { timeoutDuration: 5000 });
+      const { payload } = await jwtVerify(tokens.id_token, jwks, {
+        issuer: config.hydraPublicUrl,
+        audience: config.hydraClientId,
+        algorithms: ["RS256"],
+        requiredClaims: ["sub", "iat", "exp"],
+      });
+      sub = payload.sub;
+      email = typeof payload.email === "string" ? payload.email : undefined;
     }
 
     const session: AppSession = {
@@ -234,6 +231,10 @@ export async function realOAuthCallback(req: Request, config: RealAuthConfig, ad
     headers.set("Location", pendingOAuth.returnTo);
     return new Response(null, { status: 302, headers });
   } catch (err) {
+    if (err instanceof errors.JOSEError) {
+      console.warn("ID token verification failed", { code: err.code });
+      return oauthErrorRedirect("invalid_id_token");
+    }
     console.error("Token exchange error:", err);
     return oauthErrorRedirect("token_exchange_error");
   }

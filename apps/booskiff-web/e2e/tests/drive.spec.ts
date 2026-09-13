@@ -48,13 +48,17 @@ test("upload file updates file list and quota", async ({ page }) => {
     .not.toBe(quotaBefore);
 });
 
-test("file detail supports navigation and direct reload", async ({ page }) => {
+test("file detail supports navigation and direct reload", async ({ page }, testInfo) => {
   await loginViaUi(page);
   await page.getByRole("link", { name: fileName, exact: true }).click();
   await expect(page).toHaveURL(/\/drive\/files\/[^/]+$/);
   await expect(page.getByTestId("file-detail-page")).toContainText("text/plain");
   await page.reload();
   await expect(page.getByTestId("file-detail-page")).toContainText(fileName);
+  for (const width of [375, 768, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.screenshot({ path: testInfo.outputPath(`detail-${width}.png`), fullPage: true });
+  }
   await page.getByRole("link", { name: "Drive に戻る" }).click();
   await expect(page.getByTestId("file-list")).toContainText(fileName);
 });
@@ -88,9 +92,12 @@ test("download file serves the presigned URL", async ({ page }) => {
 test("rename folder", async ({ page }) => {
   await loginViaUi(page);
   const row = folderRow(page, folderName);
+  const renameId = await row.getByTestId(/^rename-folder-/).getAttribute("data-testid");
+  if (!renameId) throw new Error("rename button has no stable id");
+  const folderId = renameId.slice("rename-folder-".length);
   await row.getByTestId(/^rename-folder-/).click();
-  await page.getByTestId(`folder-rename-input-${folderName}`).fill(renamedFolderName);
-  await page.getByTestId(`folder-rename-save-${folderName}`).click();
+  await page.getByTestId(`folder-rename-input-${folderId}`).fill(renamedFolderName);
+  await page.getByTestId(`folder-rename-save-${folderId}`).click();
 
   await expect(page.getByTestId("folder-list")).toContainText(renamedFolderName);
   await expect(page.getByTestId("folder-list")).not.toContainText(folderName);

@@ -16,6 +16,7 @@ export type JwksSource = {
 };
 
 export async function buildJwksResponse(source: JwksSource): Promise<Response> {
+  if (process.env.NODE_ENV === "production") return new Response("not found", { status: 404 });
   if (source.jwksJson !== null) {
     return new Response(source.jwksJson, { headers: { "Content-Type": "application/json" } });
   }
