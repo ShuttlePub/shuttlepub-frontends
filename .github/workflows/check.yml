@@ -123,6 +123,7 @@ jobs:
         working-directory: current/apps/ui-catalog
       - name: Build current and base catalog
         run: |
+          export PATH="$GITHUB_WORKSPACE/current/apps/ui-catalog/node_modules/.bin:$PATH"
           bash current/apps/ui-catalog/visual/build.sh "$GITHUB_WORKSPACE/current/apps/ui-catalog"
           bash current/apps/ui-catalog/visual/build.sh "$GITHUB_WORKSPACE/baseline/apps/ui-catalog"
       - name: Capture base and current in the same browser environment
