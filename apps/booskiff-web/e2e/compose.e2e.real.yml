@@ -1,0 +1,159 @@
+name: booskiff-web-real-e2e
+services:
+  postgres:
+    extends:
+      file: compose.e2e.yml
+      service: postgres
+    volumes:
+      - ./real/init.sql:/docker-entrypoint-initdb.d/real.sql:ro
+  minio:
+    extends:
+      file: compose.e2e.yml
+      service: minio
+  core:
+    extends:
+      file: compose.e2e.yml
+      service: core
+    environment:
+      BOOSKIFF_JWT_TRUSTED_ISSUERS: "http://127.0.0.1:4444|http://hydra:4444/.well-known/jwks.json"
+      BOOSKIFF_JWT_AUDIENCE: account
+  hydra-migrate:
+    image: oryd/hydra:v2.3.0
+    environment:
+      DSN: postgres://booskiff:changeme@postgres:5432/hydra?sslmode=disable
+    command: migrate sql -e --yes
+    depends_on:
+      postgres:
+        condition: service_healthy
+  hydra:
+    image: oryd/hydra:v2.3.0
+    environment:
+      DSN: postgres://booskiff:changeme@postgres:5432/hydra?sslmode=disable
+      SECRETS_SYSTEM: ${REAL_E2E_SECRET:?run scripts/e2e-real.sh}
+    command: serve all -c /config/hydra.yml --dev
+    volumes:
+      - ./real/hydra.yml:/config/hydra.yml:ro
+    ports:
+      - "127.0.0.1:4444:4444"
+      - "127.0.0.1:3211:3211"
+    depends_on:
+      hydra-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4444/health/ready"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  kratos-migrate:
+    image: oryd/kratos:v1.3.1
+    environment:
+      DSN: postgres://booskiff:changeme@postgres:5432/kratos?sslmode=disable
+    command: migrate sql -e --yes
+    depends_on:
+      postgres:
+        condition: service_healthy
+  kratos:
+    image: oryd/kratos:v1.3.1
+    environment:
+      DSN: postgres://booskiff:changeme@postgres:5432/kratos?sslmode=disable
+      SECRETS_COOKIE: ${REAL_E2E_SECRET}
+    command: serve -c /config/kratos.yml --dev
+    volumes:
+      - ./real:/config:ro
+    depends_on:
+      kratos-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4433/health/ready"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  seed:
+    image: oryd/kratos:v1.3.1
+    command: import identities /config/seed-users.json -e http://kratos:4434
+    volumes:
+      - ./real/seed-users.json:/config/seed-users.json:ro
+    depends_on:
+      kratos:
+        condition: service_healthy
+  client:
+    image: oryd/hydra:v2.3.0
+    command:
+      - create
+      - oauth2-client
+      - --endpoint
+      - http://hydra:4445
+      - --id
+      - booskiff-bff
+      - --secret
+      - ${REAL_E2E_SECRET}
+      - --grant-type
+      - authorization_code,refresh_token
+      - --response-type
+      - code
+      - --scope
+      - openid,profile,email,offline_access
+      - --audience
+      - account
+      - --redirect-uri
+      - http://127.0.0.1:3211/auth/callback
+      - --token-endpoint-auth-method
+      - client_secret_basic
+    depends_on:
+      hydra:
+        condition: service_healthy
+  provider:
+    build:
+      context: ../../..
+      dockerfile: apps/booskiff-web/Containerfile
+    command: bun e2e/real/provider.ts
+    volumes:
+      - ./real/provider.ts:/repo/apps/booskiff-web/e2e/real/provider.ts:ro
+    ports:
+      - "127.0.0.1:3212:3212"
+    depends_on:
+      kratos:
+        condition: service_healthy
+      hydra:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:3212/health').then(r => process.exit(r.ok ? 0 : 1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  web:
+    build:
+      context: ../../..
+      dockerfile: apps/booskiff-web/Containerfile
+    # Hydra must have the identical URL from browser and BFF for issuer verification.
+    network_mode: service:hydra
+    environment:
+      PORT: "3211"
+      APP_ORIGIN: http://127.0.0.1:3211
+      CORE_API_URL: http://minio:8080
+      USE_MOCK: "false"
+      USE_TEST_JWT: "false"
+      KRATOS_PUBLIC_URL: http://kratos:4433
+      HYDRA_PUBLIC_URL: http://127.0.0.1:4444
+      HYDRA_CLIENT_ID: booskiff-bff
+      HYDRA_CLIENT_SECRET: ${REAL_E2E_SECRET}
+      COOKIE_SECRET_BASE64: ${REAL_E2E_COOKIE_SECRET}
+      SESSION_COOKIE_NAME: booskiff_session
+      OAUTH_COOKIE_NAME: booskiff_oauth
+    depends_on:
+      core:
+        condition: service_healthy
+      provider:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+      client:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:3211/login').then(r => process.exit(r.ok ? 0 : 1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+volumes:
+  pgdata:
+  miniodata:
