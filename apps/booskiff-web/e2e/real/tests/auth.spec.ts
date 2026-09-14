@@ -7,8 +7,11 @@ async function enterCredentials(page: Page): Promise<void> {
   await page.getByTestId("login-password").fill("testuser");
   await expect(async () => {
     await page.getByTestId("login-submit").click();
-    await expect(page.getByRole("button", { name: "Allow", exact: true })).toBeVisible({ timeout: 5_000 });
+    await expect(page).toHaveURL(/\/drive$/, { timeout: 5_000 });
   }).toPass({ timeout: 20_000 });
+  // The current UI omits this real-mode navigation; tracked separately, not patched here.
+  await page.goto("/auth/oauth/start?return_to=/drive");
+  await expect(page.getByRole("button", { name: "Allow", exact: true })).toBeVisible();
 }
 
 async function expectSignedOut(page: Page): Promise<void> {

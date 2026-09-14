@@ -86,6 +86,37 @@ BOOSKIFF_CORE_DIR=/path/to/Booskiff ./scripts/e2e.sh
 
 `scripts/e2e.sh` は `e2e/.env.e2e.runtime` を生成し、Compose の起動から Playwright 実行、停止までを行います。詳細は [e2e/README.md](e2e/README.md) を参照してください。
 
+### Real OIDC E2E (Hydra + Kratos)
+
+```bash
+bun install --frozen-lockfile --ignore-scripts
+BOOSKIFF_CORE_DIR=/path/to/Booskiff bash scripts/e2e-real.sh
+```
+
+`e2e/compose.e2e.real.yml` は Hydra v2.3.0、Kratos v1.3.1、各 DB の
+migration、テスト identity、OAuth クライアントを生成します。認証・署名・
+token exchange は実サービスで行い、login/consent bridge だけをテスト用に
+用意しています。設定と seed は Emumet の `ory/`、クライアント設定は
+`apps/emumet-web/scripts/register-hydra-client.ts` を移植元としています。
+
+loopback ポートは Web 3211、consent 3212、Hydra 4444、MinIO 19000 です。
+既存 mock E2E と MinIO ポートを共有するため、同時実行しないでください。
+runner は競合ポートを検出すると停止し、他のスタックを削除しません。
+各実行で別 Compose project とランダム秘密値を使い、終了時に volume ごと
+削除します。管理 API はホストへ公開しません。全設定・seed はテスト専用です。
+NixOS では `PLAYWRIGHT_CHROMIUM_PATH=$(command -v chromium)` を指定できます。
+
+負の系は Hydra 同意拒否、state 不一致、実 token endpoint の不正 code 拒否を
+検証します。署名不正等は既存 `bff/auth-oidc.test.ts` の担当です。
+
+**既知の未完了事項:** 実検証で [#17](https://github.com/ShuttlePub/shuttlepub-frontends/issues/17)
+（UI が Kratos 認証後に OAuth を開始しない）を検出しました。認証コードは
+変更せず、E2E は `/auth/oauth/start` へ明示遷移しています。そのため、この
+スイートは途切れない UI ログイン導線の完成を保証しません。また初回検証では
+Drive の同一 test id が重複して strict locator が失敗し、正常系の Drive 操作・
+logout の完走は未確認です。CI は mock/real を別 matrix job で実行しますが、
+real green は未達です。
+
 ## 構成
 
 ```text
