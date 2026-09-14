@@ -33,9 +33,17 @@ view model =
     , fileSection model
     ]
 
+-- | Invisible stand-in for "render nothing" slots. An empty text node never
+-- | survives HTML parsing, but Flame's hydration matches SSR DOM to virtual
+-- | children purely by index — a vanished placeholder shifts every following
+-- | sibling onto the wrong node and later patches then corrupt the DOM
+-- | (duplicated sections, leaked children, dead handlers; #19/#21).
+emptySlot :: Html Message
+emptySlot = HE.div [ HA.style { display: "none" } ] []
+
 errorBanner :: Maybe String -> Html Message
 errorBanner = case _ of
-  Nothing -> HE.text ""
+  Nothing -> emptySlot
   Just msg ->
     HE.div
       [ HA.class'
@@ -96,8 +104,8 @@ uploadSection model =
             ]
             [ HE.text "アップロード" ]
         ]
-    , maybe (HE.text "") progressView model.upload
-    , maybe (HE.text "") uploadErrorView (uploadErrorFor model)
+    , maybe emptySlot progressView model.upload
+    , maybe emptySlot uploadErrorView (uploadErrorFor model)
     ]
 
 uploadErrorFor :: Model -> Maybe String
@@ -166,7 +174,7 @@ folderSection model =
 
 allButton :: Maybe String -> Html Message
 allButton = case _ of
-  Nothing -> HE.text ""
+  Nothing -> emptySlot
   Just _ ->
     HE.button
       [ HA.class' ("text-sm " <> T.navLink)
