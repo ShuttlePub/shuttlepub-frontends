@@ -109,13 +109,14 @@ NixOS では `PLAYWRIGHT_CHROMIUM_PATH=$(command -v chromium)` を指定でき�
 負の系は Hydra 同意拒否、state 不一致、実 token endpoint の不正 code 拒否を
 検証します。署名不正等は既存 `bff/auth-oidc.test.ts` の担当です。
 
-**既知の未完了事項:** 実検証で [#17](https://github.com/ShuttlePub/shuttlepub-frontends/issues/17)
-（UI が Kratos 認証後に OAuth を開始しない）を検出しました。認証コードは
-変更せず、E2E は `/auth/oauth/start` へ明示遷移しています。そのため、この
-スイートは途切れない UI ログイン導線の完成を保証しません。また初回検証では
-Drive の同一 test id が重複して strict locator が失敗し、正常系の Drive 操作・
-logout の完走は未確認です。CI は mock/real を別 matrix job で実行しますが、
-real green は未達です。
+**検出した既存不具合と暫定措置:** 実検証で [#17](https://github.com/ShuttlePub/shuttlepub-frontends/issues/17)
+（UI が Kratos 認証後に OAuth を開始しない）と [#19](https://github.com/ShuttlePub/shuttlepub-frontends/issues/19)
+（認証済み `/drive` のフルロードで resume DOM が破損する）を検出しました。認証コードは
+変更せず、E2E は #17 に対して `/auth/oauth/start` へ明示遷移し、#19 に対して
+callback の `return_to` を `/login` として SPA 遷移で回避しています（永続化は API で検証）。
+そのため、このスイートは途切れない UI ログイン導線と `/drive` 直接ロードの完成は保証しません。
+両 issue の修正後に workaround を外して再検証してください。
+CI は mock/real を別 matrix job で実行し、両方 green です。
 
 ## 構成
 
