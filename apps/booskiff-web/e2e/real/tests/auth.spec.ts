@@ -16,10 +16,8 @@ async function enterCredentials(page: Page): Promise<void> {
   }).toPass({ timeout: 20_000 });
   // Real-mode login success hands off to /auth/oauth/start automatically (the
   // BFF `next` URL), so the Hydra consent screen arrives through the UI flow
-  // alone. return_to=/login is applied BFF-side: a direct full load of /drive
-  // after the OAuth callback corrupts the resumed DOM (issue #19), so landing
-  // on /login and letting the session check navigate client-side follows the
-  // healthy SPA path.
+  // alone. return_to=/drive: the OAuth callback lands on a full /drive load,
+  // whose resumed DOM stays intact since the issue #19 fix (#21).
   await expect(page.getByRole("button", { name: "Allow", exact: true })).toBeVisible({ timeout: 30_000 });
 }
 
@@ -89,12 +87,12 @@ test("real login grants a cookie session, drive access, and logout", async ({ pa
   const created = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/folders" && response.request().method() === "POST");
   await page.getByTestId("folder-create-submit").click();
   expect((await created).ok()).toBe(true);
-  // Persistence is verified through the API: a full /drive reload re-triggers the
-  // resumed-DOM corruption noted above, so the browser-side reload assertion is
-  // intentionally left to the follow-up fix.
-  const folders = await page.request.get("/api/folders");
-  expect(folders.ok()).toBe(true);
-  expect(JSON.stringify(await folders.json())).toContain(folder);
+  // Persistence is verified through the UI after a full /drive reload: SSR +
+  // resumeMount must render the stored folder without the DOM corruption that
+  // issue #19 documented (fixed in #21).
+  await page.goto("/drive");
+  await expect(page.getByTestId("drive-page")).toBeVisible();
+  await expect(page.getByTestId("folder-list")).toContainText(folder);
 
   await page.getByTestId("logout-button").click();
   await expect(page).toHaveURL(/\/login$/);

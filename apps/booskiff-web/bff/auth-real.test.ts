@@ -60,7 +60,7 @@ test("returns OAuth next URL and Kratos cookies without an app session when logi
   // Then: OAuth 開始 URL と Kratos cookie のみを返す。
   expect(response?.status).toBe(200);
   expect(await response?.json()).toEqual({
-    authenticated: true, username: "alice@example.test", next: "/auth/oauth/start?return_to=/login",
+    authenticated: true, username: "alice@example.test", next: "/auth/oauth/start?return_to=/drive",
   });
   expect(response?.headers.getSetCookie().some((cookie) => cookie.startsWith("ory_kratos_session="))).toBe(true);
   expect(response?.headers.getSetCookie().some((cookie) => cookie.startsWith("booskiff_session="))).toBe(false);
