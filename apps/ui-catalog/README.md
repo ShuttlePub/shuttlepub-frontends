@@ -45,6 +45,8 @@ spago test  # route codec / model round-trip / catalog URL 一覧
 
 ## 構成
 
+ビジュアル差分 CI・R2 設定・ローカル検証は [visual/README.md](visual/README.md) を参照してください。
+
 ```text
 Browser
   → ui-catalog (Flame SSR/hydration + Bun server, static/fixture のみ)

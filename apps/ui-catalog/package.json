@@ -8,11 +8,20 @@
     "@shuttlepub/styles": "workspace:*"
   },
   "devDependencies": {
-    "spago": "^1.0.3",
-    "typescript": "^5",
-    "@types/bun": "latest",
+    "@aws-sdk/client-s3": "3.1131.0",
+    "@playwright/test": "1.58.2",
     "@tailwindcss/cli": "^4.2.1",
+    "@types/bun": "latest",
+    "@types/pngjs": "6.0.5",
+    "pngjs": "7.0.0",
+    "purescript": "^0.15.15",
+    "reg-publish-s3-plugin": "0.14.4",
+    "reg-suit": "0.14.5",
+    "reg-suit-core": "0.14.5",
+    "reg-suit-interface": "0.14.2",
+    "spago": "^1.0.3",
     "tailwindcss": "^4.2.1",
-    "purescript": "^0.15.15"
+    "typescript": "^5",
+    "zod": "4.3.6"
   }
 }
