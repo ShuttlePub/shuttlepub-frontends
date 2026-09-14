@@ -5,16 +5,22 @@ async function enterCredentials(page: Page): Promise<void> {
   await page.goto("/login");
   await page.getByTestId("login-identifier").fill("testuser@example.com");
   await page.getByTestId("login-password").fill("testuser");
+  // The login form is hydrated client-side; a click fired before hydration is
+  // inert, so retry click+wait until the login XHR actually fires.
   await expect(async () => {
     await page.getByTestId("login-submit").click();
-    await expect(page).toHaveURL(/\/drive$/, { timeout: 5_000 });
+    await page.waitForResponse(
+      (response) => new URL(response.url()).pathname === "/auth/login" && response.request().method() === "POST",
+      { timeout: 5_000 },
+    );
   }).toPass({ timeout: 20_000 });
-  // The current UI omits this real-mode navigation; tracked separately, not patched here.
-  // return_to=/login: a direct full load of /drive after the OAuth callback corrupts
-  // the resumed DOM (duplicated folder section, dead handlers); landing on /login and
-  // letting the session check navigate client-side follows the healthy SPA path.
-  await page.goto("/auth/oauth/start?return_to=/login");
-  await expect(page.getByRole("button", { name: "Allow", exact: true })).toBeVisible();
+  // Real-mode login success hands off to /auth/oauth/start automatically (the
+  // BFF `next` URL), so the Hydra consent screen arrives through the UI flow
+  // alone. return_to=/login is applied BFF-side: a direct full load of /drive
+  // after the OAuth callback corrupts the resumed DOM (issue #19), so landing
+  // on /login and letting the session check navigate client-side follows the
+  // healthy SPA path.
+  await expect(page.getByRole("button", { name: "Allow", exact: true })).toBeVisible({ timeout: 30_000 });
 }
 
 async function expectSignedOut(page: Page): Promise<void> {

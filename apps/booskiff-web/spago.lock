@@ -30,7 +30,8 @@
             "shuttlepub-ui",
             "strings",
             "tuples",
-            "web-events"
+            "web-events",
+            "web-html"
           ]
         },
         "test": {

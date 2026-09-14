@@ -26,6 +26,9 @@ import Flame (Update, noMessages)
 import Foreign (unsafeToForeign)
 import Routing.Duplex (print)
 import Routing.PushState (PushStateInterface)
+import Web.HTML (window)
+import Web.HTML.Location as Location
+import Web.HTML.Window (location)
 
 -- | File input the FFI upload flow reads from (see Client.Upload and the
 -- | Drive view owned by the follow-up UX task).
@@ -311,10 +314,16 @@ checkSessionAff = do
 submitLoginAff :: String -> String -> Aff (Maybe Message)
 submitLoginAff identifier password = do
   result <- Auth.login { identifier, password }
-  pure $ Just $ case result of
-    Right (LoginResponse r) | r.authenticated -> SessionChecked (Just r.username)
-    Right _ -> LoginFailed "Login failed: invalid credentials"
-    Left err -> LoginFailed err
+  case result of
+    Right (LoginResponse r) | r.authenticated -> case r.next of
+      Just url -> do
+        -- Real mode hands off to /auth/oauth/start via full-page navigation:
+        -- XHR cannot drive the cross-origin Hydra redirect chain.
+        liftEffect (window >>= location >>= Location.assign url)
+        pure Nothing
+      Nothing -> pure $ Just $ SessionChecked (Just r.username)
+    Right _ -> pure $ Just $ LoginFailed "Login failed: invalid credentials"
+    Left err -> pure $ Just $ LoginFailed err
 
 logoutAff :: Aff (Maybe Message)
 logoutAff = do

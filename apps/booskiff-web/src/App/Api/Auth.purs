@@ -4,8 +4,9 @@ import Prelude
 
 import App.Api.Client as Api
 import Data.Argonaut.Decode.Class (class DecodeJson, decodeJson)
-import Data.Argonaut.Decode.Combinators ((.:))
+import Data.Argonaut.Decode.Combinators ((.:), (.:?))
 import Data.Either (Either)
+import Data.Maybe (Maybe)
 import Effect.Aff (Aff)
 
 -- | POST /auth/login body (identifier = email or username)
@@ -15,14 +16,15 @@ type LoginRequest =
   }
 
 -- | Login response from BFF
-newtype LoginResponse = LoginResponse { authenticated :: Boolean, username :: String }
+newtype LoginResponse = LoginResponse { authenticated :: Boolean, username :: String, next :: Maybe String }
 
 instance DecodeJson LoginResponse where
   decodeJson json = do
     obj <- decodeJson json
     authenticated <- obj .: "authenticated"
     username <- obj .: "username"
-    pure (LoginResponse { authenticated, username })
+    next <- obj .:? "next"
+    pure (LoginResponse { authenticated, username, next })
 
 -- | Session response from BFF (GET /auth/session)
 newtype SessionResponse = SessionResponse { authenticated :: Boolean, username :: String }

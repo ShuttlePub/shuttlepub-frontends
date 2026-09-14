@@ -109,13 +109,13 @@ NixOS では `PLAYWRIGHT_CHROMIUM_PATH=$(command -v chromium)` を指定でき�
 負の系は Hydra 同意拒否、state 不一致、実 token endpoint の不正 code 拒否を
 検証します。署名不正等は既存 `bff/auth-oidc.test.ts` の担当です。
 
-**検出した既存不具合と暫定措置:** 実検証で [#17](https://github.com/ShuttlePub/shuttlepub-frontends/issues/17)
-（UI が Kratos 認証後に OAuth を開始しない）と [#19](https://github.com/ShuttlePub/shuttlepub-frontends/issues/19)
-（認証済み `/drive` のフルロードで resume DOM が破損する）を検出しました。認証コードは
-変更せず、E2E は #17 に対して `/auth/oauth/start` へ明示遷移し、#19 に対して
-callback の `return_to` を `/login` として SPA 遷移で回避しています（永続化は API で検証）。
-そのため、このスイートは途切れない UI ログイン導線と `/drive` 直接ロードの完成は保証しません。
-両 issue の修正後に workaround を外して再検証してください。
+**検出した既存不具合と暫定措置:** [#17](https://github.com/ShuttlePub/shuttlepub-frontends/issues/17) /
+[#20](https://github.com/ShuttlePub/shuttlepub-frontends/issues/20) のログイン導線は修正済みです。
+ログイン成功後に BFF が `next: /auth/oauth/start?return_to=/login` を返し、UI が
+トップレベル遷移で OAuth を開始するため、E2E の `/auth/oauth/start` 明示遷移は解除済みです。
+[#19](https://github.com/ShuttlePub/shuttlepub-frontends/issues/19)（認証済み `/drive` の
+フルロード時の resume DOM 破損）は未修正のため、`return_to=/login` の SPA 経路は
+BFF 側で維持し、永続化は引き続き API で検証します。
 CI は mock/real を別 matrix job で実行し、両方 green です。
 
 ## 構成
