@@ -1,0 +1,11 @@
+{
+  "Rules": [
+    {
+      "ID": "ui-catalog-expire-30-days",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "ui-catalog/" },
+      "Expiration": { "Days": 30 },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 1 }
+    }
+  ]
+}
