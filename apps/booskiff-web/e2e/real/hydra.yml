@@ -1,0 +1,18 @@
+# Adapted from ShuttlePub/Emumet ory/hydra/hydra.yml; local E2E only.
+serve:
+  public:
+    port: 4444
+  admin:
+    port: 4445
+urls:
+  self:
+    issuer: http://127.0.0.1:4444
+  login: http://127.0.0.1:3212/login
+  consent: http://127.0.0.1:3212/consent
+strategies:
+  access_token: jwt
+oidc:
+  subject_identifiers:
+    supported_types: [public]
+log:
+  level: info

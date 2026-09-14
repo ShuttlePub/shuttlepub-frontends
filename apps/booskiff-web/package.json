@@ -11,12 +11,13 @@
     "jose": "6.2.2"
   },
   "devDependencies": {
-    "spago": "^1.0.3",
-    "typescript": "^5",
-    "@types/bun": "latest",
-    "@tailwindcss/cli": "^4.2.1",
-    "tailwindcss": "^4.2.1",
     "@playwright/test": "^1.55.0",
-    "purescript": "^0.15.15"
+    "@tailwindcss/cli": "^4.2.1",
+    "@types/bun": "latest",
+    "purescript": "^0.15.15",
+    "spago": "^1.0.3",
+    "tailwindcss": "^4.2.1",
+    "typescript": "^5",
+    "zod": "^4.6.5"
   }
 }

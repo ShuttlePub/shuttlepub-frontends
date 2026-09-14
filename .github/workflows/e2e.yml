@@ -13,6 +13,10 @@ permissions:
 jobs:
   e2e:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [mock, real]
     env:
       BOOSKIFF_READ_TOKEN: ${{ secrets.BOOSKIFF_READ_TOKEN }}
 
@@ -45,15 +49,27 @@ jobs:
         run: bunx playwright install --with-deps chromium
         working-directory: apps/booskiff-web
 
+      - name: Install workspace dependencies
+        if: env.BOOSKIFF_READ_TOKEN != ''
+        run: bun install --frozen-lockfile --ignore-scripts
+
       - name: Run E2E suite
         if: env.BOOSKIFF_READ_TOKEN != ''
-        run: BOOSKIFF_CORE_DIR="$GITHUB_WORKSPACE/Booskiff-checkout" ./scripts/e2e.sh
+        env:
+          E2E_MODE: ${{ matrix.mode }}
+        run: |
+          export BOOSKIFF_CORE_DIR="$GITHUB_WORKSPACE/Booskiff-checkout"
+          if [ "$E2E_MODE" = real ]; then
+            bash scripts/e2e-real.sh
+          else
+            ./scripts/e2e.sh
+          fi
         working-directory: apps/booskiff-web
 
       - name: Upload Playwright report
         if: failure() && env.BOOSKIFF_READ_TOKEN != ''
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
-          name: booskiff-web-playwright-report
+          name: booskiff-web-playwright-report-${{ matrix.mode }}
           path: apps/booskiff-web/e2e/playwright-report/
           if-no-files-found: ignore

@@ -1,0 +1,27 @@
+# Adapted from ShuttlePub/Emumet ory/kratos/kratos.yml; local E2E only.
+serve:
+  public:
+    base_url: http://kratos:4433/
+  admin:
+    base_url: http://kratos:4434/
+selfservice:
+  default_browser_return_url: http://127.0.0.1:3211/
+  flows:
+    login:
+      ui_url: http://127.0.0.1:3211/login
+    registration:
+      enabled: true
+      ui_url: http://127.0.0.1:3211/registration
+  methods:
+    password:
+      enabled: true
+identity:
+  default_schema_id: default
+  schemas:
+    - id: default
+      url: file:///config/identity.schema.json
+log:
+  level: info
+courier:
+  smtp:
+    connection_uri: smtp://127.0.0.1:1025/?skip_ssl_verify=true
