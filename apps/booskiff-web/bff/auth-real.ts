@@ -111,7 +111,9 @@ export async function realLogin(req: Request, config: RealAuthConfig, adapter: S
 
     const headers = new Headers({ "Content-Type": "application/json" });
     jar.applyToResponse(headers);
-    return new Response(JSON.stringify({ authenticated: true, username: email }), { status: 200, headers });
+    // XHR は 302 で cross-origin Hydra chain を進められないため、トップレベル遷移用 URL を渡す。
+    // return_to=/login は #19 の SPA 経路回避策。修正後に /drive へ戻すことを再検討する。
+    return new Response(JSON.stringify({ authenticated: true, username: email, next: "/auth/oauth/start?return_to=/login" }), { status: 200, headers });
   } catch (err) {
     console.error("Kratos login error:", err);
     return Response.json({ error: "Authentication service unavailable" }, { status: 502 });
