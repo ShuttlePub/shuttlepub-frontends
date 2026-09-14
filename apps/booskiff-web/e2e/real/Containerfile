@@ -1,0 +1,8 @@
+FROM postgres:16 AS postgres
+COPY init.sql /docker-entrypoint-initdb.d/real.sql
+
+FROM oryd/hydra:v2.3.0 AS hydra
+COPY hydra.yml /config/hydra.yml
+
+FROM oryd/kratos:v1.3.1 AS kratos
+COPY kratos.yml identity.schema.json seed-users.json /config/

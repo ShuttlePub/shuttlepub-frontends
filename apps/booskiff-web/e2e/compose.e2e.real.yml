@@ -4,8 +4,11 @@ services:
     extends:
       file: compose.e2e.yml
       service: postgres
-    volumes:
-      - ./real/init.sql:/docker-entrypoint-initdb.d/real.sql:ro
+    image: booskiff-real-postgres
+    build:
+      context: ./real
+      target: postgres
+      dockerfile: Containerfile
   minio:
     extends:
       file: compose.e2e.yml
@@ -26,13 +29,14 @@ services:
       postgres:
         condition: service_healthy
   hydra:
-    image: oryd/hydra:v2.3.0
+    build:
+      context: ./real
+      target: hydra
+      dockerfile: Containerfile
     environment:
       DSN: postgres://booskiff:changeme@postgres:5432/hydra?sslmode=disable
       SECRETS_SYSTEM: ${REAL_E2E_SECRET:?run scripts/e2e-real.sh}
     command: serve all -c /config/hydra.yml --dev
-    volumes:
-      - ./real/hydra.yml:/config/hydra.yml:ro
     ports:
       - "127.0.0.1:4444:4444"
       - "127.0.0.1:3211:3211"
@@ -53,13 +57,14 @@ services:
       postgres:
         condition: service_healthy
   kratos:
-    image: oryd/kratos:v1.3.1
+    build:
+      context: ./real
+      target: kratos
+      dockerfile: Containerfile
     environment:
       DSN: postgres://booskiff:changeme@postgres:5432/kratos?sslmode=disable
       SECRETS_COOKIE: ${REAL_E2E_SECRET}
     command: serve -c /config/kratos.yml --dev
-    volumes:
-      - ./real:/config:ro
     depends_on:
       kratos-migrate:
         condition: service_completed_successfully
@@ -69,10 +74,11 @@ services:
       timeout: 3s
       retries: 30
   seed:
-    image: oryd/kratos:v1.3.1
+    build:
+      context: ./real
+      target: kratos
+      dockerfile: Containerfile
     command: import identities /config/seed-users.json -e http://kratos:4434
-    volumes:
-      - ./real/seed-users.json:/config/seed-users.json:ro
     depends_on:
       kratos:
         condition: service_healthy
@@ -105,10 +111,7 @@ services:
   provider:
     build:
       context: ../../..
-      dockerfile: apps/booskiff-web/Containerfile
-    command: bun e2e/real/provider.ts
-    volumes:
-      - ./real/provider.ts:/repo/apps/booskiff-web/e2e/real/provider.ts:ro
+      dockerfile: apps/booskiff-web/e2e/real/Provider.Containerfile
     ports:
       - "127.0.0.1:3212:3212"
     depends_on:

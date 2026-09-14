@@ -2,8 +2,9 @@
 set -euo pipefail
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export BOOSKIFF_CORE_DIR="${BOOSKIFF_CORE_DIR:?Set BOOSKIFF_CORE_DIR to a Booskiff checkout}"
-export REAL_E2E_SECRET="$(openssl rand -hex 32)"
-export REAL_E2E_COOKIE_SECRET="$(openssl rand -base64 32)"
+REAL_E2E_SECRET="$(bun -e 'console.log(Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex"))')"
+REAL_E2E_COOKIE_SECRET="$(bun -e 'console.log(Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64"))')"
+export REAL_E2E_SECRET REAL_E2E_COOKIE_SECRET
 PROJECT="booskiff-web-real-e2e-$$"
 COMPOSE=(docker compose -f "$APP_DIR/e2e/compose.e2e.real.yml" --project-name "$PROJECT")
 cleanup() {
