@@ -45,7 +45,7 @@ spago test  # route codec / model round-trip / catalog URL 一覧
 
 ## 構成
 
-ビジュアル差分 CI・R2 設定・ローカル検証は [visual/README.md](visual/README.md) を参照してください。
+コンポーネント・アプリ画面のビジュアル差分 CI、GitHub 添付設定、ローカル検証は [visual/README.md](visual/README.md) を参照してください。
 
 ```text
 Browser
