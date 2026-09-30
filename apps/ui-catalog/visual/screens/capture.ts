@@ -78,13 +78,6 @@ async function captureScreen(browser: Browser, server: AppServer, item: ScreenCa
     reducedMotion: "reduce", serviceWorkers: "block",
   });
   try {
-    if (item.authenticated) {
-      const login = await context.request.post("/auth/login", {
-        headers: { Origin: server.url }, data: { identifier: MOCK_IDENTIFIER, password: MOCK_PASSWORD },
-      });
-      expect(login.status(), `${item.filename}: mock login`).toBe(200);
-      expect(await login.json()).toMatchObject({ authenticated: true, username: MOCK_IDENTIFIER });
-    }
     const errors: string[] = [];
     const responseChecks: Promise<void>[] = [];
     await context.route("**/*", async (route) => {
@@ -95,6 +88,28 @@ async function captureScreen(browser: Browser, server: AppServer, item: ScreenCa
       errors.push(`Unexpected external request: ${request.url()}`);
       return route.abort("blockedbyclient");
     });
+    if (item.authenticated) {
+      // Use Chromium's HTTP/cookie implementation. Bun 1.3.13 supplies a
+      // relative response URL to Playwright's Node APIRequestContext, which
+      // breaks its Set-Cookie parser even when the request URL is absolute.
+      const loginPage = await context.newPage();
+      try {
+        await loginPage.goto("/login", { waitUntil: "networkidle" });
+        const login = await loginPage.evaluate(async (credentials) => {
+          const response = await fetch("/auth/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(credentials),
+            signal: AbortSignal.timeout(15_000),
+          });
+          return { status: response.status, json: await response.json() };
+        }, { identifier: MOCK_IDENTIFIER, password: MOCK_PASSWORD });
+        expect(login.status, `${item.filename}: mock login`).toBe(200);
+        expect(login.json).toMatchObject({ authenticated: true, username: MOCK_IDENTIFIER });
+      } finally {
+        await loginPage.close();
+      }
+    }
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     await page.clock.setFixedTime(new Date(FIXED_TIME));
