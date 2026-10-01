@@ -1,3 +1,8 @@
 @import "@shuttlepub/styles";
 @source "./**/*.purs";
 @source "../../../packages/ui/src/**/*.purs";
+
+/* Temporary visual-diff verification; this PR will be closed without merging. */
+#story-nav-link {
+  background-color: #6e2941;
+}
