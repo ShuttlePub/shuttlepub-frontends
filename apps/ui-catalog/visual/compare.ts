@@ -22,4 +22,7 @@ await Bun.write(configFileName, JSON.stringify({
 }));
 const processor = new RegSuitCore({ configFileName }).createProcessor();
 const { comparisonResult } = await processor.compare({ expectedKey: "base" });
-await Bun.write(resolve(root, "result.json"), JSON.stringify(resultSchema.parse(comparisonResult), null, 2));
+const { failedItems, newItems, deletedItems, passedItems } = comparisonResult;
+await Bun.write(resolve(root, "result.json"), JSON.stringify(
+  resultSchema.parse({ failedItems, newItems, deletedItems, passedItems }), null, 2,
+));

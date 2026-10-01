@@ -1,117 +1,116 @@
-# Visual diff CI
+# Frontend visual diff CI
 
-`check.yml` の `UI catalog visual comparison` が JSON manifest の全ストーリーを
-色 × 形状テーマごとに Playwright Chromium で撮影します (現在 13 × 4 = 52 枚)。
-1280×900、deviceScaleFactor=1、en-US、UTC、dark、reduced-motion を固定し、
-フォント読み込み・表示を待ち、アニメーションとキャレットを無効化します。
-各 `#story-*` 要素だけを撮影し、アプリ固有 View は含めません。
+main 向け PR のブランチと main を同じジョブ・同じ Chromium で撮影し、
+変更前 (main) / 変更後 (branch) / 差分を PR コメントに直接添付します。
+R2 や公開画像バケットは不要です。
 
-PR の base SHA と merge commit を**同一ジョブ・同一 Chromium**でビルド/撮影します。
-両方の manifest を個別に読むため、ストーリーの追加・削除も検出します。
-R2 の保存済み基準画像には依存せず、期限切れや初回実行による偽の「全件追加」を避けます。
-main push は自身と比較します。カタログがビルドされていない、PNG が空、ページエラー、
-HTTP エラーの場合は失敗します。比較の許容差はゼロです。
+## 撮影対象
 
-## チェックと公開の扱い
+- UI catalog: 各 revision の JSON manifest にある全ストーリーを色 × 形状テーマで撮影。
+  現在 13 × 4 = 52 枚。各 `#story-*` 要素を切り出し、追加・削除も検出します。
+- Booskiff / Emumet: `visual/screens/cases.ts` の代表画面・状態を desktop / mobile で撮影。
+  実際の SSR とクライアントハイドレーションを使用します。
+  Emumet は組み込み mock、Booskiff は撮影専用の固定 REST fixture を使用し、
+  backend checkout、Docker、本番認証情報には依存しません。
 
-- 差分なし: 緑 check。差分あり: 比較処理成功なら緑 check (見た目の承認は PR レビュー)。
-  差分は changed/new/deleted に分類し、コメントに before/after/diff を直接埋め込みます。
-- `Check` 完了後の `catalog-visual-publish.yml` は default branch のコードと依存のみを実行。
-  PR 成果物からは PNG のみ取り込み、レポートを再生成します。PR の HTML/JS/結果 JSON は実行・信用しません。
-- R2 Secrets は公開ステップだけに渡します。fork PR は撮影・比較のみで公開しません。
-- `UI_CATALOG_R2_ENABLED != true` なら公開ジョブは明示的に skip。
-  必須設定が欠けた場合、R2 アップロード失敗、期限ルール不在の場合は公開ジョブが失敗します。
-- 古い実行が新しい PR コメントを上書きしないよう、投稿直前に head SHA を確認します。
-- **初回導入 PR では `workflow_run` が main にまだ存在しないため自動公開されません。**
-  マージ後に設定を有効化し、同一 repo の検証用 PR で公開を確認してください。
-  この PR の作成作業ではマージ・バケット発行を行いません。
+アプリ画面は current の共通ドライバーで両 revision を撮影します。
+撮影 case を追加したときも main の画面と比較できます。
+case の削除は比較対象からの除外になるため、画面廃止の表示を確認したい場合は case を残してください。
+全画面を自動発見する仕組みではなく、レビュー対象の状態を明示的に登録します。
 
-## GitHub の設定
+viewport、deviceScaleFactor=1、en-US、UTC、dark、reduced-motion を固定し、
+フォントと表示完了を待ち、アニメーションとキャレットを無効化します。
+画面撮影の時刻・データ・外部画像も固定します。
+HTTP / ページエラー、空の撮影、期待する表示に到達しない場合は失敗します。
 
-Repository Secrets:
+## 実行と投稿
 
-| 名前 | 内容 |
-| --- | --- |
-| `UI_CATALOG_R2_ACCESS_KEY_ID` | R2 S3 API access key |
-| `UI_CATALOG_R2_SECRET_ACCESS_KEY` | R2 S3 API secret key |
+`frontend-visual.yml` は main 向け PR と main push の frontend 変更時に実行します。
+撮影開始時に解決した main SHA と PR event の `head.sha` (ブランチそのもの) を比較します。
+両 SHA はビルド前に記録し、投稿側で形式・run head・現在の main を検証します。
+PR 作成時の歴史的な `base.sha` には依存しません。
+main push は自身と比較します。保存済み基準画像や merge commit に依存しません。
 
-Repository Variables:
+差分があっても撮影・比較成功なら check は成功です。見た目の承認は PR レビューで行います。
+changed / new / deleted / passed を集計し、変更・追加・削除の画像だけを添付します。
+差分なしでも結果をコメントします。
 
-| 名前 | 内容 |
-| --- | --- |
-| `UI_CATALOG_R2_ENABLED` | セットアップ完了後に `true` |
-| `UI_CATALOG_R2_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` |
-| `UI_CATALOG_R2_BUCKET` | カタログ専用バケット名 |
-| `UI_CATALOG_R2_PUBLIC_URL` | 認証なしで GET 可能な公開 HTTPS origin。パスなし。例 `https://visual.example.com` |
+`frontend-visual-publish.yml` は比較成功後の `workflow_run` で動作し、
+default branch のコードと依存だけを使用します。
+画像成果物は安全な名前の PNG のみ受け入れ、枚数・サイズ・解像度を制限し、
+デコード・再エンコードした画像からレポートを再生成します。
+PR の HTML / JS / 比較結果 JSON は実行・信用しません。
+revision evidence JSON は最大4KiBの固定スキーマとして読み、GitHub API の SHA と照合します。
+撮影ジョブに投稿用 Secret は渡しません。
 
-GitHub Actions の `pull-requests: write` を許可してください。専用 PAT/GitHub App は不要です。
-R2 token は専用バケットのオブジェクト読み書きと GetBucketLifecycleConfiguration が必要です。
-R2 の権限体系で lifecycle 読み取りに Admin Read が必要な場合、その権限も付与してください。
-R2 credential の作成・運用承認はリポジトリ外で行います。
+投稿直前・投稿中に open / main 向け / same-repository PR と head / base SHA を確認します。
+古い revision の投稿を防ぎます。最新の全コメントを投稿できてから、
+同じ投稿者の専用 marker がある古いレポートだけを削除します。
+`--edit-last` で無関係なコメントを上書きしません。
+50ファイルの添付上限を超えるレポートは複数コメントに分割します。
 
-公開カスタムドメインは GitHub の画像プロキシから認証なしでアクセスできる必要があります。
-Cloudflare Access / WAF challenge を適用しないでください。専用 origin とし、cookie や秘密情報は置かないこと。
-PNG は `image/png`、HTML は `text/html`、プラグインが `Content-Encoding: gzip` を設定します。
-`enableACL: false` / `region: auto` / `forcePathStyle: true` で R2 S3 API を利用します。
-`ui-catalog/run-<run-id>-<attempt>/` は不変 URL とし、再実行時のキャッシュ混同を避けます。
+fork PR は Secret なしで撮影・比較まで実行し、添付しません。
+PNG と HTML report の Actions artifact は7日間保持します。
+GitHub 添付には旧 R2 の30日期限はありません。
 
-## ライフサイクル (運用者が一度設定)
+## 一度だけ必要な設定
 
-`lifecycle.json` は `ui-catalog/` のオブジェクトを30日後に削除し、未完了 multipart を1日で破棄します。
-**専用バケット**で、S3 管理用 credentials を環境変数に入れて次を実行します。
-既存バケットで `put-bucket-lifecycle-configuration` を使うと全ルールが置換されるため、
-既存ルールがある場合は JSON にマージしてから適用してください。
+Repository Secret **`VISUAL_DIFF_GH_TOKEN`** を登録してください:
+[Actions Secrets](https://github.com/ShuttlePub/shuttlepub-frontends/settings/secrets/actions)。
 
-```bash
-export AWS_ACCESS_KEY_ID="$R2_ACCESS_KEY_ID"
-export AWS_SECRET_ACCESS_KEY="$R2_SECRET_ACCESS_KEY"
-aws s3api put-bucket-lifecycle-configuration --region auto \
-  --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET" \
-  --lifecycle-configuration file://visual/lifecycle.json
-aws s3api get-bucket-lifecycle-configuration --region auto \
-  --endpoint-url "$R2_ENDPOINT" --bucket "$R2_BUCKET"
-```
+`gh --attach` は OAuth token / classic PAT / fine-grained PAT に対応します。
+Actions 標準の `GITHUB_TOKEN` (GitHub App installation token) には対応しません。
+対象 repository へ push できるアカウントの PAT を使用してください。
+fine-grained PAT は対象 repository に限定し、Contents / Pull requests を read/write に設定します。
+組織承認や SSO が必要な場合は有効化してください。専用 bot アカウントを推奨します。
+トークンをソース・画像 fixture・チャットに記載しないでください。
 
-公開スクリプトも毎回期限ルールを確認してからアップロードします。オブジェクトに TTL メタデータを
-付ける方式ではなく、prefix に対するバケットルールが適用されます。削除は非同期のため30日ぴったりを
-保証しません。コメントにも保存期間を記載し、期限切れ後は画像/レポートが閲覧できなくなります。
+Secret 未設定・期限切れ・権限不足・アップロード失敗は投稿ジョブを失敗させます。
+画像比較自体は Secret なしでも実行できます。
+CI の gh は **2.101.0** の release artifact を SHA-256 検証付きで固定しています。
 
-## ローカル検証 (R2 不要)
+**初回導入 PR では、投稿 workflow と信頼するスクリプトが main に存在しないため
+自動添付はまだ動きません。** マージと Secret 設定後、frontend 変更を含む
+同一 repository の PR で投稿まで確認してください。
+
+参考:
+[添付の公式説明](https://docs.github.com/en/github-cli/github-cli/attaching-files-with-github-cli)、
+[gh pr comment](https://cli.github.com/manual/gh_pr_comment)、
+[対応 token / 権限の実装](https://github.com/cli/cli/blob/v2.101.0/internal/attachments/client.go)。
+
+## 対象の追加
+
+コンポーネントは `manifest.ts` / `src/App/Catalog.purs` と対応テストへストーリーを追加します。
+アプリ画面は `visual/screens/cases.ts` に安定した case 名・route・操作・表示待機を追加します。
+必要な fixture は `visual/screens/` に置き、秘密情報・本番データを使わないでください。
+[screens/README.md](screens/README.md) も参照してください。
+共有 token / style の変更も、登録済みの全 case を比較して検出します。
+
+## ローカル検証
 
 repo root で `bun install --frozen-lockfile`、`nix develop` を実行後:
 
 ```bash
 cd apps/ui-catalog
-bash visual/build.sh
-PORT=3220 bun index.ts # 別端末で起動
-bunx --no-install playwright install chromium
-CAPTURE_DIR=.visual/expected bun visual/capture.ts
-# ここで必要なら共有 token/style を変更し、build.sh を再実行する
-CAPTURE_DIR=.visual/actual bun visual/capture.ts
-bun visual/compare.ts
-LOCAL_STORE=.visual/local-store VISUAL_KEY=local-1 VISUAL_REVISION=abcdef1 \
-  R2_PUBLIC_URL=https://visual.example.com bun visual/publish.ts
 bun test
 bunx --no-install tsc --noEmit -p visual/tsconfig.json
+bash visual/build.sh
+bash visual/build.sh ../booskiff-web
+bash visual/build.sh ../emumet-web
+FRONTEND_ROOT="$(git rev-parse --show-toplevel)" CAPTURE_DIR=.visual/actual bun visual/screens/capture.ts
 ```
 
-NixOS では `PLAYWRIGHT_CHROMIUM_PATH=$(command -v chromium)` を撮影時に指定できます。
-Tailwind の native module が `libstdc++.so.6` を見つけられない場合は、ビルド時に
-`LD_LIBRARY_PATH="$(nix eval --raw nixpkgs#stdenv.cc.cc.lib.outPath)/lib"` を指定してください。
-CI はこの override を使わず、固定した Playwright に対応する Chromium を使います。
-`CATALOG_URL` / `CAPTURE_DIR` / `VISUAL_DIR` でサーバーと出力ディレクトリを変更できます。
-生成物は `.visual/` 以下で gitignore 対象。ローカル公開は同じキー構造でファイルをコピーし、
-`.visual/comment.md` を生成します。公開 URL は例示用なのでローカルコピーからは直接閲覧してください。
-`bun test` は実 reg-suit の同一/変更/追加/削除検出・ローカル保存と、実 S3 plugin の HTTP 送信
-(ローカル HTTP サーバー、gzip/Content-Type/ACL 無効) を検証します。実 R2 や GitHub コメント API の
-認証成功を代替するテストではありません。
+NixOS では撮影時に `PLAYWRIGHT_CHROMIUM_PATH=$(command -v chromium)` を指定できます。
+main を別ディレクトリへ checkout・ビルドし、同じドライバーで `FRONTEND_ROOT` を main、
+`CAPTURE_DIR` を `.visual/expected` にして撮影します。
+カタログはサーバーを起動して `CATALOG_URL` / `CAPTURE_DIR` を指定し
+`bun visual/capture.ts` を実行します。
+両側の撮影後 `bun visual/compare.ts` を実行して `.visual/report/index.html` を確認します。
 
-## reg-notify-github-plugin 検証
+投稿用 env は `GH_REPO`、`PR_NUMBER`、`VISUAL_REVISION`、
+`VISUAL_BASE_REVISION` (CI は `VISUAL_REVISIONS_FILE` の検証済み base を使用)、`VISUAL_RUN_ID`、`VISUAL_RUN_ATTEMPT`、
+`VISUAL_DIR` (default `.visual`) と `GH_TOKEN` です。
+`bun visual/github-publish.ts` は実際に投稿するので、通常はテストの fake gh を使用してください。
 
-0.14.5 の [通知実装](https://github.com/reg-viz/reg-suit/blob/5c09c8eb1e356d7e8145e5850e6de17b2b25a5a0/packages/reg-notify-github-plugin/src/github-notifier-plugin.ts)
-は reportUrl と件数を通知 API に渡す方式で、各差分 PNG の Markdown 埋め込みを生成しません。
-そのため採用せず、reg-suit-core 0.14.5 / reg-publish-s3-plugin 0.14.4 と自前コメント生成を組み合わせます。
-レポート ZIP のダウンロードをレビューの前提にしません (Actions artifact はジョブ間の内部転送のみ)。
-
-参考: [R2 lifecycle](https://developers.cloudflare.com/r2/buckets/object-lifecycles/)、
-[S3 API compatibility](https://developers.cloudflare.com/r2/api/s3/api/)。
+旧 `visual/publish.ts` / `lifecycle.json` は任意の R2 / LOCAL_STORE 用として残しています。
+自動投稿からは呼ばず、`UI_CATALOG_R2_*` の設定も不要です。

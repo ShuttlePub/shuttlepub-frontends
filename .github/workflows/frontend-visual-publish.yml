@@ -1,0 +1,106 @@
+name: Attach frontend visual diff
+
+# Uses only default-branch code; untrusted input is decoded and re-encoded PNGs.
+on: # zizmor: ignore[dangerous-triggers]
+  workflow_run:
+    workflows: [Frontend visual comparison]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-publish-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: "1.3.13"
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Resolve the current PR for this run
+        id: pr
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const run = context.payload.workflow_run;
+            const associated = run.pull_requests;
+            const prs = await github.paginate(github.rest.pulls.list, {
+              ...context.repo, state: 'open', base: 'main',
+              head: `${context.repo.owner}:${run.head_branch}`
+            });
+            const pr = prs.find(pr =>
+              pr.head.sha === run.head_sha &&
+              pr.head.repo.full_name === context.payload.repository.full_name
+            );
+            const captured = pr && associated.find(item => item.number === pr.number);
+            if (!pr || !captured || captured.head.sha !== pr.head.sha) {
+              core.notice('No current PR matches the captured head; skipping stale report');
+              return;
+            }
+            core.setOutput('number', pr.number);
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: steps.pr.outputs.number != ''
+        with:
+          name: frontend-capture-revisions
+          path: apps/ui-catalog/.visual-revisions
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        if: steps.pr.outputs.number != ''
+        with:
+          name: frontend-screenshots
+          path: apps/ui-catalog/.visual-input
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+      - name: Sanitize PNG input and recompute the report
+        if: steps.pr.outputs.number != ''
+        run: |
+          bun visual/sanitize.ts
+          bun visual/compare.ts
+        working-directory: apps/ui-catalog
+        env:
+          VISUAL_INPUT_ACTUAL_DIR: .visual-input/actual
+          VISUAL_INPUT_EXPECTED_DIR: .visual-input/expected
+          VISUAL_DIR: .visual
+      - name: Install attachment-capable GitHub CLI
+        if: steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/visual-gh"
+          gh release download v2.101.0 --repo cli/cli --pattern gh_2.101.0_linux_amd64.tar.gz --dir "$RUNNER_TEMP/visual-gh"
+          cd "$RUNNER_TEMP/visual-gh"
+          echo '9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8  gh_2.101.0_linux_amd64.tar.gz' | sha256sum --check
+          tar -xzf gh_2.101.0_linux_amd64.tar.gz
+      - name: Attach before, after and diff images to the PR
+        if: steps.pr.outputs.number != ''
+        run: |
+          export PATH="$RUNNER_TEMP/visual-gh/gh_2.101.0_linux_amd64/bin:$PATH"
+          bun visual/github-publish.ts
+        working-directory: apps/ui-catalog
+        env:
+          GH_TOKEN: ${{ secrets.VISUAL_DIFF_GH_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+          VISUAL_REVISION: ${{ github.event.workflow_run.head_sha }}
+          VISUAL_REVISIONS_FILE: .visual-revisions/revisions.json
+          VISUAL_RUN_ID: ${{ github.event.workflow_run.id }}
+          VISUAL_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          VISUAL_DIR: .visual

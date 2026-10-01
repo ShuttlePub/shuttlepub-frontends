@@ -4,7 +4,7 @@ export const imageName = z.string().regex(/^[A-Za-z0-9-]+\.png$/);
 export const resultSchema = z.object({
   failedItems: z.array(imageName), newItems: z.array(imageName),
   deletedItems: z.array(imageName), passedItems: z.array(imageName),
-});
+}).strict();
 export type VisualResult = z.infer<typeof resultSchema>;
 
 export function commentBody(result: VisualResult, reportRoot: string, revision: string): string {
