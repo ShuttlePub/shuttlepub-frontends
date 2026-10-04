@@ -11,14 +11,14 @@ export const MINIO_HOST = "127.0.0.1:19000";
 // previous run's leftovers on a live stack.
 export const runId = Date.now();
 
-export async function loginViaUi(page: Page): Promise<void> {
+export async function loginViaUi(page: Page, identity = MOCK_IDENTIFIER): Promise<void> {
   await page.goto("/login");
   const identifier = page.getByTestId("login-identifier");
   const password = page.getByTestId("login-password");
   const submit = page.getByTestId("login-submit");
   await expect(identifier).toBeVisible();
   await expect(submit).toBeEnabled();
-  await identifier.fill(MOCK_IDENTIFIER);
+  await identifier.fill(identity);
   await password.fill(MOCK_PASSWORD);
   // The login form is hydrated client-side; a click fired before hydration is
   // inert, so retry the click+wait pair until navigation actually happens.
@@ -29,15 +29,11 @@ export async function loginViaUi(page: Page): Promise<void> {
   await expect(page.getByTestId("drive-page")).toBeVisible();
 }
 
-// Rows for folder actions are keyed by opaque ids (rename-folder-<id>,
-// delete-folder-<id>), so the row is located by its visible name instead.
-// `div, li, tr` matches every container holding the name (row, wrappers, the
-// list itself); in document order ancestors precede descendants, so .last()
-// is the innermost container = the row.
+// Folder actions are keyed by opaque IDs; identify the semantic table row.
 export function folderRow(page: Page, name: string) {
   return page
     .getByTestId("folder-list")
-    .locator("div, li, tr")
+    .locator("tr")
     .filter({ hasText: name })
     .last();
 }

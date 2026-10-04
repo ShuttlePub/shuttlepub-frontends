@@ -65,6 +65,9 @@ jobs:
       - run: bun test bff/
         working-directory: apps/booskiff-web
 
+      - run: bun test test/Upload.test.js
+        working-directory: apps/booskiff-web
+
       - run: >-
           mkdir -p dist && printf 'export function renderPage(...args: any[]): any;\n' > dist/server.d.ts
         working-directory: apps/booskiff-web

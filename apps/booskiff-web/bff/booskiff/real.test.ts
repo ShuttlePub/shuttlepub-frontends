@@ -57,8 +57,8 @@ const camelFile = {
   isPublic: false,
   createdAt: "2026-01-01T00:00:00Z",
 };
-const wireFolder = { id: "f1", name: "docs", created_at: "2026-01-01T00:00:00Z" };
-const camelFolder = { id: "f1", name: "docs", createdAt: "2026-01-01T00:00:00Z" };
+const wireFolder = { id: "f1", name: "docs", parent_id: null, created_at: "2026-01-01T00:00:00Z" };
+const camelFolder = { id: "f1", name: "docs", parentId: null, createdAt: "2026-01-01T00:00:00Z" };
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
@@ -69,7 +69,7 @@ describe("files", () => {
   test("listFiles: GET /v1/files?folder_id= with Bearer, maps to camelCase", async () => {
     const { calls } = stubFetch((call) => {
       expect(call.method).toBe("GET");
-      expect(call.url).toBe(`${CORE}/v1/files?folder_id=f1`);
+      expect(call.url).toBe(`${CORE}/v1/files?folder_id=f1&limit=200`);
       return jsonResponse(200, { items: [{ ...wireFile, folder_id: "f1" }] });
     });
     const result = await makeClient().listFiles("f1");
@@ -77,11 +77,72 @@ describe("files", () => {
     expect(result).toEqual([{ ...camelFile, folderId: "f1" }]);
   });
 
-  test("listFiles without folderId → bare /v1/files", async () => {
+  test("listFiles without folderId → unfiltered /v1/files", async () => {
     const { calls } = stubFetch(() => jsonResponse(200, { items: [wireFile] }));
     const result = await makeClient().listFiles();
-    expect(calls[0]?.url).toBe(`${CORE}/v1/files`);
+    expect(calls[0]?.url).toBe(`${CORE}/v1/files?limit=200`);
     expect(result).toEqual([camelFile]);
+  });
+
+  test.each([undefined, "f1"])("listFiles fetches every page with the same filter: %s", async (folderId) => {
+    const records = Array.from({ length: 405 }, (_, index) => ({ ...wireFile, id: `file_${index}`, folder_id: folderId ?? null }));
+    const { calls } = stubFetch((call) => {
+      const query = new URL(call.url).searchParams;
+      expect(query.get("limit")).toBe("200");
+      expect(query.get("folder_id")).toBe(folderId ?? null);
+      expect(query.get("root")).toBe(folderId === undefined ? "true" : null);
+      expect(call.headers.Authorization).toBe(`Bearer ${TOKEN}`);
+      expect(query.has("offset")).toBe(false);
+      const cursorId = query.get("before_id");
+      const offset = cursorId === null ? 0 : records.findIndex((record) => record.id === cursorId) + 1;
+      expect(query.get("before_created_at")).toBe(cursorId === null ? null : wireFile.created_at);
+      return jsonResponse(200, { items: records.slice(offset, offset + 200) });
+    });
+    const result = await makeClient().listFiles(folderId, folderId === undefined);
+    expect(result).toHaveLength(405);
+    expect(result[404]?.id).toBe("file_404");
+    expect(calls.map((call) => new URL(call.url).searchParams.get("before_id"))).toEqual([null, "file_199", "file_399"]);
+  });
+
+  test("listFiles does not skip surviving rows when a previous page's row is deleted", async () => {
+    let records = Array.from({ length: 401 }, (_, index) => ({
+      ...wireFile, id: `file_${String(401 - index).padStart(3, "0")}`,
+      created_at: "2026-10-04T00:00:00.123456Z",
+    }));
+    stubFetch((call) => {
+      const query = new URL(call.url).searchParams;
+      expect(query.has("offset")).toBe(false);
+      const beforeId = query.get("before_id");
+      if (beforeId !== null) expect(query.get("before_created_at")).toBe("2026-10-04T00:00:00.123456Z");
+      const page = records.filter((record) => beforeId === null || record.id < beforeId).slice(0, 200);
+      if (beforeId === null) records = records.slice(1);
+      return jsonResponse(200, { items: page });
+    });
+    const result = new Set((await makeClient().listFiles(undefined, true)).map((file) => file.id));
+    for (const survivor of records) expect(result.has(survivor.id)).toBe(true);
+  });
+
+  test("listFiles removes duplicate IDs across pages", async () => {
+    const records = Array.from({ length: 200 }, (_, index) => ({ ...wireFile, id: `file_${index}` }));
+    stubFetch((call) => jsonResponse(200, { items: !new URL(call.url).searchParams.has("before_id")
+      ? records : [records[199], { ...wireFile, id: "last" }] }));
+    expect(await makeClient().listFiles()).toHaveLength(201);
+  });
+
+  test("listFiles rejects an upstream that endlessly repeats a full page", async () => {
+    const records = Array.from({ length: 200 }, (_, index) => ({ ...wireFile, id: `file_${index}` }));
+    const { calls } = stubFetch(() => jsonResponse(200, { items: records }));
+    await expect(makeClient().listFiles()).rejects.toThrow("pagination made no progress");
+    expect(calls).toHaveLength(2);
+  });
+
+  test("listFiles rejects a later page error instead of returning partial results", async () => {
+    const records = Array.from({ length: 200 }, (_, index) => ({ ...wireFile, id: `file_${index}` }));
+    stubFetch((call) => !new URL(call.url).searchParams.has("before_id")
+      ? jsonResponse(200, { items: records }) : jsonResponse(403, { error: { code: "forbidden", message: "owner mismatch" } }));
+    const error = await makeClient().listFiles("f1").catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(BooskiffApiError);
+    expect((error as BooskiffApiError).status).toBe(403);
   });
 
   test("uploadFile: POST /v1/files with stream body, duplex half, verbatim Content-Length, encoded query", async () => {
@@ -159,6 +220,28 @@ describe("files", () => {
 });
 
 describe("folders", () => {
+  test.each([undefined, "parent/1"])("listFolders passes its root or parent filter: %s", async (parentId) => {
+    const { calls } = stubFetch(() => jsonResponse(200, { items: [{ ...wireFolder, parent_id: parentId ?? null }] }));
+    expect(await makeClient().listFolders(parentId, parentId === undefined)).toEqual([{ ...camelFolder, parentId: parentId ?? null }]);
+    const query = new URL(calls[0].url).searchParams;
+    expect(query.get("parent_id")).toBe(parentId ?? null);
+    expect(query.get("root")).toBe(parentId === undefined ? "true" : null);
+  });
+
+  test.each([null, "parent-1"])("createFolder sends an explicit parent: %s", async (parentId) => {
+    stubFetch((call) => {
+      expect(jsonBody(call)).toEqual({ name: "docs", parent_id: parentId });
+      return jsonResponse(201, { ...wireFolder, parent_id: parentId });
+    });
+    expect((await makeClient().createFolder("docs", parentId)).parentId).toBe(parentId);
+  });
+
+  test("deleteFolder passes the safe-delete option and core conflict", async () => {
+    const { calls } = stubFetch(() => jsonResponse(409, { error: { code: "folder_not_empty", message: "not empty" } }));
+    const error = await makeClient().deleteFolder("f/1", true).catch((err: unknown) => err);
+    expect(calls[0].url).toBe(`${CORE}/v1/folders/f%2F1?require_empty=true`);
+    expect((error as BooskiffApiError).status).toBe(409);
+  });
   test("listFolders: GET /v1/folders → camelCase items", async () => {
     stubFetch((call) => {
       expect(call.method).toBe("GET");

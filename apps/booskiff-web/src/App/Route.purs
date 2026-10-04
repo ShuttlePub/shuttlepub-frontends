@@ -14,6 +14,7 @@ import Routing.Duplex.Generic (noArgs, sum)
 data Route
   = Login
   | Drive
+  | FolderDetail String
   | FileDetail String
 
 derive instance Generic Route _
@@ -35,5 +36,6 @@ routeCodec :: RouteDuplex' Route
 routeCodec = root $ sum
   { "Login": prefix "login" noArgs
   , "Drive": prefix "drive" noArgs
+  , "FolderDetail": prefix "drive" (prefix "folders" segment)
   , "FileDetail": prefix "drive" (prefix "files" segment)
   }

@@ -29,6 +29,30 @@ COOKIE_SECRET_BASE64="$(openssl rand -base64 32)" ./scripts/dev.sh release
 
 Mock ログインのパスワードは `password` です（メールアドレスは任意）。
 
+## ファイル画面
+
+`/drive` はルート、`/drive/folders/<id>` はそのフォルダーの直下を表示します。
+パンくずから親へ戻れ、深いフォルダーの URL を直接開くこともできます。
+リスト表示は名前・サイズ・追加日時、アイコン表示はアイコンと名前だけを表示します。
+表示形式を切り替えても、現在地・名前の絞り込み・並び順は維持されます。
+
+複数ファイルのアップロードは右下の転送パネルで順番に処理します。
+保存先はファイルを追加した時点のフォルダーに固定されます。
+送信が 100% になった後も、サーバーが保存成功を返すまでは保存処理中です。
+パネルの縮小やアプリ内のフォルダー移動で転送は中断されません。
+ページの再読み込み・離脱をまたぐ再開には対応していません。
+通信が切れて保存結果を確認できない場合は、保存先を確認してから再送してください。
+
+ダウンロードはブラウザーが管理します。転送パネルは要求済みの記録を表示し、
+ダウンロードの完了率や保存完了は表示しません。
+画面から削除できるフォルダーは空のものに限ります。
+
+### 対応する core
+
+この画面には、`folders.parent_id` の migration と `root` / `parent_id` /
+`require_empty` に対応した Booskiff core が必要です。先に core を更新してから
+Web を更新してください。既存フォルダーはルートに残り、ファイルの所属は維持されます。
+
 ## 環境変数
 
 `auth-bun` は import 時に環境変数を読み取ります。そのため、`dev.sh` と Compose は `SESSION_COOKIE_NAME`、`OAUTH_COOKIE_NAME`、および必要な認証設定を **import より前** に設定します。個別に `bun index.ts` を起動する場合も、同じく起動前に設定してください。
@@ -67,10 +91,18 @@ Mock ログインのパスワードは `password` です（メールアドレス
 | `/api/billing/status` | 課金ステータスの取得 |
 | `/.well-known/jwks.json` | mock / test-JWT モードのみの JWKS 公開。`NODE_ENV=production` では常に 404 |
 
+新しい画面は `/api/files?root=true` または `?folder_id=<id>` で現在地を指定します。
+BFF は core の一覧を 200 件ずつ最後まで取得するため、50 件を超えるファイルも表示対象です。
+`/api/folders` の応答には `parentId` が含まれ、`?root=true` / `?parent_id=<id>` で
+直下のフォルダーを取得できます。フィルター省略時の集約一覧は旧 API 利用者向けに維持します。
+フォルダー作成は `{name, parent_id}`、画面からの削除は
+`DELETE /api/folders/<id>?require_empty=true` を使用します。
+
 ## テスト
 
 ```bash
 bun test bff/  # bare `bun test` ではない。e2e Playwright spec を拾わないため
+bun test test/Upload.test.js  # 転送キューとXHRの状態遷移
 spago test
 ```
 
@@ -111,12 +143,11 @@ NixOS では `PLAYWRIGHT_CHROMIUM_PATH=$(command -v chromium)` を指定でき�
 
 **検出した既存不具合と暫定措置:** [#17](https://github.com/ShuttlePub/shuttlepub-frontends/issues/17) /
 [#20](https://github.com/ShuttlePub/shuttlepub-frontends/issues/20) のログイン導線は修正済みです。
-ログイン成功後に BFF が `next: /auth/oauth/start?return_to=/login` を返し、UI が
+ログイン成功後に BFF が `next: /auth/oauth/start?return_to=/drive` を返し、UI が
 トップレベル遷移で OAuth を開始するため、E2E の `/auth/oauth/start` 明示遷移は解除済みです。
 [#19](https://github.com/ShuttlePub/shuttlepub-frontends/issues/19)（認証済み `/drive` の
-フルロード時の resume DOM 破損）は未修正のため、`return_to=/login` の SPA 経路は
-BFF 側で維持し、永続化は引き続き API で検証します。
-CI は mock/real を別 matrix job で実行し、両方 green です。
+フルロード時の resume DOM 破損）は #21 で修正済みです。永続化は `/drive` の
+再読み込み後の UI でも検証します。CI は mock/real を別 matrix job で実行します。
 
 ## 構成
 

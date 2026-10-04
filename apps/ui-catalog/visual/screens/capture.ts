@@ -8,6 +8,7 @@ import { startApp, type AppServer } from "./servers.ts";
 
 async function prepareScreen(page: Page, item: ScreenCase) {
   const content = page.locator("#content");
+  let expectedPath: string = item.path;
   // App chrome/copy changes should produce a visual diff, not make the current
   // driver incompatible with main. Wait for structure and seeded data instead.
   await expect(content.locator("h1")).toBeVisible();
@@ -22,24 +23,31 @@ async function prepareScreen(page: Page, item: ScreenCase) {
     if (item.id.startsWith("drive-")) {
       await expect(page.getByTestId("quota")).toContainText(/\d/);
       if (item.data === "empty") {
-        // Existing views keep one placeholder row for each empty collection.
-        await expect(page.getByTestId("file-list").locator("li")).toHaveCount(1);
-        await expect(page.getByTestId("folder-list").locator("li")).toHaveCount(1);
-        await expect(page.getByTestId("file-list").locator("a")).toHaveCount(0);
-        await expect(page.getByTestId("folder-list").locator("button")).toHaveCount(0);
+        // The main baseline has separate empty lists; the hierarchical browser
+        // has one empty folder view. Do not require either layout's row tags.
+        await expect(content.locator('a[href^="/drive/files/"]')).toHaveCount(0);
+        await expect(content.getByText("Projects", { exact: true })).toHaveCount(0);
       } else {
-        await expect(page.getByTestId("file-list").locator("li")).toHaveCount(3);
-        await expect(page.getByTestId("folder-list").locator("li")).toHaveCount(2);
+        await expect(content.getByText("Projects", { exact: true })).toBeVisible();
+        await expect(content.getByText("Archive", { exact: true })).toBeVisible();
+        await expect(content.getByText("README.txt", { exact: true })).toBeVisible();
       }
       if (item.id === "drive-folder") {
-        await page.getByRole("button", { name: "Projects", exact: true }).click();
+        const folderLink = content.locator('a[href="/drive/folders/folder-projects"]');
+        if (await folderLink.count()) {
+          expectedPath = "/drive/folders/folder-projects";
+          await folderLink.click();
+        } else {
+          await page.getByRole("button", { name: "Projects", exact: true }).click();
+        }
         await expect(page.getByTestId("upload-input")).toHaveAttribute("data-folder-id", "folder-projects");
-        await expect(page.getByTestId("file-list").locator("li")).toHaveCount(2);
-        await expect(page.getByTestId("file-list")).not.toContainText("README.txt");
+        await expect(content.getByText("design-notes.pdf", { exact: true })).toBeVisible();
+        await expect(content.getByText("project-cover.png", { exact: true })).toBeVisible();
+        await expect(content.getByText("README.txt", { exact: true })).toHaveCount(0);
       }
     } else if (item.id === "file-detail") {
       await expect(page.getByRole("heading", { name: "design-notes.pdf", exact: true })).toBeVisible();
-      await expect(page.getByTestId("file-detail-page")).toContainText("2026-01-10T09:30:00Z");
+      await expect(page.getByTestId("file-detail-page").locator('a[href="/api/files/file-design/download"]')).toBeVisible();
     }
   } else {
     if (item.id === "accounts-populated") {
@@ -69,6 +77,7 @@ async function prepareScreen(page: Page, item: ScreenCase) {
       await expect(content.locator("button[data-shape-option]")).toHaveCount(2);
     }
   }
+  return expectedPath;
 }
 
 async function captureScreen(browser: Browser, server: AppServer, item: ScreenCase, output: string) {
@@ -144,8 +153,8 @@ async function captureScreen(browser: Browser, server: AppServer, item: ScreenCa
     await expect(page.locator("main#app")).toBeVisible();
     await expect(page.locator("html")).toHaveAttribute("data-color", "catppuccin-mocha");
     await expect(page.locator("html")).toHaveAttribute("data-shape", "rounded");
-    await prepareScreen(page, item);
-    await expect(page).toHaveURL(new URL(item.path, server.url).href);
+    const expectedPath = await prepareScreen(page, item);
+    await expect(page).toHaveURL(new URL(expectedPath, server.url).href);
     await page.waitForLoadState("networkidle");
     await page.evaluate(async () => {
       await document.fonts.ready;

@@ -128,7 +128,7 @@ describe("GET /api/files", () => {
   test("forwards folder_id, Bearer token, maps snake_case → camelCase", async () => {
     const { calls } = stubFetch((call) => {
       expect(call.method).toBe("GET");
-      expect(call.url).toBe(`${CORE}/v1/files?folder_id=f1`);
+      expect(call.url).toBe(`${CORE}/v1/files?folder_id=f1&limit=200`);
       expect(call.headers.Authorization).toBe("Bearer core-access-token");
       return jsonResponse(200, { items: [wireFile] });
     });
@@ -141,7 +141,7 @@ describe("GET /api/files", () => {
 
   test("no folder_id → no query param; null folder_id maps to null", async () => {
     stubFetch((call) => {
-      expect(call.url).toBe(`${CORE}/v1/files`);
+      expect(call.url).toBe(`${CORE}/v1/files?limit=200`);
       return jsonResponse(200, { items: [{ ...wireFile, folder_id: null }] });
     });
     const cookie = await cookieFor(makeSession());
@@ -264,8 +264,8 @@ describe("file download / delete", () => {
 });
 
 describe("folders CRUD", () => {
-  const wireFolder = { id: "f1", name: "docs", created_at: "2026-01-01T00:00:00Z" };
-  const camelFolder = { id: "f1", name: "docs", createdAt: "2026-01-01T00:00:00Z" };
+  const wireFolder = { id: "f1", name: "docs", parent_id: null, created_at: "2026-01-01T00:00:00Z" };
+  const camelFolder = { id: "f1", name: "docs", parentId: null, createdAt: "2026-01-01T00:00:00Z" };
 
   test("GET /api/folders → {items:[camelCase]}", async () => {
     stubFetch((call) => {

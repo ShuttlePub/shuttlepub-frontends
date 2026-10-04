@@ -9,8 +9,8 @@ export const FILES = [
 ] as const satisfies readonly FileItem[];
 
 export const FOLDERS = [
-  { id: "folder-projects", name: "Projects", createdAt: "2026-01-08T10:00:00Z" },
-  { id: "folder-archive", name: "Archive", createdAt: "2026-01-09T10:00:00Z" },
+  { id: "folder-projects", name: "Projects", parentId: null, createdAt: "2026-01-08T10:00:00Z" },
+  { id: "folder-archive", name: "Archive", parentId: null, createdAt: "2026-01-09T10:00:00Z" },
 ] as const satisfies readonly Folder[];
 
 export const BILLING = {

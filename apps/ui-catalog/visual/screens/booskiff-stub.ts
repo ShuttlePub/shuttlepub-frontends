@@ -10,7 +10,7 @@ function wireFile(file: FileItem) {
 }
 
 function wireFolder(folder: Folder) {
-  return { id: folder.id, name: folder.name, created_at: folder.createdAt };
+  return { id: folder.id, name: folder.name, parent_id: folder.parentId, created_at: folder.createdAt };
 }
 
 /** Test-only HTTP boundary: app SSR, auth, REST mapping and hydration remain real. */
@@ -34,10 +34,24 @@ export function startBooskiffStub() {
       if (request.method === "GET") {
         if (url.pathname === "/v1/files") {
           const folderId = url.searchParams.get("folder_id");
-          const selected = folderId === null ? files : files.filter((file) => file.folderId === folderId);
-          return Response.json({ items: selected.map(wireFile) });
+          const root = url.searchParams.get("root") === "true";
+          let selected = root ? files.filter((file) => file.folderId === null)
+            : folderId === null ? files : files.filter((file) => file.folderId === folderId);
+          const beforeAt = url.searchParams.get("before_created_at");
+          const beforeId = url.searchParams.get("before_id");
+          if (beforeAt !== null && beforeId !== null) selected = selected.filter((file) =>
+            file.createdAt < beforeAt || (file.createdAt === beforeAt && file.id < beforeId));
+          const limit = Number(url.searchParams.get("limit") ?? 50);
+          const offset = Number(url.searchParams.get("offset") ?? 0);
+          return Response.json({ items: selected.slice(offset, offset + limit).map(wireFile) });
         }
-        if (url.pathname === "/v1/folders") return Response.json({ items: folders.map(wireFolder) });
+        if (url.pathname === "/v1/folders") {
+          const parentId = url.searchParams.get("parent_id");
+          const selected = url.searchParams.get("root") === "true"
+            ? folders.filter((folder) => folder.parentId === null)
+            : parentId === null ? folders : folders.filter((folder) => folder.parentId === parentId);
+          return Response.json({ items: selected.map(wireFolder) });
+        }
         if (url.pathname === "/v1/billing/status") return Response.json({
           used_bytes: state === "empty" ? 0 : BILLING.usedBytes,
           storage_quota_bytes: BILLING.storageQuotaBytes,

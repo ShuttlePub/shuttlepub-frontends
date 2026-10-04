@@ -4,328 +4,283 @@ import Prelude
 
 import App.Format (humanize)
 import App.Message (Message(..))
-import App.Route (Route(..), routeCodec)
-import App.Model (Billing(..), FileItem(..), Folder(..), Model, RemoteData(..), UploadState)
-import Data.Int (floor)
+import App.Model (FileItem(..), Folder(..), Model, RemoteData(..))
+import App.Route (Route(..))
+import App.View.Common (emptySlot, errorBanner, icon, routeLink)
+import Data.Array (filter, find, length, null, sortBy)
 import Data.Maybe (Maybe(..), isJust, maybe)
-import Data.String as S
+import Data.String (Pattern(..), contains, joinWith, take, toLower)
 import Data.String.Common (trim)
 import Flame (Html)
 import Flame.Html.Attribute as HA
 import Flame.Html.Element as HE
-import ShuttlePub.UI.Theme as T
-import Routing.Duplex (print)
 
 view :: Model -> Html Message
-view model =
-  HE.div
-    [ HA.key "drive"
-    , HA.class' "space-y-8"
-    , HA.createAttribute "data-testid" "drive-page"
-    ]
-    [ HE.h1
-        [ HA.class' ("text-4xl font-bold tracking-tight " <> T.textHeading) ]
-        [ HE.text "Drive" ]
-    , errorBanner model.errorMessage
-    , quotaView model.billing
-    , uploadSection model
-    , folderSection model
-    , fileSection model
-    ]
-
--- | Invisible stand-in for "render nothing" slots. An empty text node never
--- | survives HTML parsing, but Flame's hydration matches SSR DOM to virtual
--- | children purely by index — a vanished placeholder shifts every following
--- | sibling onto the wrong node and later patches then corrupt the DOM
--- | (duplicated sections, leaked children, dead handlers; #19/#21).
-emptySlot :: Html Message
-emptySlot = HE.div [ HA.style { display: "none" } ] []
-
-errorBanner :: Maybe String -> Html Message
-errorBanner = case _ of
-  Nothing -> emptySlot
-  Just msg ->
-    HE.div
-      [ HA.class'
-          ( "px-4 py-3 text-sm " <> T.roundedTheme <> " " <> T.textError <> " border "
-              <> T.borderTheme
-              <> " bg-red-500/10"
-          )
-      ]
-      [ HE.text msg ]
-
-quotaView :: RemoteData Billing -> Html Message
-quotaView = case _ of
-  Loaded (Billing b) ->
-    HE.div
-      [ HA.class' ("text-sm " <> T.textSecondary)
-      , HA.createAttribute "data-testid" "quota"
-      ]
-      [ HE.text
-          ( humanize b.usedBytes
-              <> " / "
-              <> humanize b.storageQuotaBytes
-              <> " · max "
-              <> humanize b.maxFileBytes
-              <> "/file"
-          )
-      ]
-  _ ->
-    HE.div
-      [ HA.class' ("text-sm " <> T.textSecondary)
-      , HA.createAttribute "data-testid" "quota"
-      ]
-      [ HE.text "-- / --" ]
-
-uploadSection :: Model -> Html Message
-uploadSection model =
-  HE.div [ HA.class' ("p-6 space-y-4 " <> T.surface) ]
-    [ HE.h2
-        [ HA.class' ("text-lg font-semibold " <> T.textHeading) ]
-        [ HE.text "アップロード" ]
-    , HE.div [ HA.class' "flex items-center gap-3" ]
-        [ HE.input
-            [ HA.type' "file"
-            , HA.class' ("block w-full text-sm " <> T.textPrimary)
-            , HA.createAttribute "data-testid" "upload-input"
-            , HA.createAttribute "data-folder-id" (maybe "" identity model.selectedFolder)
-            ]
-        , HE.button
-            [ HA.class'
-                ( "px-4 py-2 text-sm font-medium text-white " <> T.bgAccent <> " "
-                    <> T.hoverBgAccent
-                    <> " "
-                    <> T.roundedTheme
-                    <> if model.busy || isJust model.upload then " opacity-50 cursor-not-allowed" else ""
-                )
-            , HA.onClick StartUpload
-            , HA.disabled (model.busy || isJust model.upload)
-            , HA.createAttribute "data-testid" "upload-submit"
-            ]
-            [ HE.text "アップロード" ]
-        ]
-    , maybe emptySlot progressView model.upload
-    , maybe emptySlot uploadErrorView (uploadErrorFor model)
-    ]
-
-uploadErrorFor :: Model -> Maybe String
-uploadErrorFor model = model.errorMessage
-
-progressView :: UploadState -> Html Message
-progressView upload =
-  let
-    percent =
-      if upload.total > 0.0 then floor (upload.loaded * 100.0 / upload.total)
-      else 0
-  in
-    HE.div
-      [ HA.class' "w-full"
-      , HA.createAttribute "data-testid" "upload-progress"
-      ]
-      [ HE.div [ HA.class' "flex justify-between text-xs mb-1" ]
-          [ HE.span [ HA.class' T.textSecondary ] [ HE.text upload.name ]
-          , HE.span [ HA.class' T.textSecondary ] [ HE.text (show percent <> "%") ]
+view model = HE.div [ HA.key "drive", HA.class' "drive-page", HA.createAttribute "data-testid" "drive-page" ]
+  [ HE.div [ HA.class' "drive-heading" ]
+      [ HE.div_
+          [ HE.p [ HA.class' "eyebrow" ] [ HE.text "YOUR WORKSPACE" ]
+          , HE.h1_ [ HE.text (currentFolderName model) ]
           ]
-      , HE.div
-          [ HA.class' ("w-full h-2 overflow-hidden rounded-theme " <> T.bgSecondary) ]
-          [ HE.div
-              [ HA.class' ("h-full transition-all " <> T.bgAccent)
-              , HA.style { width: show percent <> "%" }
+      , HE.div [ HA.class' "drive-primary-actions" ]
+          [ HE.button [ HA.class' "drive-button secondary", HA.onClick OpenCreateFolder, HA.disabled (not (folderReady model)), HA.createAttribute "data-testid" "new-folder-button" ]
+              [ icon "folder", HE.text "新規フォルダ" ]
+          , HE.button [ HA.class' "drive-button primary", HA.onClick ChooseUpload, HA.disabled (not (folderReady model)), HA.createAttribute "data-testid" "upload-submit" ]
+              [ icon "upload", HE.text "アップロード" ]
+          , HE.input
+              [ HA.type' "file"
+              , HA.multiple true
+              , HA.hidden true
+              , HA.onChange StartUpload
+              , HA.createAttribute "data-testid" "upload-input"
+              , HA.createAttribute "data-folder-id" (maybe "" identity model.selectedFolder)
+              , HA.createAttribute "data-folder-name" (currentFolderPath model)
               ]
-              []
           ]
       ]
+  , breadcrumbs model
+  , errorBanner model.errorMessage
+  , if model.folderFormOpen then folderForm model else emptySlot
+  , HE.div [ HA.class' "drive-toolbar" ]
+      [ HE.label [ HA.class' "drive-search" ]
+          [ icon "search"
+          , HE.input
+              [ HA.type' "search"
+              , HA.placeholder "このフォルダ内を検索"
+              , HA.value model.search
+              , HA.onInput SearchChanged
+              , HA.createAttribute "aria-label" "このフォルダ内を検索"
+              , HA.createAttribute "data-testid" "drive-search"
+              ]
+          ]
+      , HE.div [ HA.class' "drive-display-tools" ]
+          [ HE.label [ HA.class' "drive-sort" ]
+              [ HE.span [ HA.class' "sr-only" ] [ HE.text "並び順" ]
+              , HE.select [ HA.value model.sort, HA.onInput SortChanged, HA.createAttribute "aria-label" "並び順" ]
+                  [ HE.option [ HA.value "name" ] [ HE.text "名前順" ]
+                  , HE.option [ HA.value "newest" ] [ HE.text "追加日時順" ]
+                  , HE.option [ HA.value "size" ] [ HE.text "サイズ順" ]
+                  ]
+              ]
+          , HE.div [ HA.class' "view-switch", HA.createAttribute "role" "group", HA.createAttribute "aria-label" "表示形式" ]
+              [ viewButton model "list" "リスト表示", viewButton model "grid" "アイコン表示" ]
+          ]
+      ]
+  , HE.div
+      ( [ HA.class' "drive-browser"
+        , HA.createAttribute "data-testid" "drive-browser"
+        , HA.createAttribute "data-folder-id" (maybe "" identity model.selectedFolder)
+        , HA.createAttribute "data-folder-name" (currentFolderPath model)
+        ] <> if folderReady model then [ HA.createAttribute "data-upload-dropzone" "true" ] else []
+      )
+      [ browserContents model
+      , HE.div [ HA.class' "drop-overlay", HA.createAttribute "aria-hidden" "true" ]
+          [ icon "upload", HE.strong_ [ HE.text (currentFolderName model <> " にアップロード") ] ]
+      ]
+  , HE.p [ HA.class' "drive-hint" ] [ HE.text "ファイルをここにドラッグしてアップロード" ]
+  ]
 
-uploadErrorView :: String -> Html Message
-uploadErrorView msg =
-  HE.div
-    [ HA.class'
-        ( "px-4 py-3 text-sm " <> T.roundedTheme <> " " <> T.textError <> " border "
-            <> T.borderTheme
-            <> " bg-red-500/10"
-        )
-    , HA.createAttribute "data-testid" "file-upload-error"
-    ]
-    [ HE.text msg ]
+folderReady :: Model -> Boolean
+folderReady model = case model.folders of
+  Loaded folders -> maybe true (\id -> isJust (find (\(Folder f) -> f.id == id) folders)) model.selectedFolder
+  _ -> false
 
-folderSection :: Model -> Html Message
-folderSection model =
-  HE.div [ HA.class' ("p-6 space-y-4 " <> T.surface) ]
-    [ HE.div [ HA.class' "flex items-center justify-between" ]
-        [ HE.h2
-            [ HA.class' ("text-lg font-semibold " <> T.textHeading) ]
-            [ HE.text "フォルダ" ]
-        , allButton model.selectedFolder
-        ]
-    , createFolderForm model
-    , HE.ul
-        [ HA.class' "space-y-2"
-        , HA.createAttribute "data-testid" "folder-list"
-        ]
-        ( case folders of
-            [] -> [ HE.li [ HA.class' ("text-sm " <> T.textSecondary) ] [ HE.text "フォルダはまだありません" ] ]
-            _ -> map (folderRow model) folders
-        )
-    ]
+currentFolderName :: Model -> String
+currentFolderName model = case model.selectedFolder of
+  Nothing -> "マイドライブ"
+  Just id -> case model.folders of
+    Loaded folders -> maybe "フォルダが見つかりません" (\(Folder f) -> f.name) (find (\(Folder f) -> f.id == id) folders)
+    _ -> "フォルダ"
+
+currentFolderPath :: Model -> String
+currentFolderPath model = joinWith " / "
+  ( [ "マイドライブ" ] <> case model.folders of
+      Loaded folders -> map (\(Folder f) -> f.name) (folderAncestors folders model.selectedFolder)
+      _ -> []
+  )
+
+-- Limit traversal to the available folder count, even if malformed API data
+-- contains a cycle; valid trees always reach root earlier.
+folderAncestors :: Array Folder -> Maybe String -> Array Folder
+folderAncestors folders start = walk (length folders) start
   where
-  folders = case model.folders of
-    Loaded fs -> fs
-    _ -> []
+  walk remaining selected
+    | remaining <= 0 = []
+    | otherwise = case selected >>= \id -> find (\(Folder f) -> f.id == id) folders of
+        Nothing -> []
+        Just folder@(Folder f) -> walk (remaining - 1) f.parentId <> [ folder ]
 
-allButton :: Maybe String -> Html Message
-allButton = case _ of
-  Nothing -> emptySlot
-  Just _ ->
-    HE.button
-      [ HA.class' ("text-sm " <> T.navLink)
-      , HA.onClick (SelectFolder Nothing)
+breadcrumbs :: Model -> Html Message
+breadcrumbs model = HE.nav [ HA.class' "breadcrumbs", HA.createAttribute "aria-label" "パンくず", HA.createAttribute "data-testid" "breadcrumbs" ]
+  ( [ routeLink "breadcrumb-root" Drive [ HE.text "マイドライブ" ] ] <> case model.folders of
+      Loaded folders -> map
+        ( \(Folder f) -> HE.span [ HA.class' "breadcrumb-part" ]
+            [ icon "chevron", routeLink "" (FolderDetail f.id) [ HE.text f.name ] ]
+        )
+        (folderAncestors folders model.selectedFolder)
+      _ -> []
+  )
+
+viewButton :: Model -> String -> String -> Html Message
+viewButton model mode label = HE.button
+  [ HA.class' ("icon-button" <> if model.viewMode == mode then " selected" else "")
+  , HA.onClick (SetViewMode mode)
+  , HA.title label
+  , HA.createAttribute "aria-label" label
+  , HA.createAttribute "aria-pressed" (if model.viewMode == mode then "true" else "false")
+  , HA.createAttribute "data-testid" ("view-" <> mode)
+  ]
+  [ icon mode ]
+
+folderForm :: Model -> Html Message
+folderForm model = HE.form
+  [ HA.class' "folder-form"
+  , HA.onSubmit (if isJust model.folderForm.editing then SubmitRenameFolder else SubmitCreateFolder)
+  , HA.createAttribute "aria-label" (if isJust model.folderForm.editing then "フォルダ名の変更" else "フォルダの作成")
+  ]
+  [ HE.label [ HA.for "folder-name" ] [ HE.text (if isJust model.folderForm.editing then "フォルダ名の変更" else "新しいフォルダ") ]
+  , HE.input
+      [ HA.id "folder-name"
+      , HA.type' "text"
+      , HA.required true
+      , HA.autofocus true
+      , HA.value model.folderForm.name
+      , HA.onInput FolderNameChanged
+      , HA.placeholder "フォルダ名"
+      , HA.maxlength 255
+      , HA.createAttribute "data-testid" (maybe "folder-name-input" ("folder-rename-input-" <> _) model.folderForm.editing)
       ]
-      [ HE.text "すべて" ]
+  , HE.button
+      [ HA.type' "submit"
+      , HA.class' "drive-button primary"
+      , HA.disabled (model.busy || trim model.folderForm.name == "")
+      , HA.createAttribute "data-testid" (maybe "folder-create-submit" ("folder-rename-save-" <> _) model.folderForm.editing)
+      ]
+      [ HE.text (if model.busy then "保存中…" else if isJust model.folderForm.editing then "保存" else "作成") ]
+  , HE.button [ HA.type' "button", HA.class' "drive-button secondary", HA.onClick CloseFolderForm, HA.disabled model.busy ] [ HE.text "キャンセル" ]
+  ]
 
-createFolderForm :: Model -> Html Message
-createFolderForm model =
-  HE.div [ HA.class' "flex items-center gap-3" ]
-    [ HE.input
-        [ HA.class' (inputClass <> " flex-1")
-        , HA.type' "text"
-        , HA.placeholder "新しいフォルダ名"
-        , HA.value model.folderForm.name
-        , HA.onInput FolderNameChanged
-        , HA.createAttribute "data-testid" "folder-name-input"
-        ]
-    , HE.button
-        [ HA.class'
-            ( "px-4 py-2 text-sm font-medium text-white " <> T.bgAccent <> " "
-                <> T.hoverBgAccent
-                <> " "
-                <> T.roundedTheme
-                <> if disabled then " opacity-50 cursor-not-allowed" else ""
-            )
-        , HA.onClick SubmitCreateFolder
-        , HA.disabled disabled
-        , HA.createAttribute "data-testid" "folder-create-submit"
-        ]
-        [ HE.text "作成" ]
-    ]
+visibleFolders :: Model -> Array Folder -> Array Folder
+visibleFolders model = sortBy order <<< filter (\(Folder f) -> f.parentId == model.selectedFolder && matches model.search f.name)
   where
-  disabled = model.busy || isJust model.folderForm.editing || trim model.folderForm.name == ""
+  order (Folder a) (Folder b) = if model.sort == "newest" then compare b.createdAt a.createdAt else compare (toLower a.name) (toLower b.name)
 
-folderRow :: Model -> Folder -> Html Message
-folderRow model (Folder folder) =
-  if model.folderForm.editing == Just folder.id then
-    HE.li
-      [ HA.class'
-          ( "flex items-center gap-3 p-3 rounded-theme border " <> T.borderTheme <> " "
-              <> T.bgSecondary
-          )
-      ]
-      [ HE.input
-          [ HA.class' (inputClass <> " flex-1")
-          , HA.type' "text"
-          , HA.value model.folderForm.name
-          , HA.onInput FolderNameChanged
-          , HA.createAttribute "data-testid" ("folder-rename-input-" <> folder.id)
+visibleFiles :: Model -> Array FileItem -> Array FileItem
+visibleFiles model = sortBy order <<< filter (\(FileItem f) -> f.folderId == model.selectedFolder && matches model.search f.name)
+  where
+  order (FileItem a) (FileItem b) = case model.sort of
+    "newest" -> compare b.createdAt a.createdAt
+    "size" -> compare b.sizeBytes a.sizeBytes
+    _ -> compare (toLower a.name) (toLower b.name)
+
+matches :: String -> String -> Boolean
+matches search name = contains (Pattern (toLower (trim search))) (toLower name)
+
+browserContents :: Model -> Html Message
+browserContents model = case model.folders, model.files of
+  Failed err, _ -> failure err
+  _, Failed err -> failure err
+  Loaded folders, Loaded files ->
+    if not (folderReady model) then stateView "フォルダが見つかりません" "削除されたか、アクセスできないフォルダです。"
+    else
+      let
+        fs = visibleFolders model folders
+        items = visibleFiles model files
+      in
+        HE.div_
+          [ if model.viewMode == "grid" then grid fs items else list fs items
+          , if null fs && null items then
+              if trim model.search /= "" then stateView "一致する項目がありません" "検索語を変えるか、検索欄を空にしてください。"
+              else stateView "このフォルダは空です" "ファイルをアップロードするか、新しいフォルダを作成できます。"
+            else emptySlot
+          , HE.div [ HA.class' "drive-item-count" ] [ HE.text (show (length fs + length items) <> " 項目") ]
           ]
-      , HE.button
-          [ HA.class'
-              ( "px-3 py-1.5 text-sm text-white " <> T.bgAccent <> " " <> T.roundedTheme
-              )
-          , HA.onClick SubmitRenameFolder
-          , HA.createAttribute "data-testid" ("folder-rename-save-" <> folder.id)
-          ]
-          [ HE.text "保存" ]
-      ]
-  else
-    HE.li
-      [ HA.class'
-          ( "flex items-center justify-between p-3 rounded-theme border " <> T.borderTheme
-              <> " "
-              <> T.bgSecondary
-          )
-      ]
+  _, _ -> HE.div [ HA.class' "drive-state", HA.createAttribute "role" "status", HA.createAttribute "data-testid" "drive-loading" ]
+    [ HE.div [ HA.class' "loading-spinner" ] [], HE.p_ [ HE.text "読み込み中…" ] ]
+  where
+  failure err = HE.div [ HA.class' "drive-state", HA.createAttribute "role" "alert" ]
+    [ HE.h2_ [ HE.text "読み込めませんでした" ]
+    , HE.p_ [ HE.text err ]
+    , HE.button [ HA.class' "drive-button secondary", HA.onClick LoadDrive, HA.disabled model.busy ] [ HE.text "再読み込み" ]
+    ]
+  list folders files = HE.div [ HA.class' "drive-table-scroll" ]
+    [ HE.table [ HA.class' "drive-table", HA.createAttribute "aria-label" "フォルダとファイル" ]
+        [ HE.thead_
+            [ HE.tr_
+                [ HE.th [ HA.scope "col" ] [ HE.text "名前" ]
+                , HE.th [ HA.scope "col" ] [ HE.text "サイズ" ]
+                , HE.th [ HA.scope "col", HA.class' "date-column" ] [ HE.text "追加日時" ]
+                , HE.th [ HA.scope "col" ] [ HE.span [ HA.class' "sr-only" ] [ HE.text "操作" ] ]
+                ]
+            ]
+        , HE.tbody [ HA.createAttribute "data-testid" "folder-list" ] (map folderRow folders)
+        , HE.tbody [ HA.createAttribute "data-testid" "file-list" ] (map fileRow files)
+        ]
+    ]
+  grid folders files = HE.div [ HA.class' "drive-grid", HA.createAttribute "data-testid" "icon-grid" ]
+    [ HE.div [ HA.class' "grid-group", HA.createAttribute "data-testid" "folder-list" ] (map folderTile folders)
+    , HE.div [ HA.class' "grid-group", HA.createAttribute "data-testid" "file-list" ] (map fileTile files)
+    ]
+
+stateView :: String -> String -> Html Message
+stateView title description = HE.div [ HA.class' "drive-state", HA.createAttribute "data-testid" "drive-empty" ]
+  [ icon "folder", HE.h2_ [ HE.text title ], HE.p_ [ HE.text description ] ]
+
+folderRow :: Folder -> Html Message
+folderRow (Folder folder) = HE.tr [ HA.key folder.id, HA.createAttribute "data-folder-row" folder.id ]
+  [ HE.td_ [ routeLink "item-name" (FolderDetail folder.id) [ icon "folder", HE.span_ [ HE.text folder.name ] ] ]
+  , HE.td [ HA.class' "muted" ] [ HE.text "—" ]
+  , HE.td [ HA.class' "muted date-column" ] [ HE.text (take 10 folder.createdAt) ]
+  , HE.td [ HA.class' "row-actions" ]
       [ HE.button
-          [ HA.class' ("text-sm font-medium " <> T.textPrimary <> " hover:text-accent")
-          , HA.onClick (SelectFolder (Just folder.id))
+          [ HA.onClick (StartRenameFolder folder.id)
+          , HA.class' "text-button"
+          , HA.createAttribute "data-testid" ("rename-folder-" <> folder.id)
+          , HA.createAttribute "aria-label" (folder.name <> " の名前を変更")
           ]
-          [ HE.text folder.name ]
-      , HE.div [ HA.class' "flex items-center gap-2" ]
-          [ HE.button
-              [ HA.class' ("px-2 py-1 text-xs " <> T.navLink)
-              , HA.onClick (StartRenameFolder folder.id)
-              , HA.createAttribute "data-testid" ("rename-folder-" <> folder.id)
-              ]
-              [ HE.text "rename" ]
-          , HE.button
-              [ HA.class' ("px-2 py-1 text-xs " <> T.navLink)
-              , HA.onClick (SubmitDeleteFolder folder.id)
-              , HA.createAttribute "data-testid" ("delete-folder-" <> folder.id)
-              ]
-              [ HE.text "delete" ]
+          [ HE.text "名前変更" ]
+      , HE.button
+          [ HA.onClick (SubmitDeleteFolder folder.id)
+          , HA.class' "text-button danger"
+          , HA.createAttribute "data-testid" ("delete-folder-" <> folder.id)
+          , HA.createAttribute "aria-label" (folder.name <> " を削除")
           ]
+          [ HE.text "削除" ]
       ]
-
-fileSection :: Model -> Html Message
-fileSection model =
-  HE.div [ HA.class' ("p-6 space-y-4 " <> T.surface) ]
-    [ HE.h2
-        [ HA.class' ("text-lg font-semibold " <> T.textHeading) ]
-        [ HE.text "ファイル" ]
-    , HE.ul
-        [ HA.class' "space-y-2"
-        , HA.createAttribute "data-testid" "file-list"
-        ]
-        ( case files of
-            [] -> [ HE.li [ HA.class' ("text-sm " <> T.textSecondary) ] [ HE.text "ファイルはまだありません" ] ]
-            _ -> map fileRow files
-        )
-    ]
-  where
-  files = case model.files of
-    Loaded fs -> fs
-    _ -> []
+  ]
 
 fileRow :: FileItem -> Html Message
-fileRow (FileItem file) =
-  HE.li
-    [ HA.class'
-        ( "flex items-center justify-between p-3 rounded-theme border " <> T.borderTheme
-            <> " "
-            <> T.bgSecondary
-        )
-    ]
-    [ HE.div [ HA.class' "flex items-center gap-3 min-w-0" ]
-        [ HE.a
-            [ HA.class' ("text-sm font-medium truncate " <> T.navLink)
-            , HA.href (print routeCodec (FileDetail file.id))
-            ]
-            [ HE.text file.name ]
-        , HE.span
-            [ HA.class' ("text-xs " <> T.textMuted) ]
-            [ HE.text (humanize file.sizeBytes) ]
-        , HE.span
-            [ HA.class' ("text-xs " <> T.textMuted) ]
-            [ HE.text (S.take 10 file.createdAt) ]
-        ]
-    , HE.div [ HA.class' "flex items-center gap-2 shrink-0" ]
-        [ HE.a
-            [ HA.href ("/api/files/" <> file.id <> "/download")
-            , HA.class' ("px-2 py-1 text-xs " <> T.navLink)
-            , HA.createAttribute "data-testid" ("download-file-" <> file.name)
-            ]
-            [ HE.text "download" ]
-        , HE.button
-            [ HA.class' ("px-2 py-1 text-xs " <> T.navLink)
-            , HA.onClick (SubmitDeleteFile file.id)
-            , HA.createAttribute "data-testid" ("delete-file-" <> file.name)
-            ]
-            [ HE.text "delete" ]
-        ]
-    ]
+fileRow (FileItem file) = HE.tr [ HA.key file.id ]
+  [ HE.td_ [ routeLink "item-name" (FileDetail file.id) [ fileIcon file.mimeType, HE.span_ [ HE.text file.name ] ] ]
+  , HE.td [ HA.class' "muted" ] [ HE.text (humanize file.sizeBytes) ]
+  , HE.td [ HA.class' "muted date-column" ] [ HE.text (take 10 file.createdAt) ]
+  , HE.td [ HA.class' "row-actions" ]
+      [ HE.a
+          [ HA.href ("/api/files/" <> file.id <> "/download")
+          , HA.target "_blank"
+          , HA.rel "noopener"
+          , HA.onClick (DownloadRequested file.id file.name)
+          , HA.class' "icon-button"
+          , HA.title "ダウンロード"
+          , HA.createAttribute "aria-label" (file.name <> " をダウンロード")
+          , HA.createAttribute "data-testid" ("download-file-" <> file.name)
+          ]
+          [ icon "download" ]
+      , HE.button
+          [ HA.onClick (SubmitDeleteFile file.id)
+          , HA.class' "text-button danger"
+          , HA.createAttribute "data-testid" ("delete-file-" <> file.name)
+          , HA.createAttribute "aria-label" (file.name <> " を削除")
+          ]
+          [ HE.text "削除" ]
+      ]
+  ]
 
-inputClass :: String
-inputClass =
-  "px-3 py-2 text-sm border " <> T.borderTheme <> " " <> T.bgSurface <> " "
-    <> T.textPrimary
-    <> " "
-    <> T.roundedTheme
-    <> " focus:outline-none focus:ring-2 focus:ring-accent/50"
+folderTile :: Folder -> Html Message
+folderTile (Folder folder) = routeLink "drive-tile" (FolderDetail folder.id) [ icon "folder", HE.span_ [ HE.text folder.name ] ]
+
+fileTile :: FileItem -> Html Message
+fileTile (FileItem file) = routeLink "drive-tile" (FileDetail file.id) [ fileIcon file.mimeType, HE.span_ [ HE.text file.name ] ]
+
+fileIcon :: String -> Html Message
+fileIcon mime = icon (if take 6 mime == "image/" then "image" else "file")

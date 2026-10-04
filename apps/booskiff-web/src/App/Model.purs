@@ -94,6 +94,7 @@ instance DecodeJson FileItem where
 newtype Folder = Folder
   { id :: String
   , name :: String
+  , parentId :: Maybe String
   , createdAt :: String
   }
 
@@ -104,6 +105,7 @@ instance EncodeJson Folder where
   encodeJson (Folder r) =
     "id" := r.id
       ~> "name" := r.name
+      ~> "parentId" := r.parentId
       ~> "createdAt" := r.createdAt
       ~> jsonEmptyObject
 
@@ -112,8 +114,9 @@ instance DecodeJson Folder where
     obj <- decodeJson json
     vId <- obj .: "id"
     vName <- obj .: "name"
+    vParentId <- obj .:? "parentId"
     vCreatedAt <- obj .: "createdAt"
-    pure $ Folder { id: vId, name: vName, createdAt: vCreatedAt }
+    pure $ Folder { id: vId, name: vName, parentId: vParentId, createdAt: vCreatedAt }
 
 newtype Billing = Billing
   { usedBytes :: Number
@@ -173,10 +176,18 @@ emptyFolderForm = { name: "", editing: Nothing }
 
 -- | Upload progress state (Nothing = no upload in flight)
 type UploadState =
-  { name :: String
+  { id :: String
+  , name :: String
+  , destinationId :: String
+  , destinationName :: String
+  , status :: String
   , loaded :: Number
   , total :: Number
+  , error :: String
+  , retryable :: Boolean
   }
+
+type DownloadRequest = { id :: String, name :: String }
 
 type Model =
   { route :: Maybe Route
@@ -185,9 +196,19 @@ type Model =
   , session :: Maybe SessionInfo
   , loginForm :: LoginForm
   , files :: RemoteData (Array FileItem)
+  , detail :: RemoteData (Array FileItem)
   , folders :: RemoteData (Array Folder)
   , billing :: RemoteData Billing
-  , upload :: Maybe UploadState
+  , uploads :: Array UploadState
+  , downloads :: Array DownloadRequest
+  , transferExpanded :: Boolean
+  , viewMode :: String
+  , search :: String
+  , sort :: String
+  , dataEpoch :: Int
+  , filesEpoch :: Int
+  , billingEpoch :: Int
+  , folderFormOpen :: Boolean
   , selectedFolder :: Maybe String
   , folderForm :: FolderForm
   , errorMessage :: Maybe String
@@ -204,10 +225,20 @@ initialModel mRoute =
   , session: Nothing
   , loginForm: emptyLoginForm
   , files: NotAsked
+  , detail: NotAsked
   , folders: NotAsked
   , billing: NotAsked
-  , upload: Nothing
-  , selectedFolder: Nothing
+  , uploads: []
+  , downloads: []
+  , transferExpanded: true
+  , viewMode: "list"
+  , search: ""
+  , sort: "name"
+  , dataEpoch: 0
+  , filesEpoch: 0
+  , billingEpoch: 0
+  , folderFormOpen: false
+  , selectedFolder: folderForRoute mRoute
   , folderForm: emptyFolderForm
   , errorMessage: Nothing
   , busy: false
@@ -217,6 +248,7 @@ pageForRoute :: Route -> PageModel
 pageForRoute = case _ of
   Route.Login -> Login
   Route.Drive -> Drive
+  Route.FolderDetail _ -> Drive
   Route.FileDetail fileId -> FileDetail fileId
 
 -- | Check if a route requires authentication
@@ -224,7 +256,19 @@ isProtectedRoute :: Route -> Boolean
 isProtectedRoute = case _ of
   Route.Login -> false
   Route.Drive -> true
+  Route.FolderDetail _ -> true
   Route.FileDetail _ -> true
 
 pageForMaybeRoute :: Maybe Route -> PageModel
 pageForMaybeRoute = maybe NotFound pageForRoute
+
+folderForRoute :: Maybe Route -> Maybe String
+folderForRoute = case _ of
+  Just (Route.FolderDetail id) -> Just id
+  _ -> Nothing
+
+isDriveRoute :: Maybe Route -> Boolean
+isDriveRoute = case _ of
+  Just Route.Drive -> true
+  Just (Route.FolderDetail _) -> true
+  _ -> false

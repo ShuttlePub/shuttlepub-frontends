@@ -1,22 +1,18 @@
--- allow: SIZE_OK — single Flame state machine mirroring emumet-web's
--- Client/Update.purs layout (one case branch per message, plus the Aff
--- helpers producing messages); splitting it would deviate from the
--- architecture template the Drive UX task builds on.
 module Client.Update where
 
 import Prelude
 
 import App.Api.Auth as Auth
-import App.Api.Drive as Drive
 import App.Api.Auth (LoginResponse(..), SessionResponse(..))
-import App.Format as Format
+import App.Api.Drive as Drive
 import App.Message (Message(..))
-import App.Model (Billing(..), FileItem(..), Folder(..), Model, RemoteData(..), emptyFolderForm, emptyLoginForm, isProtectedRoute, pageForMaybeRoute)
+import App.Model (Billing(..), FileItem(..), Folder(..), Model, RemoteData(..), emptyFolderForm, emptyLoginForm, folderForRoute, initialModel, isDriveRoute, isProtectedRoute, pageForMaybeRoute)
 import App.Route (Route(..), routeCodec)
 import Client.Upload as Upload
 import Data.Array (filter, find)
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..), isJust, isNothing, maybe)
+import Data.String (Pattern(..), contains)
 import Data.String.Common (trim)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
@@ -30,279 +26,238 @@ import Web.HTML (window)
 import Web.HTML.Location as Location
 import Web.HTML.Window (location)
 
--- | File input the FFI upload flow reads from (see Client.Upload and the
--- | Drive view owned by the follow-up UX task).
-uploadInputSelector :: String
-uploadInputSelector = "[data-testid='upload-input']"
-
-maxFileBytes :: RemoteData Billing -> Maybe Number
-maxFileBytes = case _ of
-  Loaded (Billing b) -> Just b.maxFileBytes
-  _ -> Nothing
-
 mkUpdate :: PushStateInterface -> (Message -> Effect Unit) -> Update Model Message
 mkUpdate nav sendMessage model = case _ of
-  Navigate route ->
-    Tuple model
-      [ liftEffect (nav.pushState (unsafeToForeign {}) (print routeCodec route)) $> Nothing ]
-
+  Navigate route -> Tuple model [ liftEffect (nav.pushState (unsafeToForeign {}) (print routeCodec route)) $> Nothing ]
   UrlChanged mRoute ->
     if not model.isHydrated then noMessages $ model { isHydrated = true }
     else
       let
-        -- Redirect to login when navigating to a protected route while
-        -- unauthenticated (the initial hydration call is exempt: the server
-        -- cannot know the session, so CheckSession decides below).
-        needsAuth = case mRoute of
-          Just r -> isProtectedRoute r && isNothing model.session
-          Nothing -> false
+        needsAuth = maybe false isProtectedRoute mRoute && isNothing model.session
         effectiveRoute = if needsAuth then Just Login else mRoute
+        epoch = model.dataEpoch + 1
         base = model
           { route = effectiveRoute
           , page = pageForMaybeRoute effectiveRoute
+          , selectedFolder = folderForRoute effectiveRoute
           , folderForm = emptyFolderForm
+          , folderFormOpen = false
           , errorMessage = Nothing
           , busy = false
+          , dataEpoch = epoch
+          , filesEpoch = model.filesEpoch + 1
           }
       in
-        if needsAuth then
-          Tuple base
-            [ liftEffect (nav.replaceState (unsafeToForeign {}) (print routeCodec Login)) $> Nothing ]
+        if needsAuth then Tuple base [ replace Login ]
+        else if isDriveRoute mRoute then Tuple (base { files = Loading, folders = Loading }) [ pure $ Just LoadDrive ]
         else case mRoute of
-          Just Drive ->
-            Tuple base [ pure $ Just LoadDrive ]
-          Just (FileDetail fileId) ->
-            Tuple (base { files = Loading }) [ loadFileDetailAff fileId ]
-          Just Login ->
-            -- Redirect authenticated users away from the login page
-            if isJust model.session then
-              Tuple (base { route = Just Drive, page = pageForMaybeRoute (Just Drive) })
-                [ liftEffect (nav.replaceState (unsafeToForeign {}) (print routeCodec Drive)) $> Nothing ]
-            else
-              noMessages $ base { loginForm = emptyLoginForm }
+          Just (FileDetail fileId) -> Tuple (base { detail = Loading }) [ loadFileDetailAff epoch fileId ]
+          Just Login | isJust model.session -> Tuple base [ replace Drive ]
+          Just Login -> noMessages $ base { loginForm = emptyLoginForm }
           _ -> noMessages base
 
-  -- Authentication (BFF-based)
-  CheckSession ->
-    Tuple model [ checkSessionAff ]
-
-  SessionChecked mUsername ->
-    case mUsername of
-      Just username ->
-        let
-          m = model { session = Just { username }, busy = false }
-        in
-          case m.route of
-            Just Login ->
-              -- Authenticated user on the login page → Drive
-              Tuple m
-                [ liftEffect (nav.replaceState (unsafeToForeign {}) (print routeCodec Drive)) $> Nothing ]
-            Just Drive ->
-              -- Session established after hydration → load drive data now
-              Tuple m [ pure $ Just LoadDrive ]
-            Just (FileDetail fileId) ->
-              Tuple (m { files = Loading }) [ loadFileDetailAff fileId ]
-            _ -> noMessages m
-      Nothing ->
-        let
-          m = model { session = Nothing, busy = false }
-        in
-          case m.route of
-            Just r | isProtectedRoute r ->
-              -- Unauthenticated on a protected route → login
-              Tuple
-                (m { route = Just Login, page = pageForMaybeRoute (Just Login), loginForm = emptyLoginForm })
-                [ liftEffect (nav.replaceState (unsafeToForeign {}) (print routeCodec Login)) $> Nothing ]
-            _ -> noMessages m
-
-  LoginIdentifierChanged identifier ->
-    noMessages $ model { loginForm = model.loginForm { identifier = identifier } }
-
-  LoginPasswordChanged password ->
-    noMessages $ model { loginForm = model.loginForm { password = password } }
-
+  CheckSession -> Tuple model [ checkSessionAff ]
+  SessionChecked mUsername -> case mUsername of
+    Just username ->
+      let
+        m = model { session = Just { username }, busy = false }
+        setup = liftEffect (Upload.initialize (sendMessage <<< UploadsChanged) (sendMessage <<< UploadCommitted)) $> Nothing
+      in
+        if isDriveRoute m.route then Tuple m [ setup, pure $ Just LoadDrive ]
+        else case m.route of
+          Just Login -> Tuple m [ setup, replace Drive ]
+          Just (FileDetail fileId) -> Tuple (m { detail = Loading }) [ setup, loadFileDetailAff m.dataEpoch fileId ]
+          _ -> Tuple m [ setup ]
+    Nothing ->
+      let
+        needsAuth = maybe false isProtectedRoute model.route
+        route = if needsAuth then Just Login else model.route
+        m = (initialModel route)
+          { isHydrated = true
+          , dataEpoch = model.dataEpoch + 1
+          , filesEpoch = model.filesEpoch + 1
+          , billingEpoch = model.billingEpoch + 1
+          , loginForm = if model.route == Just Login then model.loginForm else emptyLoginForm
+          }
+      in
+        Tuple m [ liftEffect Upload.reset $> Nothing, if needsAuth then replace Login else pure Nothing ]
+  LoginIdentifierChanged identifier -> noMessages $ model { loginForm = model.loginForm { identifier = identifier } }
+  LoginPasswordChanged password -> noMessages $ model { loginForm = model.loginForm { password = password } }
   SubmitLogin ->
     let
-      form = model.loginForm
-      identifier = trim form.identifier
+      identifier = trim model.loginForm.identifier
     in
-      if identifier == "" || form.password == "" || model.busy then noMessages model
-      else
-        Tuple (model { errorMessage = Nothing, busy = true })
-          [ submitLoginAff identifier form.password ]
+      if identifier == "" || model.loginForm.password == "" || model.busy then noMessages model
+      else Tuple (model { errorMessage = Nothing, busy = true }) [ submitLoginAff identifier model.loginForm.password ]
+  LoginFailed msg -> noMessages $ model { errorMessage = Just msg, busy = false }
+  Logout -> Tuple model
+    [ do
+        allowed <- liftEffect Upload.confirmLogout
+        pure $ if allowed then Just LogoutConfirmed else Nothing
+    ]
+  LogoutConfirmed -> Tuple (model { uploads = [], downloads = [], dataEpoch = model.dataEpoch + 1, filesEpoch = model.filesEpoch + 1, billingEpoch = model.billingEpoch + 1, busy = true })
+    [ liftEffect Upload.reset *> logoutAff ]
+  LogoutDone -> Tuple ((initialModel (Just Login)) { isHydrated = true, dataEpoch = model.dataEpoch + 1, filesEpoch = model.filesEpoch + 1, billingEpoch = model.billingEpoch + 1 }) [ replace Login ]
+  LogoutFailed msg -> Tuple (model { errorMessage = Just ("ログアウトに失敗しました: " <> msg), busy = false })
+    [ liftEffect (Upload.initialize (sendMessage <<< UploadsChanged) (sendMessage <<< UploadCommitted)) $> Nothing ]
 
-  LoginFailed msg ->
-    if model.route == Just Login then noMessages $ model { errorMessage = Just msg, busy = false }
-    else noMessages $ model { busy = false }
-
-  Logout ->
-    Tuple model [ logoutAff ]
-
-  LogoutDone ->
-    Tuple
-      ( model
-          { session = Nothing
-          , loginForm = emptyLoginForm
-          , route = Just Login
-          , page = pageForMaybeRoute (Just Login)
-          }
-      )
-      [ liftEffect (nav.replaceState (unsafeToForeign {}) (print routeCodec Login)) $> Nothing ]
-
-  LogoutFailed msg ->
-    noMessages $ model { errorMessage = Just ("Logout failed: " <> msg), busy = false }
-
-  -- Drive data
   LoadDrive ->
-    Tuple (model { files = Loading, folders = Loading, billing = Loading })
-      [ loadFilesAff model.selectedFolder, foldersAff, billingAff ]
-
-  FilesLoaded result ->
-    if maybe false isProtectedRoute model.route then noMessages $ case result of
-      Right files -> model { files = Loaded files }
-      Left err -> model { files = Failed err, errorMessage = Just err }
+    if not (isDriveRoute model.route) || isNothing model.session || model.busy then noMessages model
+    else
+      let
+        epoch = model.dataEpoch + 1
+        filesEpoch = model.filesEpoch + 1
+        billingEpoch = model.billingEpoch + 1
+      in
+        Tuple (model { files = Loading, folders = Loading, dataEpoch = epoch, filesEpoch = filesEpoch, billingEpoch = billingEpoch })
+          [ loadFilesAff filesEpoch model.selectedFolder, foldersAff epoch, billingAff billingEpoch ]
+  FilesLoaded epoch result ->
+    if epoch == model.filesEpoch && isDriveRoute model.route then noMessages $ model { files = remote result }
     else noMessages model
-
-  FoldersLoaded result ->
-    if model.route == Just Drive then noMessages $ case result of
-      Right folders -> model { folders = Loaded folders }
-      Left err -> model { folders = Failed err, errorMessage = Just err }
+  DetailLoaded epoch result ->
+    if epoch == model.dataEpoch then noMessages $ model { detail = remote result }
     else noMessages model
-
-  BillingLoaded result ->
-    if model.route == Just Drive then noMessages $ case result of
-      Right billing -> model { billing = Loaded billing }
-      Left err -> model { billing = Failed err, errorMessage = Just err }
+  FoldersLoaded epoch result ->
+    if epoch == model.dataEpoch && isDriveRoute model.route then noMessages $ model { folders = remote result }
     else noMessages model
+  BillingLoaded epoch result ->
+    -- Capacity is shared across routes, but every fetch has its own generation:
+    -- rapid uploads/deletions must not let an older snapshot replace the latest.
+    if epoch /= model.billingEpoch || isNothing model.session then noMessages model
+    else Tuple (model { billing = remote result })
+      [ case result of
+          Right (Billing b) -> liftEffect (Upload.configureLimit b.maxFileBytes) $> Nothing
+          Left _ -> pure Nothing
+      ]
+  SelectFolder folder -> Tuple model [ pure $ Just $ Navigate (maybe Drive FolderDetail folder) ]
+  SetViewMode mode -> noMessages $ model { viewMode = if mode == "grid" then "grid" else "list" }
+  SearchChanged search -> noMessages $ model { search = search }
+  SortChanged sort -> noMessages $ model { sort = sort }
 
-  SelectFolder mFolderId ->
-    Tuple (model { selectedFolder = mFolderId, files = Loading })
-      [ loadFilesAff mFolderId ]
-
-  -- Folder operations
-  FolderNameChanged name ->
-    noMessages $ model { folderForm = model.folderForm { name = name } }
-
+  OpenCreateFolder -> noMessages $ model { folderFormOpen = true, folderForm = emptyFolderForm, errorMessage = Nothing }
+  CloseFolderForm -> noMessages $ model { folderFormOpen = false, folderForm = emptyFolderForm }
+  FolderNameChanged name -> noMessages $ model { folderForm = model.folderForm { name = name } }
   SubmitCreateFolder ->
     let
       name = trim model.folderForm.name
     in
       if name == "" || model.busy then noMessages model
-      else
-        Tuple (model { errorMessage = Nothing, busy = true })
-          [ createFolderAff name ]
-
-  StartRenameFolder folderId ->
+      else Tuple (model { busy = true, errorMessage = Nothing })
+        [ Just <<< FolderSaved model.dataEpoch <$> Drive.createFolder name model.selectedFolder ]
+  StartRenameFolder id ->
     let
-      form = case model.folders of
-        Loaded folders | Just (Folder folder) <- find (\(Folder f) -> f.id == folderId) folders ->
-          { name: folder.name, editing: Just folderId }
-        _ -> { name: "", editing: Just folderId }
+      name = case model.folders of
+        Loaded folders -> maybe "" (\(Folder f) -> f.name) (find (\(Folder f) -> f.id == id) folders)
+        _ -> ""
     in
-      noMessages $ model { folderForm = form, errorMessage = Nothing }
-
-  SubmitRenameFolder ->
-    case model.folderForm.editing of
-      Nothing -> noMessages model
-      Just folderId ->
-        let
-          name = trim model.folderForm.name
-        in
-          if name == "" || model.busy then noMessages model
-          else
-            Tuple (model { errorMessage = Nothing, busy = true })
-              [ renameFolderAff folderId name ]
-
-  SubmitDeleteFolder folderId ->
+      noMessages $ model { folderFormOpen = true, folderForm = { name, editing: Just id }, errorMessage = Nothing }
+  SubmitRenameFolder -> case model.folderForm.editing of
+    Just id | trim model.folderForm.name /= "" && not model.busy ->
+      Tuple (model { busy = true, errorMessage = Nothing })
+        [ Just <<< FolderSaved model.dataEpoch <$> Drive.renameFolder id (trim model.folderForm.name) ]
+    _ -> noMessages model
+  SubmitDeleteFolder id -> Tuple model [ confirmAff "空のフォルダを削除しますか？この操作は取り消せません。" (DeleteFolderConfirmed id) ]
+  DeleteFolderConfirmed id ->
     if model.busy then noMessages model
-    else
-      Tuple (model { errorMessage = Nothing, busy = true })
-        [ deleteFolderAff folderId ]
-
-  FolderSaved result ->
-    if model.route == Just Drive then case result of
+    else Tuple (model { busy = true, errorMessage = Nothing })
+      [ Just <<< FolderDeleted model.dataEpoch <<< map (const id) <$> Drive.deleteFolder id ]
+  FolderSaved epoch result ->
+    if epoch /= model.dataEpoch then noMessages model
+    else case result of
       Right folder@(Folder fr) ->
         let
-          wasRenaming = isJust model.folderForm.editing
           folders = case model.folders of
-            Loaded fs -> Loaded
-              ( if wasRenaming then
-                  map (\f@(Folder fr2) -> if fr2.id == fr.id then folder else f) fs
-                else
-                  fs <> [ folder ]
-              )
+            Loaded fs -> Loaded (filter (\(Folder f) -> f.id /= fr.id) fs <> [ folder ])
             st -> st
         in
-          noMessages $ model { folders = folders, folderForm = emptyFolderForm, busy = false }
+          noMessages $ model { folders = folders, folderFormOpen = false, folderForm = emptyFolderForm, busy = false }
       Left err -> noMessages $ model { errorMessage = Just err, busy = false }
-    else noMessages $ model { busy = false }
-
-  FolderDeleted result ->
-    if model.route == Just Drive then case result of
-      Right folderId ->
-        let
-          folders = case model.folders of
-            Loaded fs -> Loaded (filter (\(Folder f) -> f.id /= folderId) fs)
+  FolderDeleted epoch result ->
+    if epoch /= model.dataEpoch then noMessages model
+    else case result of
+      Right id -> noMessages $ model
+        { folders = case model.folders of
+            Loaded fs -> Loaded (filter (\(Folder f) -> f.id /= id) fs)
             st -> st
-          mSelected = if model.selectedFolder == Just folderId then Nothing else model.selectedFolder
-          m = model { folders = folders, selectedFolder = mSelected, busy = false }
-        in
-          -- Files of the deleted folder may be gone or reassigned: refetch.
-          Tuple (m { files = Loading }) [ loadFilesAff mSelected ]
-      Left err -> noMessages $ model { errorMessage = Just err, busy = false }
-    else noMessages $ model { busy = false }
+        , busy = false
+        }
+      Left err -> noMessages $ model
+        { busy = false
+        , errorMessage = Just
+            ( if contains (Pattern "409") err || contains (Pattern "not empty") err || contains (Pattern "conflict") err then "中身があるフォルダは削除できません。ファイルと子フォルダを確認してください。"
+              else err
+            )
+        }
 
-  -- File operations
-  SubmitDeleteFile fileId ->
+  SubmitDeleteFile id -> Tuple model [ confirmAff "ファイルを削除しますか？この操作は取り消せません。" (DeleteFileConfirmed id) ]
+  DeleteFileConfirmed id ->
     if model.busy then noMessages model
-    else
-      Tuple (model { errorMessage = Nothing, busy = true })
-        [ deleteFileAff fileId ]
-
-  FileDeleted result ->
-    if model.route == Just Drive then case result of
-      Right fileId ->
+    else Tuple (model { busy = true, errorMessage = Nothing })
+      [ Just <<< FileDeleted model.dataEpoch <<< map (const id) <$> Drive.deleteFile id ]
+  FileDeleted epoch result ->
+    if epoch /= model.dataEpoch then noMessages model
+    else case result of
+      Right id ->
         let
-          files = case model.files of
-            Loaded fs -> Loaded (filter (\(FileItem f) -> f.id /= fileId) fs)
-            st -> st
+          billingEpoch = model.billingEpoch + 1
         in
-          -- Quota usage changed: refetch billing.
-          Tuple (model { files = files, busy = false }) [ billingAff ]
+          Tuple
+            ( model
+                { files = case model.files of
+                    Loaded fs -> Loaded (filter (\(FileItem f) -> f.id /= id) fs)
+                    st -> st
+                , busy = false
+                , billingEpoch = billingEpoch
+                }
+            )
+            [ billingAff billingEpoch ]
       Left err -> noMessages $ model { errorMessage = Just err, busy = false }
-    else noMessages $ model { busy = false }
 
-  -- Upload (FFI-driven)
-  StartUpload ->
-    if model.busy then noMessages model
-    else
-      Tuple (model { upload = Just { name: "", loaded: 0.0, total: 0.0 }, errorMessage = Nothing, busy = true })
-        [ uploadAff sendMessage ]
-
-  UploadProgress p ->
-    noMessages $ model { upload = map (\u -> u { loaded = p.loaded, total = p.total }) model.upload }
-
-  UploadFinished result ->
-    if model.route == Just Drive then
+  ChooseUpload -> Tuple model [ liftEffect Upload.chooseFiles $> Nothing ]
+  StartUpload -> Tuple model [ liftEffect Upload.enqueueInput $> Nothing ]
+  UploadsChanged uploads ->
+    if isNothing model.session then noMessages model
+    else noMessages $ model { uploads = uploads }
+  UploadCommitted file@(FileItem f) ->
+    if isNothing model.session then noMessages model
+    else if isDriveRoute model.route && f.folderId == model.selectedFolder && model.files == Loading then
+      -- The in-flight list may have been read before this save committed.
+      -- Start a new generation so that older response cannot hide the new file.
+      -- Keep CRUD's navigation epoch intact so its busy flag can settle.
       let
-        m = model { upload = Nothing, busy = false }
+        filesEpoch = model.filesEpoch + 1
+        billingEpoch = model.billingEpoch + 1
       in
-        case result of
-          Right file ->
-            let
-              files = case model.files of
-                Loaded fs -> Loaded (fs <> [ file ])
-                st -> st
-            in
-              Tuple (m { files = files }) [ billingAff ]
-          Left err -> noMessages $ m { errorMessage = Just (Format.uploadErrorMessage (maxFileBytes model.billing) err) }
-    else noMessages $ model { upload = Nothing, busy = false }
+        Tuple (model { filesEpoch = filesEpoch, billingEpoch = billingEpoch })
+          [ loadFilesAff filesEpoch model.selectedFolder, billingAff billingEpoch ]
+    else
+      let
+        billingEpoch = model.billingEpoch + 1
+        files = case model.files of
+          Loaded fs | isDriveRoute model.route && f.folderId == model.selectedFolder ->
+            Loaded (filter (\(FileItem existing) -> existing.id /= f.id) fs <> [ file ])
+          st -> st
+      in
+        Tuple (model { files = files, billingEpoch = billingEpoch }) [ billingAff billingEpoch ]
+  RetryUpload id -> Tuple model [ liftEffect (Upload.retry id) $> Nothing ]
+  DismissTransfer id -> Tuple model [ liftEffect (Upload.dismiss id) $> Nothing ]
+  ToggleTransfers -> noMessages $ model { transferExpanded = not model.transferExpanded }
+  ClearTransfers -> Tuple (model { downloads = [] }) [ liftEffect Upload.clearFinished $> Nothing ]
+  DownloadRequested id name -> noMessages $ model
+    { downloads = filter (\download -> download.id /= id) model.downloads <> [ { id, name } ] }
+  DismissError -> noMessages $ model { errorMessage = Nothing }
+  where
+  replace route = liftEffect (nav.replaceState (unsafeToForeign {}) (print routeCodec route)) $> Nothing
 
-  -- Common
-  DismissError ->
-    noMessages $ model { errorMessage = Nothing }
+remote :: forall a. Either String a -> RemoteData a
+remote = case _ of
+  Right value -> Loaded value
+  Left err -> Failed err
 
--- Aff helpers: API calls that produce Messages
+confirmAff :: String -> Message -> Aff (Maybe Message)
+confirmAff prompt message = do
+  allowed <- liftEffect $ Upload.confirmAction prompt
+  pure $ if allowed then Just message else Nothing
 
 checkSessionAff :: Aff (Maybe Message)
 checkSessionAff = do
@@ -317,8 +272,6 @@ submitLoginAff identifier password = do
   case result of
     Right (LoginResponse r) | r.authenticated -> case r.next of
       Just url -> do
-        -- Real mode hands off to /auth/oauth/start via full-page navigation:
-        -- XHR cannot drive the cross-origin Hydra redirect chain.
         liftEffect (window >>= location >>= Location.assign url)
         pure Nothing
       Nothing -> pure $ Just $ SessionChecked (Just r.username)
@@ -332,47 +285,14 @@ logoutAff = do
     Right _ -> LogoutDone
     Left err -> LogoutFailed err
 
-loadFilesAff :: Maybe String -> Aff (Maybe Message)
-loadFilesAff mFolderId = do
-  result <- Drive.listFiles mFolderId
-  pure $ Just $ FilesLoaded result
+loadFilesAff :: Int -> Maybe String -> Aff (Maybe Message)
+loadFilesAff epoch folder = Just <<< FilesLoaded epoch <$> Drive.listFiles folder
 
-loadFileDetailAff :: String -> Aff (Maybe Message)
-loadFileDetailAff fileId = do
-  result <- Drive.fileDetail fileId
-  pure $ Just $ FilesLoaded result
+loadFileDetailAff :: Int -> String -> Aff (Maybe Message)
+loadFileDetailAff epoch id = Just <<< DetailLoaded epoch <$> Drive.fileDetail id
 
-foldersAff :: Aff (Maybe Message)
-foldersAff = do
-  result <- Drive.listFolders
-  pure $ Just $ FoldersLoaded result
+foldersAff :: Int -> Aff (Maybe Message)
+foldersAff epoch = Just <<< FoldersLoaded epoch <$> Drive.listFolders
 
-billingAff :: Aff (Maybe Message)
-billingAff = do
-  result <- Drive.billingStatus
-  pure $ Just $ BillingLoaded result
-
-createFolderAff :: String -> Aff (Maybe Message)
-createFolderAff name = do
-  result <- Drive.createFolder name
-  pure $ Just $ FolderSaved result
-
-renameFolderAff :: String -> String -> Aff (Maybe Message)
-renameFolderAff folderId name = do
-  result <- Drive.renameFolder folderId name
-  pure $ Just $ FolderSaved result
-
-deleteFolderAff :: String -> Aff (Maybe Message)
-deleteFolderAff folderId = do
-  result <- Drive.deleteFolder folderId
-  pure $ Just $ FolderDeleted (const folderId <$> result)
-
-deleteFileAff :: String -> Aff (Maybe Message)
-deleteFileAff fileId = do
-  result <- Drive.deleteFile fileId
-  pure $ Just $ FileDeleted (const fileId <$> result)
-
-uploadAff :: (Message -> Effect Unit) -> Aff (Maybe Message)
-uploadAff sendMessage = do
-  result <- Upload.uploadFile uploadInputSelector (\p -> sendMessage (UploadProgress p))
-  pure $ Just $ UploadFinished result
+billingAff :: Int -> Aff (Maybe Message)
+billingAff epoch = Just <<< BillingLoaded epoch <$> Drive.billingStatus
