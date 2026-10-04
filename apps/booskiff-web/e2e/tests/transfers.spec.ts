@@ -9,7 +9,7 @@ test("serial queue freezes folder destination and cannot complete before the ser
   expect(folderResponse.ok()).toBe(true);
   const folder = await folderResponse.json();
   await page.goto(`/drive/folders/${folder.id}`);
-  await expect(page.getByTestId("new-folder-button")).toBeEnabled();
+  await expect(page.getByTestId("new-menu-button")).toBeEnabled();
   let release!: () => void;
   const held = new Promise<void>((resolve) => { release = resolve; });
   const destinations: string[] = [];
@@ -65,7 +65,7 @@ test("a rejected upload allows later files and explicit retry; network result st
   await expect(page.getByTestId("transfer-panel")).toContainText("結果未確認");
 });
 
-test("drop enqueues multiple files into the current folder", async ({ page }) => {
+test("drop on the upper addition menu enqueues multiple files into the current folder", async ({ page }) => {
   await loginViaUi(page);
   const dataTransfer = await page.evaluateHandle(() => {
     const data = new DataTransfer();
@@ -73,8 +73,9 @@ test("drop enqueues multiple files into the current folder", async ({ page }) =>
     data.items.add(new File(["two"], "drop-two.txt", { type: "text/plain" }));
     return data;
   });
-  await expect(page.getByTestId("new-folder-button")).toBeEnabled();
-  await page.getByTestId("drive-browser").dispatchEvent("drop", { dataTransfer });
+  await expect(page.getByTestId("new-menu-button")).toBeEnabled();
+  await page.getByTestId("new-menu-button").click();
+  await page.getByTestId("new-menu").dispatchEvent("drop", { dataTransfer });
   await expect(page.getByTestId("file-list")).toContainText("drop-one.txt");
   await expect(page.getByTestId("file-list")).toContainText("drop-two.txt");
 });
@@ -87,7 +88,7 @@ test("a delayed pre-save folder snapshot cannot hide a completed upload", async 
   expect(created.ok()).toBe(true);
   const folder = await created.json();
   await page.goto(`/drive/folders/${folder.id}`);
-  await expect(page.getByTestId("new-folder-button")).toBeEnabled();
+  await expect(page.getByTestId("new-menu-button")).toBeEnabled();
   let releaseUpload!: () => void;
   let releaseSnapshot!: () => void;
   let snapshotRead!: () => void;

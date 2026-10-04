@@ -27,6 +27,7 @@ data Message
   | SetViewMode String
   | SearchChanged String
   | SortChanged String
+  | ToggleNewMenu
   | OpenCreateFolder
   | CloseFolderForm
   | FolderNameChanged String

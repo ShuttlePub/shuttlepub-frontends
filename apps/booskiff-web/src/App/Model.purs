@@ -208,6 +208,7 @@ type Model =
   , dataEpoch :: Int
   , filesEpoch :: Int
   , billingEpoch :: Int
+  , newMenuOpen :: Boolean
   , folderFormOpen :: Boolean
   , selectedFolder :: Maybe String
   , folderForm :: FolderForm
@@ -237,6 +238,7 @@ initialModel mRoute =
   , dataEpoch: 0
   , filesEpoch: 0
   , billingEpoch: 0
+  , newMenuOpen: false
   , folderFormOpen: false
   , selectedFolder: folderForRoute mRoute
   , folderForm: emptyFolderForm

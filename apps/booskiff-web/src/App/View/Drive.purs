@@ -22,62 +22,85 @@ view model = HE.div [ HA.key "drive", HA.class' "drive-page", HA.createAttribute
           [ HE.p [ HA.class' "eyebrow" ] [ HE.text "YOUR WORKSPACE" ]
           , HE.h1_ [ HE.text (currentFolderName model) ]
           ]
-      , HE.div [ HA.class' "drive-primary-actions" ]
-          [ HE.button [ HA.class' "drive-button secondary", HA.onClick OpenCreateFolder, HA.disabled (not (folderReady model)), HA.createAttribute "data-testid" "new-folder-button" ]
-              [ icon "folder", HE.text "新規フォルダ" ]
-          , HE.button [ HA.class' "drive-button primary", HA.onClick ChooseUpload, HA.disabled (not (folderReady model)), HA.createAttribute "data-testid" "upload-submit" ]
-              [ icon "upload", HE.text "アップロード" ]
-          , HE.input
-              [ HA.type' "file"
-              , HA.multiple true
-              , HA.hidden true
-              , HA.onChange StartUpload
-              , HA.createAttribute "data-testid" "upload-input"
-              , HA.createAttribute "data-folder-id" (maybe "" identity model.selectedFolder)
-              , HA.createAttribute "data-folder-name" (currentFolderPath model)
-              ]
+      , HE.button
+          [ HA.class' "drive-button primary"
+          , HA.onClick ToggleNewMenu
+          , HA.disabled (not (folderReady model) || model.busy)
+          , HA.createAttribute "data-testid" "new-menu-button"
+          , HA.createAttribute "aria-expanded" (if model.newMenuOpen then "true" else "false")
+          , HA.createAttribute "aria-controls" "drive-add-menu"
           ]
+          [ icon "plus", HE.text "新規" ]
       ]
   , breadcrumbs model
   , errorBanner model.errorMessage
-  , if model.folderFormOpen then folderForm model else emptySlot
-  , HE.div [ HA.class' "drive-toolbar" ]
-      [ HE.label [ HA.class' "drive-search" ]
-          [ icon "search"
-          , HE.input
-              [ HA.type' "search"
-              , HA.placeholder "このフォルダ内を検索"
-              , HA.value model.search
-              , HA.onInput SearchChanged
-              , HA.createAttribute "aria-label" "このフォルダ内を検索"
-              , HA.createAttribute "data-testid" "drive-search"
-              ]
-          ]
-      , HE.div [ HA.class' "drive-display-tools" ]
-          [ HE.label [ HA.class' "drive-sort" ]
-              [ HE.span [ HA.class' "sr-only" ] [ HE.text "並び順" ]
-              , HE.select [ HA.value model.sort, HA.onInput SortChanged, HA.createAttribute "aria-label" "並び順" ]
-                  [ HE.option [ HA.value "name" ] [ HE.text "名前順" ]
-                  , HE.option [ HA.value "newest" ] [ HE.text "追加日時順" ]
-                  , HE.option [ HA.value "size" ] [ HE.text "サイズ順" ]
-                  ]
-              ]
-          , HE.div [ HA.class' "view-switch", HA.createAttribute "role" "group", HA.createAttribute "aria-label" "表示形式" ]
-              [ viewButton model "list" "リスト表示", viewButton model "grid" "アイコン表示" ]
-          ]
+  , HE.input
+      [ HA.type' "file"
+      , HA.multiple true
+      , HA.hidden true
+      , HA.onChange StartUpload
+      , HA.createAttribute "data-testid" "upload-input"
+      , HA.createAttribute "data-folder-id" (maybe "" identity model.selectedFolder)
+      , HA.createAttribute "data-folder-name" (currentFolderPath model)
       ]
   , HE.div
-      ( [ HA.class' "drive-browser"
-        , HA.createAttribute "data-testid" "drive-browser"
+      ( [ HA.class' "drive-dropzone"
+        , HA.createAttribute "data-testid" "drive-dropzone"
         , HA.createAttribute "data-folder-id" (maybe "" identity model.selectedFolder)
         , HA.createAttribute "data-folder-name" (currentFolderPath model)
         ] <> if folderReady model then [ HA.createAttribute "data-upload-dropzone" "true" ] else []
       )
-      [ browserContents model
+      [ if model.newMenuOpen then newMenu model else HE.p [ HA.class' "drive-drop-hint" ] [ icon "upload", HE.text "ファイルをここにドラッグしてアップロード" ]
+      , if model.folderFormOpen then folderForm model else emptySlot
+      , toolbar model
+      , HE.div [ HA.class' "drive-browser", HA.createAttribute "data-testid" "drive-browser" ] [ browserContents model ]
       , HE.div [ HA.class' "drop-overlay", HA.createAttribute "aria-hidden" "true" ]
-          [ icon "upload", HE.strong_ [ HE.text (currentFolderName model <> " にアップロード") ] ]
+          [ HE.div [ HA.class' "drop-overlay-content" ]
+              [ icon "upload", HE.strong_ [ HE.text (currentFolderName model <> " にアップロード") ] ]
+          ]
       ]
-  , HE.p [ HA.class' "drive-hint" ] [ HE.text "ファイルをここにドラッグしてアップロード" ]
+  ]
+
+newMenu :: Model -> Html Message
+newMenu model = HE.div [ HA.id "drive-add-menu", HA.class' "drive-add-menu", HA.createAttribute "data-testid" "new-menu" ]
+  [ HE.div [ HA.class' "drive-add-heading" ]
+      [ HE.h2_ [ HE.text "この場所に追加" ]
+      , HE.button [ HA.class' "icon-button", HA.onClick ToggleNewMenu, HA.createAttribute "aria-label" "追加メニューを閉じる" ] [ icon "close" ]
+      ]
+  , HE.p [ HA.class' "drive-add-destination" ] [ HE.text ("保存先: " <> currentFolderPath model) ]
+  , HE.div [ HA.class' "drive-add-actions" ]
+      [ HE.button [ HA.class' "drive-button", HA.onClick ChooseUpload, HA.disabled (not (folderReady model)), HA.createAttribute "data-testid" "upload-submit" ]
+          [ icon "upload", HE.text "ファイルをアップロード" ]
+      , HE.button [ HA.class' "drive-button", HA.onClick OpenCreateFolder, HA.disabled (not (folderReady model) || model.busy), HA.createAttribute "data-testid" "new-folder-button" ]
+          [ icon "folder-add", HE.text "新しいフォルダ" ]
+      ]
+  ]
+
+toolbar :: Model -> Html Message
+toolbar model = HE.div [ HA.class' "drive-toolbar" ]
+  [ HE.label [ HA.class' "drive-search" ]
+      [ icon "search"
+      , HE.input
+          [ HA.type' "search"
+          , HA.placeholder "このフォルダ内を検索"
+          , HA.value model.search
+          , HA.onInput SearchChanged
+          , HA.createAttribute "aria-label" "このフォルダ内を検索"
+          , HA.createAttribute "data-testid" "drive-search"
+          ]
+      ]
+  , HE.div [ HA.class' "drive-display-tools" ]
+      [ HE.label [ HA.class' "drive-sort" ]
+          [ HE.span [ HA.class' "sr-only" ] [ HE.text "並び順" ]
+          , HE.select [ HA.value model.sort, HA.onInput SortChanged, HA.createAttribute "aria-label" "並び順" ]
+              [ HE.option [ HA.value "name" ] [ HE.text "名前順" ]
+              , HE.option [ HA.value "newest" ] [ HE.text "追加日時順" ]
+              , HE.option [ HA.value "size" ] [ HE.text "サイズ順" ]
+              ]
+          ]
+      , HE.div [ HA.class' "view-switch", HA.createAttribute "role" "group", HA.createAttribute "aria-label" "表示形式" ]
+          [ viewButton model "list" "リスト表示", viewButton model "grid" "アイコン表示" ]
+      ]
   ]
 
 folderReady :: Model -> Boolean

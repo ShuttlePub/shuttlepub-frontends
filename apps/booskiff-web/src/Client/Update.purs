@@ -41,6 +41,7 @@ mkUpdate nav sendMessage model = case _ of
           , page = pageForMaybeRoute effectiveRoute
           , selectedFolder = folderForRoute effectiveRoute
           , folderForm = emptyFolderForm
+          , newMenuOpen = false
           , folderFormOpen = false
           , errorMessage = Nothing
           , busy = false
@@ -95,7 +96,7 @@ mkUpdate nav sendMessage model = case _ of
         allowed <- liftEffect Upload.confirmLogout
         pure $ if allowed then Just LogoutConfirmed else Nothing
     ]
-  LogoutConfirmed -> Tuple (model { uploads = [], downloads = [], dataEpoch = model.dataEpoch + 1, filesEpoch = model.filesEpoch + 1, billingEpoch = model.billingEpoch + 1, busy = true })
+  LogoutConfirmed -> Tuple (model { newMenuOpen = false, uploads = [], downloads = [], dataEpoch = model.dataEpoch + 1, filesEpoch = model.filesEpoch + 1, billingEpoch = model.billingEpoch + 1, busy = true })
     [ liftEffect Upload.reset *> logoutAff ]
   LogoutDone -> Tuple ((initialModel (Just Login)) { isHydrated = true, dataEpoch = model.dataEpoch + 1, filesEpoch = model.filesEpoch + 1, billingEpoch = model.billingEpoch + 1 }) [ replace Login ]
   LogoutFailed msg -> Tuple (model { errorMessage = Just ("ログアウトに失敗しました: " <> msg), busy = false })
@@ -134,7 +135,8 @@ mkUpdate nav sendMessage model = case _ of
   SearchChanged search -> noMessages $ model { search = search }
   SortChanged sort -> noMessages $ model { sort = sort }
 
-  OpenCreateFolder -> noMessages $ model { folderFormOpen = true, folderForm = emptyFolderForm, errorMessage = Nothing }
+  ToggleNewMenu -> if model.busy then noMessages model else noMessages $ model { newMenuOpen = not model.newMenuOpen }
+  OpenCreateFolder -> if model.busy then noMessages model else noMessages $ model { newMenuOpen = false, folderFormOpen = true, folderForm = emptyFolderForm, errorMessage = Nothing }
   CloseFolderForm -> noMessages $ model { folderFormOpen = false, folderForm = emptyFolderForm }
   FolderNameChanged name -> noMessages $ model { folderForm = model.folderForm { name = name } }
   SubmitCreateFolder ->
@@ -150,7 +152,7 @@ mkUpdate nav sendMessage model = case _ of
         Loaded folders -> maybe "" (\(Folder f) -> f.name) (find (\(Folder f) -> f.id == id) folders)
         _ -> ""
     in
-      noMessages $ model { folderFormOpen = true, folderForm = { name, editing: Just id }, errorMessage = Nothing }
+      noMessages $ model { newMenuOpen = false, folderFormOpen = true, folderForm = { name, editing: Just id }, errorMessage = Nothing }
   SubmitRenameFolder -> case model.folderForm.editing of
     Just id | trim model.folderForm.name /= "" && not model.busy ->
       Tuple (model { busy = true, errorMessage = Nothing })

@@ -30,6 +30,8 @@ icon kind = HE.svg
   [ HE.path [ HA.d path, HA.strokeLinecap "round", HA.strokeLinejoin "round" ] [] ]
   where
   path = case kind of
+    "plus" -> "M12 5v14M5 12h14"
+    "folder-add" -> "M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3ZM12 10v6M9 13h6"
     "folder" -> "M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v10H3Z"
     "upload" -> "M12 16V3m-5 5 5-5 5 5M4 15v6h16v-6"
     "download" -> "M12 3v13m-5-5 5 5 5-5M4 16v5h16v-5"

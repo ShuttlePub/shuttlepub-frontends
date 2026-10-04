@@ -42,9 +42,10 @@
 .workspace-content { min-width: 0; padding: 40px clamp(24px, 4vw, 64px) 150px; }
 .login-layout .workspace-content { max-width: 560px; margin: auto; }
 .drive-heading { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 16px; }
+.drive-heading > div { flex: 1; min-width: 0; }
 .drive-heading .eyebrow { margin-bottom: 8px; }
 .drive-heading h1 { font-size: 29px; letter-spacing: -.7px; font-weight: 650; word-break: break-word; }
-.drive-primary-actions { display: flex; gap: 10px; flex-shrink: 0; }
+.drive-heading > .drive-button { flex-shrink: 0; }
 .drive-button { display: inline-flex; justify-content: center; align-items: center; gap: 9px; border-radius: 9px; padding: 10px 16px; font-size: 12px; font-weight: 650; min-height: 40px; white-space: nowrap; border: 1px solid transparent; }
 .drive-button.primary { background: var(--color-accent, #cba6f7); color: var(--color-bg-primary, #1e1e2e); }
 .drive-button.secondary { border-color: var(--drive-line); background: color-mix(in srgb, currentColor 3%, transparent); }
@@ -69,7 +70,17 @@
 .icon-button .drive-icon { width: 17px; height: 17px; }
 .icon-button.selected { color: var(--color-accent, #cba6f7); background: color-mix(in srgb, var(--color-accent, #cba6f7) 13%, transparent); }
 .icon-button:hover, .text-button:hover { background: color-mix(in srgb, currentColor 7%, transparent); }
-.drive-browser { position: relative; min-height: 380px; border: 1px solid var(--drive-line); border-radius: 13px; background: color-mix(in srgb, currentColor 1%, transparent); }
+.drive-dropzone { position: relative; min-height: 380px; }
+.drive-browser { min-height: 380px; }
+.drive-drop-hint { display: flex; align-items: center; gap: 10px; font-size: 12px; opacity: .6; margin-bottom: 24px; }
+.drive-drop-hint .drive-icon { width: 17px; height: 17px; }
+.drive-add-menu { padding: 0 0 24px; }
+.drive-add-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.drive-add-heading h2 { font-size: 16px; font-weight: 550; }
+.drive-add-destination { margin: 6px 0 14px; font-size: 12px; opacity: .65; overflow-wrap: anywhere; }
+.drive-add-actions { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+.drive-add-actions .drive-button { padding: 8px 10px; font-weight: 500; }
+.drive-add-actions .drive-button:first-child { margin-left: -10px; }
 .drive-table-scroll { overflow-x: auto; }
 .drive-table { width: 100%; border-collapse: collapse; text-align: left; table-layout: fixed; }
 .drive-table th { height: 43px; font-weight: 500; font-size: 11px; opacity: .55; }
@@ -97,8 +108,8 @@
 .drive-state > .drive-icon { width: 46px; height: 46px; opacity: .5; margin-bottom: 10px; }
 .drive-state h2 { font-size: 16px; font-weight: 600; }
 .drive-state p { font-size: 12px; opacity: .6; max-width: 480px; overflow-wrap: anywhere; }
-.drive-hint { font-size: 11px; opacity: .4; text-align: center; margin: 20px 0; }
-.drop-overlay { display: none; position: absolute; inset: 0; z-index: 3; background: color-mix(in srgb, var(--drive-bg) 95%, transparent); border: 2px dashed var(--color-accent, #cba6f7); border-radius: 12px; align-items: center; justify-content: center; flex-direction: column; gap: 16px; pointer-events: none; }
+.drop-overlay { display: none; position: absolute; inset: 0; z-index: 3; background: color-mix(in srgb, var(--drive-bg) 95%, transparent); border: 2px dashed var(--color-accent, #cba6f7); border-radius: 12px; align-items: center; justify-content: flex-start; flex-direction: column; padding: 24px; pointer-events: none; }
+.drop-overlay-content { position: sticky; top: 24px; display: flex; align-items: center; flex-direction: column; gap: 16px; }
 .drop-overlay .drive-icon { width: 42px; height: 42px; }
 .is-dragging > .drop-overlay { display: flex; }
 .drive-error { display: flex; align-items: center; justify-content: space-between; gap: 12px; background: #f38ba810; color: #f38ba8; border: 1px solid #f38ba833; padding: 12px 16px; border-radius: 9px; margin-bottom: 20px; overflow-wrap: anywhere; }
@@ -145,7 +156,7 @@
   .drive-table th:nth-child(3) { width: 20%; }
   .drive-table th:last-child { width: 24%; }
   .drive-table th, .drive-table td { padding-left: 12px; padding-right: 12px; }
-  .drive-heading { align-items: flex-start; flex-direction: column; gap: 16px; }
+  .drive-heading { gap: 16px; }
 }
 @media (max-width: 760px) {
   .app-header { height: 64px; padding: 0 18px; gap: 16px; }
@@ -160,8 +171,9 @@
   .storage-card p { margin: 0; }
   .workspace-content { padding: 26px 16px 170px; }
   .drive-heading h1 { font-size: 25px; }
-  .drive-primary-actions { width: 100%; }
-  .drive-primary-actions .drive-button { flex: 1; padding: 10px 8px; }
+  .drive-heading > .drive-button { padding: 10px 12px; min-height: 44px; }
+  .drive-add-actions { gap: 4px; }
+  .drive-add-actions .drive-button { min-height: 44px; }
   .drive-heading .eyebrow { font-size: 9px; }
   .breadcrumbs { margin-bottom: 22px; }
   .drive-toolbar { flex-wrap: wrap; gap: 12px; }

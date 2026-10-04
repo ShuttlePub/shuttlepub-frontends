@@ -9,6 +9,7 @@ const helloPath = fileURLToPath(new URL("./assets/hello.txt", import.meta.url));
 test.describe.configure({ mode: "serial" });
 async function quotaText(page: Page) { return page.getByTestId("quota").textContent(); }
 async function createFolder(page: Page, name: string) {
+  await page.getByTestId("new-menu-button").click();
   await page.getByTestId("new-folder-button").click();
   await page.getByTestId("folder-name-input").fill(name);
   await page.getByTestId("folder-create-submit").click();
