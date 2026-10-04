@@ -77,8 +77,7 @@
 .drive-add-menu { padding: 0 0 24px; }
 .drive-add-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .drive-add-heading h2 { font-size: 16px; font-weight: 550; }
-.drive-add-destination { margin: 6px 0 14px; font-size: 12px; opacity: .65; overflow-wrap: anywhere; }
-.drive-add-actions { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+.drive-add-actions { display: flex; flex-wrap: wrap; gap: 8px 12px; margin-top: 8px; }
 .drive-add-actions .drive-button { padding: 8px 10px; font-weight: 500; }
 .drive-add-actions .drive-button:first-child { margin-left: -10px; }
 .drive-table-scroll { overflow-x: auto; }

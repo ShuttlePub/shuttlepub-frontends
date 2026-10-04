@@ -32,7 +32,7 @@ view model = HE.div [ HA.key "drive", HA.class' "drive-page", HA.createAttribute
           ]
           [ icon "plus", HE.text "新規" ]
       ]
-  , breadcrumbs model
+  , if isJust model.selectedFolder then breadcrumbs model else emptySlot
   , errorBanner model.errorMessage
   , HE.input
       [ HA.type' "file"
@@ -67,7 +67,6 @@ newMenu model = HE.div [ HA.id "drive-add-menu", HA.class' "drive-add-menu", HA.
       [ HE.h2_ [ HE.text "この場所に追加" ]
       , HE.button [ HA.class' "icon-button", HA.onClick ToggleNewMenu, HA.createAttribute "aria-label" "追加メニューを閉じる" ] [ icon "close" ]
       ]
-  , HE.p [ HA.class' "drive-add-destination" ] [ HE.text ("保存先: " <> currentFolderPath model) ]
   , HE.div [ HA.class' "drive-add-actions" ]
       [ HE.button [ HA.class' "drive-button", HA.onClick ChooseUpload, HA.disabled (not (folderReady model)), HA.createAttribute "data-testid" "upload-submit" ]
           [ icon "upload", HE.text "ファイルをアップロード" ]
