@@ -98,6 +98,36 @@ describe("upload quota accounting", () => {
 });
 
 describe("folders", () => {
+  test("parent hierarchy filters immediate children and permits names in separate folders", async () => {
+    const client = createMockBooskiffClient();
+    const parent = await client.createFolder("docs");
+    const child = await client.createFolder("docs", parent.id);
+    const nested = await client.createFolder("nested", child.id);
+    expect(child.parentId).toBe(parent.id);
+    expect(await client.listFolders(undefined, true)).toEqual([parent]);
+    expect(await client.listFolders(parent.id)).toEqual([child]);
+    expect(await client.listFolders()).toEqual([parent, child, nested]);
+    expect((await errorOf(client.createFolder("docs", parent.id))).status).toBe(409);
+    expect((await errorOf(client.createFolder("missing", "unknown"))).status).toBe(404);
+    expect((await errorOf(client.deleteFolder(parent.id))).status).toBe(409);
+    await client.deleteFolder(nested.id, true);
+  });
+
+  test("root file filter and safe delete preserve files until emptied", async () => {
+    const client = createMockBooskiffClient();
+    const folder = await client.createFolder("docs");
+    const input = { name: "a.txt", mime: null, contentType: "text/plain", contentLength: "1" };
+    const rootFile = await client.uploadFile({ ...input, folderId: null, body: streamOfSize(1) });
+    const childFile = await client.uploadFile({ ...input, folderId: folder.id, body: streamOfSize(1) });
+    expect(await client.listFiles(undefined, true)).toEqual([rootFile]);
+    expect(await client.listFiles(folder.id)).toEqual([childFile]);
+    expect((await errorOf(client.deleteFolder(folder.id, true))).status).toBe(409);
+    expect(await client.getFolder(folder.id)).toEqual(folder);
+    expect(await client.getFile(childFile.id)).toEqual(childFile);
+    await client.deleteFile(childFile.id);
+    await client.deleteFolder(folder.id, true);
+  });
+
   test("duplicate folder name → 409 folder_already_exists shaped error", async () => {
     const client = createMockBooskiffClient();
     await client.createFolder("docs");

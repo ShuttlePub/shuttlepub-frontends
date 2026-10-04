@@ -35,7 +35,7 @@ type WireFile = {
 
 type WireFileList = { items: WireFile[] };
 
-type WireFolder = { id: string; name: string; created_at: string };
+type WireFolder = { id: string; name: string; parent_id: string | null; created_at: string };
 
 type WireFolderList = { items: WireFolder[] };
 
@@ -59,7 +59,7 @@ function toFile(wire: WireFile): FileItem {
 }
 
 function toFolder(wire: WireFolder): Folder {
-  return { id: wire.id, name: wire.name, createdAt: wire.created_at };
+  return { id: wire.id, name: wire.name, parentId: wire.parent_id ?? null, createdAt: wire.created_at };
 }
 
 function toBilling(wire: WireBilling): BillingStatus {
@@ -97,13 +97,30 @@ export function createBooskiffClient(config: RealBooskiffConfig, accessToken: st
       return toFile(await expectJson<WireFile>(resp, [200]));
     },
 
-    async listFiles(folderId): Promise<readonly FileItem[]> {
+    async listFiles(folderId, root): Promise<readonly FileItem[]> {
       const query = new URLSearchParams();
       if (folderId !== undefined) query.set("folder_id", folderId);
-      const qs = query.toString();
-      const resp = await fetch(`${base}/v1/files${qs ? `?${qs}` : ""}`, { headers: authHeaders() });
-      const wire = await expectJson<WireFileList>(resp, [200]);
-      return wire.items.map(toFile);
+      if (root) query.set("root", "true");
+      // Core defaults to 50 rows; every browser listing must include all pages.
+      const pageSize = 200;
+      query.set("limit", String(pageSize));
+      const files = new Map<string, FileItem>();
+      for (;;) {
+        const resp = await fetch(`${base}/v1/files?${query}`, { headers: authHeaders() });
+        const wire = await expectJson<WireFileList>(resp, [200]);
+        const previousCount = files.size;
+        for (const file of wire.items) files.set(file.id, toFile(file));
+        if (wire.items.length < pageSize) return [...files.values()];
+        // Fail instead of returning a silently truncated list if an upstream
+        // ignores the cursor or endlessly repeats a full page.
+        if (files.size === previousCount) throw new Error("file pagination made no progress");
+        // Preserve the exact timestamp precision from core. A keyset cursor
+        // avoids skipping surviving rows when earlier rows are deleted while
+        // this request is fetching the next page.
+        const last = wire.items[wire.items.length - 1]!;
+        query.set("before_created_at", last.created_at);
+        query.set("before_id", last.id);
+      }
     },
 
     async uploadFile(input: UploadInput): Promise<FileItem> {
@@ -141,8 +158,12 @@ export function createBooskiffClient(config: RealBooskiffConfig, accessToken: st
       return wire.url;
     },
 
-    async listFolders(): Promise<readonly Folder[]> {
-      const resp = await fetch(`${base}/v1/folders`, { headers: authHeaders() });
+    async listFolders(parentId, root): Promise<readonly Folder[]> {
+      const query = new URLSearchParams();
+      if (parentId !== undefined) query.set("parent_id", parentId);
+      if (root) query.set("root", "true");
+      const qs = query.toString();
+      const resp = await fetch(`${base}/v1/folders${qs ? `?${qs}` : ""}`, { headers: authHeaders() });
       const wire = await expectJson<WireFolderList>(resp, [200]);
       return wire.items.map(toFolder);
     },
@@ -152,11 +173,11 @@ export function createBooskiffClient(config: RealBooskiffConfig, accessToken: st
       return toFolder(await expectJson<WireFolder>(resp, [200]));
     },
 
-    async createFolder(name): Promise<Folder> {
+    async createFolder(name, parentId): Promise<Folder> {
       const resp = await fetch(`${base}/v1/folders`, {
         method: "POST",
         headers: authHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({ name }),
+        body: JSON.stringify({ name, ...(parentId !== undefined ? { parent_id: parentId } : {}) }),
       });
       return toFolder(await expectJson<WireFolder>(resp, [201]));
     },
@@ -170,8 +191,8 @@ export function createBooskiffClient(config: RealBooskiffConfig, accessToken: st
       return toFolder(await expectJson<WireFolder>(resp, [200]));
     },
 
-    async deleteFolder(id): Promise<void> {
-      const resp = await fetch(`${base}/v1/folders/${encodeURIComponent(id)}`, {
+    async deleteFolder(id, requireEmpty): Promise<void> {
+      const resp = await fetch(`${base}/v1/folders/${encodeURIComponent(id)}${requireEmpty ? "?require_empty=true" : ""}`, {
         method: "DELETE",
         headers: authHeaders(),
       });

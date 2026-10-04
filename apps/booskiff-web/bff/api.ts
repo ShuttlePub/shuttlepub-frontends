@@ -74,7 +74,11 @@ async function dispatch(req: Request, pathname: string, client: BooskiffClient, 
   if (pathname === "/api/files") {
     if (method === "GET") {
       const folderId = url.searchParams.get("folder_id") || undefined;
-      return jsonResponse({ items: await client.listFiles(folderId) }, setCookie);
+      const root = booleanQuery(url, "root");
+      if (root === null || (root && folderId !== undefined)) {
+        return jsonError(400, "bad_request", "root must be a boolean and cannot be true with folder_id", setCookie);
+      }
+      return jsonResponse({ items: await client.listFiles(folderId, root) }, setCookie);
     }
     if (method === "POST") return upload(req, url, client, setCookie);
   }
@@ -95,11 +99,18 @@ async function dispatch(req: Request, pathname: string, client: BooskiffClient, 
   }
 
   if (pathname === "/api/folders") {
-    if (method === "GET") return jsonResponse({ items: await client.listFolders() }, setCookie);
+    if (method === "GET") {
+      const parentId = url.searchParams.get("parent_id") || undefined;
+      const root = booleanQuery(url, "root");
+      if (root === null || (root && parentId !== undefined)) {
+        return jsonError(400, "bad_request", "root must be a boolean and cannot be true with parent_id", setCookie);
+      }
+      return jsonResponse({ items: await client.listFolders(parentId, root) }, setCookie);
+    }
     if (method === "POST") {
-      const name = await readName(req);
-      if (name === null) return jsonError(400, "bad_request", `JSON body with non-empty "name" is required`, setCookie);
-      return jsonResponse(await client.createFolder(name), setCookie, 201);
+      const body = await readFolderBody(req);
+      if (body === null) return jsonError(400, "bad_request", `JSON body with non-empty "name" and optional "parent_id" is required`, setCookie);
+      return jsonResponse(await client.createFolder(body.name, body.parentId), setCookie, 201);
     }
   }
 
@@ -113,7 +124,9 @@ async function dispatch(req: Request, pathname: string, client: BooskiffClient, 
       return jsonResponse(await client.renameFolder(id, name), setCookie);
     }
     if (method === "DELETE") {
-      await client.deleteFolder(id);
+      const requireEmpty = booleanQuery(url, "require_empty");
+      if (requireEmpty === null) return jsonError(400, "bad_request", "require_empty must be a boolean", setCookie);
+      await client.deleteFolder(id, requireEmpty);
       return emptyResponse(204, setCookie);
     }
   }
@@ -146,11 +159,28 @@ async function upload(req: Request, url: URL, client: BooskiffClient, setCookie:
 }
 
 async function readName(req: Request): Promise<string | null> {
-  let body: { name?: unknown };
+  const body = await readFolderBody(req);
+  return body?.name ?? null;
+}
+
+function booleanQuery(url: URL, key: string): boolean | undefined | null {
+  const value = url.searchParams.get(key);
+  if (value === null) return undefined;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  return null;
+}
+
+async function readFolderBody(req: Request): Promise<{ name: string; parentId?: string | null } | null> {
+  let body: unknown;
   try {
-    body = await req.json() as { name?: unknown };
+    body = await req.json();
   } catch {
     return null;
   }
-  return typeof body.name === "string" && body.name.length > 0 ? body.name : null;
+  if (typeof body !== "object" || body === null || Array.isArray(body)) return null;
+  const { name, parent_id: parentId } = body as { name?: unknown; parent_id?: unknown };
+  if (typeof name !== "string" || name.length === 0) return null;
+  if (parentId !== undefined && parentId !== null && (typeof parentId !== "string" || parentId.length === 0)) return null;
+  return { name, ...(parentId !== undefined ? { parentId: parentId as string | null } : {}) };
 }

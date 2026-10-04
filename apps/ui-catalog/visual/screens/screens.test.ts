@@ -35,8 +35,11 @@ test("HTTP fixtures satisfy the production Booskiff REST client mappings and fol
     expect(await client.listFiles()).toEqual(FILES);
     expect(await client.listFiles("folder-projects")).toEqual(FILES.slice(0, 2));
     expect(await client.listFiles("folder-archive")).toEqual([]);
+    expect(await client.listFiles(undefined, true)).toEqual([FILES[2]]);
     expect(await client.getFile("file-design")).toEqual(FILES[0]);
     expect(await client.listFolders()).toEqual(FOLDERS);
+    expect(await client.listFolders(undefined, true)).toEqual(FOLDERS);
+    expect(await client.listFolders("folder-projects")).toEqual([]);
     expect(await client.getFolder("folder-projects")).toEqual(FOLDERS[0]);
     expect(await client.billingStatus()).toEqual(BILLING);
     expect(stub.unexpectedRequests).toEqual([]);

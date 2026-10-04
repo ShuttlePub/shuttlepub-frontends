@@ -28,7 +28,7 @@ unwrapItems (Items xs) = xs
 
 -- | GET /api/files, optionally filtered by folder
 listFiles :: Maybe String -> Aff (Either String (Array FileItem))
-listFiles mFolderId = map (map unwrapItems) $ Api.get $ maybe "/api/files" (\id -> "/api/files?folder_id=" <> id) mFolderId
+listFiles mFolderId = map (map unwrapItems) $ Api.get $ maybe "/api/files?root=true" (\id -> "/api/files?folder_id=" <> id) mFolderId
 
 fileDetail :: String -> Aff (Either String (Array FileItem))
 fileDetail id = do
@@ -47,8 +47,8 @@ listFolders :: Aff (Either String (Array Folder))
 listFolders = map (map unwrapItems) $ Api.get "/api/folders"
 
 -- | POST /api/folders
-createFolder :: String -> Aff (Either String Folder)
-createFolder name = Api.postJson "/api/folders" { name }
+createFolder :: String -> Maybe String -> Aff (Either String Folder)
+createFolder name parentId = Api.postJson "/api/folders" { name, parent_id: parentId }
 
 -- | PATCH /api/folders/:id
 renameFolder :: String -> String -> Aff (Either String Folder)
@@ -56,7 +56,7 @@ renameFolder id name = Api.patchJson ("/api/folders/" <> id) { name }
 
 -- | DELETE /api/folders/:id
 deleteFolder :: String -> Aff (Either String Unit)
-deleteFolder id = Api.delete_ ("/api/folders/" <> id)
+deleteFolder id = Api.delete_ ("/api/folders/" <> id <> "?require_empty=true")
 
 -- | DELETE /api/files/:id
 deleteFile :: String -> Aff (Either String Unit)

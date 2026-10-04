@@ -18,6 +18,7 @@ export type FileItem = {
 export type Folder = {
   readonly id: string;
   readonly name: string;
+  readonly parentId: string | null;
   readonly createdAt: string;
 };
 
@@ -53,14 +54,14 @@ export class BooskiffApiError extends Error {
 
 export interface BooskiffClient {
   getFile(id: string): Promise<FileItem>;
-  listFiles(folderId?: string): Promise<readonly FileItem[]>;
+  listFiles(folderId?: string, root?: boolean): Promise<readonly FileItem[]>;
   uploadFile(input: UploadInput): Promise<FileItem>;
   deleteFile(id: string): Promise<void>;
   getDownloadUrl(id: string): Promise<string>;
-  listFolders(): Promise<readonly Folder[]>;
+  listFolders(parentId?: string, root?: boolean): Promise<readonly Folder[]>;
   getFolder(id: string): Promise<Folder>;
-  createFolder(name: string): Promise<Folder>;
+  createFolder(name: string, parentId?: string | null): Promise<Folder>;
   renameFolder(id: string, name: string): Promise<Folder>;
-  deleteFolder(id: string): Promise<void>;
+  deleteFolder(id: string, requireEmpty?: boolean): Promise<void>;
   billingStatus(): Promise<BillingStatus>;
 }

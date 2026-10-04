@@ -59,11 +59,13 @@ export function createMockBooskiffClient(config: MockBooskiffConfig = {}): Boosk
       return requireFile(id);
     },
 
-    async listFiles(folderId): Promise<readonly FileItem[]> {
-      return folderId === undefined ? [...files] : files.filter((f) => f.folderId === folderId);
+    async listFiles(folderId, root): Promise<readonly FileItem[]> {
+      return root ? files.filter((f) => f.folderId === null)
+        : folderId === undefined ? [...files] : files.filter((f) => f.folderId === folderId);
     },
 
     async uploadFile(input: UploadInput): Promise<FileItem> {
+      if (input.folderId !== null) requireFolder(input.folderId);
       const bytes = new Uint8Array(await new Response(input.body).arrayBuffer());
       if (bytes.byteLength > maxFileBytes) {
         throw apiError(413, "file_too_large", `file exceeds maxFileBytes: ${bytes.byteLength} > ${maxFileBytes}`);
@@ -95,32 +97,42 @@ export function createMockBooskiffClient(config: MockBooskiffConfig = {}): Boosk
       return `http://mock-storage.local/booskiff/${id}?sig=mock`;
     },
 
-    async listFolders(): Promise<readonly Folder[]> {
-      return [...folders];
+    async listFolders(parentId, root): Promise<readonly Folder[]> {
+      return root ? folders.filter((f) => f.parentId === null)
+        : parentId === undefined ? [...folders] : folders.filter((f) => f.parentId === parentId);
     },
 
     async getFolder(id): Promise<Folder> {
       return requireFolder(id);
     },
 
-    async createFolder(name): Promise<Folder> {
-      if (folders.some((f) => f.name === name)) {
+    async createFolder(name, parentId): Promise<Folder> {
+      const parent = parentId ?? null;
+      if (parent !== null) requireFolder(parent);
+      if (folders.some((f) => f.name === name && f.parentId === parent)) {
         throw apiError(409, "folder_already_exists", `folder already exists: ${name}`);
       }
-      const folder: Folder = { id: nextId("folder"), name, createdAt: new Date().toISOString() };
+      const folder: Folder = { id: nextId("folder"), name, parentId: parent, createdAt: new Date().toISOString() };
       folders.push(folder);
       return folder;
     },
 
     async renameFolder(id, name): Promise<Folder> {
       const folder = requireFolder(id);
+      if (folders.some((f) => f.id !== id && f.name === name && f.parentId === folder.parentId)) {
+        throw apiError(409, "folder_already_exists", `folder already exists: ${name}`);
+      }
       const renamed: Folder = { ...folder, name };
       folders[folders.indexOf(folder)] = renamed;
       return renamed;
     },
 
-    async deleteFolder(id): Promise<void> {
+    async deleteFolder(id, requireEmpty): Promise<void> {
       const folder = requireFolder(id);
+      if (folders.some((f) => f.parentId === id)
+        || (requireEmpty && files.some((f) => f.folderId === id))) {
+        throw apiError(409, "folder_not_empty", "folder is not empty");
+      }
       folders.splice(folders.indexOf(folder), 1);
       // フォルダ削除で file の folderId は detach (null) される
       for (const [index, file] of files.entries()) {

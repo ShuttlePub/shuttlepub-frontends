@@ -83,6 +83,8 @@ test("real login grants a cookie session, drive access, and logout", async ({ pa
 
   // The core validates Hydra's signed access token before persisting this folder.
   const folder = `hydra-${crypto.randomUUID()}`;
+  await page.getByTestId("new-menu-button").click();
+  await page.getByTestId("new-folder-button").click();
   await page.getByTestId("folder-name-input").fill(folder);
   const created = page.waitForResponse((response) => new URL(response.url()).pathname === "/api/folders" && response.request().method() === "POST");
   await page.getByTestId("folder-create-submit").click();

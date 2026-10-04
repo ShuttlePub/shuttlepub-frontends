@@ -33,12 +33,16 @@ test("authenticated /drive full reload keeps a single, working folder section", 
   await expect(page.getByTestId("drive-page")).toBeVisible();
 
   // Folder section elements must exist exactly once (no duplication).
-  await expect(page.getByTestId("folder-create-submit")).toHaveCount(1);
+  await expect(page.getByTestId("new-menu-button")).toHaveCount(1);
   await expect(page.getByTestId("folder-list")).toHaveCount(1);
-  await expect(page.getByTestId("folder-name-input")).toHaveCount(1);
+  await expect(page.getByTestId("folder-name-input")).toHaveCount(0);
 
   // Event handlers must survive resume: folder creation still works.
   const name = `resume-${runId}`;
+  await page.getByTestId("new-menu-button").click();
+  await page.getByTestId("new-folder-button").click();
+  await expect(page.getByTestId("folder-name-input")).toHaveCount(1);
+  await expect(page.getByTestId("folder-create-submit")).toHaveCount(1);
   await page.getByTestId("folder-name-input").fill(name);
   await page.getByTestId("folder-create-submit").click();
   await expect(folderRow(page, name)).toBeVisible({ timeout: 15_000 });

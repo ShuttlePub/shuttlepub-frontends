@@ -15,7 +15,6 @@ test("upload beyond the max file size shows an error", async ({ page }) => {
   try {
     writeFileSync(join(dir, "too-big.bin"), Buffer.alloc(101 * 1024 * 1024));
     await page.getByTestId("upload-input").setInputFiles(join(dir, "too-big.bin"));
-    await page.getByTestId("upload-submit").click();
 
     const error = page.getByTestId("file-upload-error");
     await expect(error).toBeVisible({ timeout: 15_000 });
