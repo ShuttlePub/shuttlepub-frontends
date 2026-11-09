@@ -2,9 +2,9 @@ import { mkdir } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { chromium, expect, type Browser, type Page } from "@playwright/test";
 import { startBooskiffStub } from "./booskiff-stub.ts";
-import { FIXED_TIME, MOCK_IDENTIFIER, MOCK_PASSWORD, SCREEN_CASES, type ScreenCase } from "./cases.ts";
+import { FIXED_TIME, MOCK_IDENTIFIER, MOCK_PASSWORD, OPTIONAL_BASELINE_APPS, SCREEN_CASES, type ScreenApp, type ScreenCase } from "./cases.ts";
 import { localImage } from "./fixtures.ts";
-import { startApp, type AppServer } from "./servers.ts";
+import { appExists, startApp, type AppServer } from "./servers.ts";
 
 async function prepareScreen(page: Page, item: ScreenCase) {
   const content = page.locator("#content");
@@ -48,6 +48,16 @@ async function prepareScreen(page: Page, item: ScreenCase) {
     } else if (item.id === "file-detail") {
       await expect(page.getByRole("heading", { name: "design-notes.pdf", exact: true })).toBeVisible();
       await expect(page.getByTestId("file-detail-page").locator('a[href="/api/files/file-design/download"]')).toBeVisible();
+    }
+  } else if (item.app === "ShuttlePub") {
+    if (item.id === "home") {
+      // The marker flips only after Flame resumed the SSR DOM, and the three rows
+      // fill only from real BFF responses, so this fails if hydration or the
+      // GraphQL path is broken. Mock fixture values, not layout, are asserted.
+      await expect(page.getByTestId("hydration-state")).toHaveAttribute("data-state", "hydrated");
+      await expect(page.getByTestId("api-mode")).toContainText("mock");
+      await expect(page.getByTestId("api-status")).toContainText("v1");
+      await expect(page.getByTestId("profile-context")).toContainText("Fixture Profile");
     }
   } else {
     if (item.id === "accounts-populated") {
@@ -146,10 +156,12 @@ async function captureScreen(browser: Browser, server: AppServer, item: ScreenCa
       }
     });
     // A session response proves the production client has resumed the SSR page.
-    const sessionResponse = page.waitForResponse(`${server.url}/auth/session`);
+    // ShuttlePub has no sessions: its client sends its first /graphql request on resume.
+    const resumeProof = item.app === "ShuttlePub" ? `${server.url}/graphql` : `${server.url}/auth/session`;
+    const sessionResponse = page.waitForResponse(resumeProof);
     const documentResponse = await page.goto(item.path, { waitUntil: "networkidle" });
     expect(documentResponse?.status(), `${item.filename}: SSR`).toBe(200);
-    expect((await sessionResponse).status()).toBe(item.authenticated ? 200 : 401);
+    expect((await sessionResponse).status()).toBe(item.app === "ShuttlePub" || item.authenticated ? 200 : 401);
     await expect(page.locator("main#app")).toBeVisible();
     await expect(page.locator("html")).toHaveAttribute("data-color", "catppuccin-mocha");
     await expect(page.locator("html")).toHaveAttribute("data-shape", "rounded");
@@ -182,12 +194,20 @@ export async function captureScreens(frontendRoot: string, output: string) {
   let failed = false;
   try {
     // Register each child immediately so partial startup failure always cleans up.
-    for (const app of ["Booskiff", "Emumet"] as const) servers.push(await startApp(frontendRoot, app, stub.url));
+    for (const app of ["Booskiff", "Emumet", "ShuttlePub"] as const) {
+      if (OPTIONAL_BASELINE_APPS.includes(app) && !(await appExists(frontendRoot, app))) {
+        console.info(`${app}: no apps/${app.toLowerCase()}-web in ${frontendRoot}; its cases have no baseline here (added coverage)`);
+        continue;
+      }
+      servers.push(await startApp(frontendRoot, app, stub.url));
+    }
     await Promise.all(servers.map((server) => server.waitUntilReady()));
+    const capturedApps = new Set<ScreenApp>(servers.map((server) => server.app));
+    const cases = SCREEN_CASES.filter((item) => capturedApps.has(item.app));
     browser = await chromium.launch({
       ...(process.env.PLAYWRIGHT_CHROMIUM_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH } : {}),
     });
-    for (const item of SCREEN_CASES) {
+    for (const item of cases) {
       const server = servers.find((entry) => entry.app === item.app)!;
       stub.setState(item.data);
       await captureScreen(browser, server, item, output);
@@ -196,7 +216,7 @@ export async function captureScreens(frontendRoot: string, output: string) {
         expect(await entry.networkViolations(), `${entry.app}: unexpected server requests`).toEqual([]);
       }
     }
-    console.info(`Captured ${SCREEN_CASES.length} app screenshots in ${output}`);
+    console.info(`Captured ${cases.length} app screenshots in ${output}`);
   } catch (error) {
     failed = true;
     throw error;

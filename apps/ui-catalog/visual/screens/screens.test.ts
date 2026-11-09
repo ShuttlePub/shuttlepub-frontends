@@ -1,21 +1,21 @@
 import { expect, test } from "bun:test";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { createBooskiffClient } from "../../../booskiff-web/bff/booskiff/real.ts";
 import { startBooskiffStub } from "./booskiff-stub.ts";
-import { FIXED_TIME, SCREEN_CASES } from "./cases.ts";
+import { FIXED_TIME, OPTIONAL_BASELINE_APPS, SCREEN_CASES } from "./cases.ts";
 import { AVATAR_SVG, BANNER_SVG, BILLING, FILES, FOLDERS, localImage } from "./fixtures.ts";
-import { stopChild } from "./servers.ts";
+import { appExists, stopChild } from "./servers.ts";
 
-test("screen inventory covers both apps and every state at desktop/mobile sizes with safe unique filenames", () => {
+test("screen inventory covers every app and state at desktop/mobile sizes with safe unique filenames", () => {
   // Given / When
   const names = SCREEN_CASES.map((item) => item.filename);
   // Then
   expect(new Set(names).size).toBe(SCREEN_CASES.length);
-  expect(SCREEN_CASES).toHaveLength(28);
+  expect(SCREEN_CASES).toHaveLength(32);
   for (const item of SCREEN_CASES) {
-    expect(item.filename).toMatch(/^(Booskiff|Emumet)-[A-Za-z0-9-]+\.png$/);
+    expect(item.filename).toMatch(/^(Booskiff|Emumet|ShuttlePub)-[A-Za-z0-9-]+\.png$/);
     expect(item.path).toMatch(/^\/(?!\/)/);
     expect(SCREEN_CASES.filter((other) => other.app === item.app && other.id === item.id)
       .map((other) => other.viewport.name)).toEqual(["desktop", "mobile"]);
@@ -23,6 +23,31 @@ test("screen inventory covers both apps and every state at desktop/mobile sizes 
   for (const app of ["Booskiff", "Emumet"]) {
     expect(SCREEN_CASES.filter((item) => item.app === app && item.id === "login")
       .every((item) => !item.authenticated)).toBe(true);
+  }
+});
+
+test("ShuttlePub placeholder cases register both routes at both widths and need no login", () => {
+  // Given / When
+  const cases = SCREEN_CASES.filter((item) => item.app === "ShuttlePub");
+  // Then
+  expect(cases.map((item) => item.filename).sort()).toEqual([
+    "ShuttlePub-home-desktop.png", "ShuttlePub-home-mobile.png",
+    "ShuttlePub-not-found-desktop.png", "ShuttlePub-not-found-mobile.png",
+  ]);
+  expect(cases.every((item) => !item.authenticated)).toBe(true);
+  expect(OPTIONAL_BASELINE_APPS).toEqual(["ShuttlePub"]);
+});
+
+test("a baseline checkout that predates ShuttlePub is detected as missing the app, not as an empty app", async () => {
+  // Given
+  const scratch = await mkdtemp(resolve(tmpdir(), "visual-baseline-test-"));
+  try {
+    // When / Then
+    expect(await appExists(scratch, "ShuttlePub")).toBe(false);
+    await mkdir(resolve(scratch, "apps", "shuttlepub-web"), { recursive: true });
+    expect(await appExists(scratch, "ShuttlePub")).toBe(true);
+  } finally {
+    await rm(scratch, { recursive: true, force: true });
   }
 });
 

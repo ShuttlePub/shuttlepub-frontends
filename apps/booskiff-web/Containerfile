@@ -21,6 +21,7 @@ COPY package.json bun.lock ./
 COPY apps/booskiff-web/package.json ./apps/booskiff-web/package.json
 COPY apps/emumet-web/package.json ./apps/emumet-web/package.json
 COPY apps/ui-catalog/package.json ./apps/ui-catalog/package.json
+COPY apps/shuttlepub-web/package.json ./apps/shuttlepub-web/package.json
 COPY packages ./packages
 # Host node_modules inside packages/ hold symlinks into the host tree; drop
 # them so `bun install --frozen-lockfile` rebuilds clean links in-image.

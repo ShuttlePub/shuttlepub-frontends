@@ -93,3 +93,30 @@ jobs:
 
       - run: bunx tsc --noEmit
         working-directory: apps/ui-catalog
+
+      - run: purs-tidy check apps/shuttlepub-web/src apps/shuttlepub-web/test
+        working-directory: .
+
+      - name: Verify the vendored ShuttlePub OpenAPI schema matches its producer pin
+        run: bun run openapi:verify
+        working-directory: apps/shuttlepub-web
+
+      - name: Verify generated files are reproducible from the pinned schema and SDL
+        run: bun run codegen:check
+        working-directory: apps/shuttlepub-web
+
+      - run: bunx spago build
+        working-directory: apps/shuttlepub-web
+
+      - run: bunx spago test
+        working-directory: apps/shuttlepub-web
+
+      - run: bun test
+        working-directory: apps/shuttlepub-web
+
+      - run: >-
+          mkdir -p dist && printf 'export function renderPage(...args: any[]): any;\n' > dist/server.d.ts
+        working-directory: apps/shuttlepub-web
+
+      - run: bunx tsc --noEmit
+        working-directory: apps/shuttlepub-web

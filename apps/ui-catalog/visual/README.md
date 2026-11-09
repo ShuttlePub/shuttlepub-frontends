@@ -8,7 +8,10 @@ R2 や公開画像バケットは不要です。
 
 - UI catalog: 各 revision の JSON manifest にある全ストーリーを色 × 形状テーマで撮影。
   現在 13 × 4 = 52 枚。各 `#story-*` 要素を切り出し、追加・削除も検出します。
-- Booskiff / Emumet: `visual/screens/cases.ts` の代表画面・状態を desktop / mobile で撮影。
+- Booskiff / Emumet / ShuttlePub: `visual/screens/cases.ts` の代表画面・状態を desktop / mobile で撮影。
+  ShuttlePub は基盤の素のプレースホルダ (home / not-found) のみで、画面レイアウトは固定しません。
+  main に `apps/shuttlepub-web` がない間 (`OPTIONAL_BASELINE_APPS`)、その case は baseline なしの追加カバレッジとして new 扱いになります。
+  追加で `visual/screens/shuttlepub-verify.ts` が hydration (desktop / mobile) と real モード (501 / 500) の表示を検証します。
   実際の SSR とクライアントハイドレーションを使用します。
   Emumet は組み込み mock、Booskiff は撮影専用の固定 REST fixture を使用し、
   backend checkout、Docker、本番認証情報には依存しません。

@@ -21,8 +21,36 @@ export async function stopChild(child: Pick<Bun.Subprocess, "exitCode" | "kill" 
   try { await child.exited; } finally { clearTimeout(deadline); }
 }
 
-export async function startApp(frontendRoot: string, app: ScreenApp, coreURL: string): Promise<AppServer> {
-  const directory = resolve(frontendRoot, "apps", `${app.toLowerCase()}-web`);
+export function appDirectory(frontendRoot: string, app: ScreenApp): string {
+  return resolve(frontendRoot, "apps", `${app.toLowerCase()}-web`);
+}
+
+export async function appExists(frontendRoot: string, app: ScreenApp): Promise<boolean> {
+  try {
+    return (await stat(appDirectory(frontendRoot, app))).isDirectory();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+export type StartAppOptions = {
+  /** Extra child environment, applied last. ShuttlePub: SHUTTLEPUB_API_MODE / SHUTTLEPUB_API_URL. */
+  env?: Record<string, string>;
+};
+
+/** Environment that pins ShuttlePub to its fixture-only mock mode unless a caller overrides it. */
+function appEnvironment(app: ScreenApp): Record<string, string> {
+  const inherited = { ...globalThis.process.env } as Record<string, string>;
+  if (app === "ShuttlePub") {
+    delete inherited["SHUTTLEPUB_API_URL"];
+    inherited["SHUTTLEPUB_API_MODE"] = "mock";
+  }
+  return inherited;
+}
+
+export async function startApp(frontendRoot: string, app: ScreenApp, coreURL: string, options: StartAppOptions = {}): Promise<AppServer> {
+  const directory = appDirectory(frontendRoot, app);
   for (const file of ["dist/app.js", "dist/server.js", "dist/style.css"]) {
     if ((await stat(resolve(directory, file))).size === 0) throw new Error(`${app}: empty build output ${file}`);
   }
@@ -38,7 +66,7 @@ export async function startApp(frontendRoot: string, app: ScreenApp, coreURL: st
   const process = Bun.spawn([Bun.which("bun") ?? globalThis.process.execPath, "--preload", resolve(import.meta.dir, "server-preload.ts"), "index.ts"], {
     cwd: directory,
     env: {
-      ...globalThis.process.env,
+      ...appEnvironment(app),
       PORT: String(port), APP_ORIGIN: url, TZ: "UTC", USE_MOCK: "true", USE_TEST_JWT: "true",
       CORE_API_URL: coreURL, EMUMET_API_URL: coreURL,
       VISUAL_CORE_ORIGIN: coreURL, VISUAL_NETWORK_LOG: networkLog,
@@ -46,6 +74,7 @@ export async function startApp(frontendRoot: string, app: ScreenApp, coreURL: st
       OAUTH_COOKIE_NAME: `${app.toLowerCase()}_visual_oauth`,
       COOKIE_SECRET_BASE64: Buffer.alloc(32, 7).toString("base64"),
       TEST_JWT_PRIVATE_KEY_PEM_BASE64: fixture.toString("base64"), TEST_JWT_ISSUER: url,
+      ...options.env,
     },
     stdout: "pipe", stderr: "pipe",
   });
@@ -58,7 +87,8 @@ export async function startApp(frontendRoot: string, app: ScreenApp, coreURL: st
       while (Date.now() < deadline) {
         if (process.exitCode !== null) throw new Error(`${app} exited (${process.exitCode}): ${await logs}`);
         try {
-          const response = await fetch(`${url}/login`, { signal: AbortSignal.timeout(1000) });
+          // ShuttlePub has no login route; its root is the SSR entry point.
+          const response = await fetch(`${url}${app === "ShuttlePub" ? "/" : "/login"}`, { signal: AbortSignal.timeout(1000) });
           const html = await response.text();
           if (response.ok && html.includes("<template-state") && html.includes('id="app"')) return;
         } catch { /* The child has not bound its port yet. */ }

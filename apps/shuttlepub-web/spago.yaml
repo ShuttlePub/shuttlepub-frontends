@@ -1,0 +1,36 @@
+workspace:
+  packageSet:
+    registry: 77.7.0
+  extraPackages:
+    shuttlepub-ui:
+      path: ../../packages/ui
+
+package:
+  name: shuttlepub-web
+  dependencies:
+    - shuttlepub-ui
+    - aff
+    - affjax
+    - affjax-web
+    - argonaut-codecs
+    - argonaut-core
+    - argonaut-generic
+    - arrays
+    - console
+    - effect
+    - either
+    - flame
+    - foldable-traversable
+    - foreign
+    - foreign-object
+    - graphql-client
+    - maybe
+    - prelude
+    - routing
+    - routing-duplex
+    - tuples
+    - type-equality
+    - web-dom
+  test:
+    main: Test.Main
+    dependencies: []

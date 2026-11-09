@@ -4,6 +4,7 @@ COPY package.json bun.lock ./
 COPY apps/booskiff-web/package.json apps/booskiff-web/package.json
 COPY apps/emumet-web/package.json apps/emumet-web/package.json
 COPY apps/ui-catalog/package.json apps/ui-catalog/package.json
+COPY apps/shuttlepub-web/package.json apps/shuttlepub-web/package.json
 COPY packages ./packages
 RUN bun install --frozen-lockfile --ignore-scripts
 COPY apps/booskiff-web/e2e/real/provider.ts apps/booskiff-web/e2e/real/provider.ts
