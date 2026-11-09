@@ -34,7 +34,7 @@ test("re-encodes only pixels into a separate trusted tree, removing metadata and
     expect(bytes.includes(Buffer.from("untrusted"))).toBe(false);
     expect(bytes.includes(Buffer.from("gAMA"))).toBe(false);
     expect(PNG.sync.read(bytes).data).toEqual(PNG.sync.read(original).data);
-    expect(await readdir(dirs.output)).toEqual(["actual", "expected"]);
+    expect((await readdir(dirs.output)).sort()).toEqual(["actual", "expected"]);
   });
 });
 
