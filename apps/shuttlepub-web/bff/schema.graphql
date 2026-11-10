@@ -19,7 +19,7 @@ type ApiStatus {
   apiVersion: String!
 }
 
-"""A Profile the viewer can act as."""
+"""An owned Emumet integrated Account/Profile. id is its public Account nanoid; the current API does not expose an internal Profile id."""
 type Profile {
   id: ID!
   handle: String!
@@ -31,7 +31,13 @@ type ProfileContext {
   activeProfile: Profile
 }
 
+type Mutation {
+  """Select an identity from the current viewer's owned Emumet accounts (integrated Profile API)."""
+  selectProfile(id: ID!): ProfileContext!
+}
+
 type Query {
+  availableProfiles: [Profile!]!
   apiMode: ApiMode!
   apiStatus: ApiStatus!
   profileContext: ProfileContext!

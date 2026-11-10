@@ -1,0 +1,3 @@
+[test]
+# The browser-only suite is run by Playwright, never by bun test.
+root = "./bff"

@@ -2,9 +2,9 @@ import { mkdir } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { chromium, expect, type Browser, type Page } from "@playwright/test";
 import { startBooskiffStub } from "./booskiff-stub.ts";
-import { FIXED_TIME, MOCK_IDENTIFIER, MOCK_PASSWORD, OPTIONAL_BASELINE_APPS, SCREEN_CASES, type ScreenApp, type ScreenCase } from "./cases.ts";
+import { FIXED_TIME, MOCK_IDENTIFIER, MOCK_PASSWORD, SCREEN_CASES, type ScreenApp, type ScreenCase } from "./cases.ts";
 import { localImage } from "./fixtures.ts";
-import { appExists, startApp, type AppServer } from "./servers.ts";
+import { startApp, type AppServer } from "./servers.ts";
 
 async function prepareScreen(page: Page, item: ScreenCase) {
   const content = page.locator("#content");
@@ -195,10 +195,6 @@ export async function captureScreens(frontendRoot: string, output: string) {
   try {
     // Register each child immediately so partial startup failure always cleans up.
     for (const app of ["Booskiff", "Emumet", "ShuttlePub"] as const) {
-      if (OPTIONAL_BASELINE_APPS.includes(app) && !(await appExists(frontendRoot, app))) {
-        console.info(`${app}: no apps/${app.toLowerCase()}-web in ${frontendRoot}; its cases have no baseline here (added coverage)`);
-        continue;
-      }
       servers.push(await startApp(frontendRoot, app, stub.url));
     }
     await Promise.all(servers.map((server) => server.waitUntilReady()));

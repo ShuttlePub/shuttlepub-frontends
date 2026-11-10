@@ -1,48 +1,108 @@
-// Profile context: the Profile the viewer is currently acting as.
-//
-// The shapes are owned by this app (bff/schema.graphql: Profile / ProfileContext);
-// the pinned OpenAPI schema has no profile endpoint yet, so these fixtures are NOT
-// contract-checked against it. Real identity arrives with the auth unit (FA).
+// Emumet's current public API integrates Profile fields into owned Account resources.
+// id is the integrated Account nanoid, NOT an invented internal Profile nanoid.
+import { AuthError } from "./auth-error.ts";
+import type { FetchLike, ViewerSession } from "./auth.ts";
+import type { ApiMode } from "./rest/client.ts";
 
-import { ShuttlePubApiError, type ApiMode } from "./rest/client.ts";
-
-export type Profile = {
-  id: string;
-  handle: string;
-  displayName: string;
-};
-
-export type ProfileContext = {
-  activeProfile: Profile | null;
-};
-
+export type Profile = { id: string; handle: string; displayName: string };
+export type ProfileContext = { activeProfile: Profile | null };
 export interface ProfileContextSource {
   readonly mode: ApiMode;
   getProfileContext(): Promise<ProfileContext>;
+  availableProfiles(): Promise<Profile[]>;
+  selectProfile(id: string): Promise<ProfileContext>;
 }
-
 export const profileContextFixture: ProfileContext = {
   activeProfile: { id: "profile-fixture-1", handle: "fixture", displayName: "Fixture Profile" },
 };
-
 export function createMockProfileContext(): ProfileContextSource {
   return {
     mode: "mock",
-    async getProfileContext() {
+    async getProfileContext() { return structuredClone(profileContextFixture); },
+    async availableProfiles() { return [structuredClone(profileContextFixture.activeProfile!)]; },
+    async selectProfile(id) {
+      if (id !== profileContextFixture.activeProfile!.id) throw new AuthError("PROFILE_UNAVAILABLE", 403);
       return structuredClone(profileContextFixture);
     },
   };
 }
-
-/** Real identity needs authentication, which F0 does not implement: say so, do not invent a profile. */
-export function createRealProfileContext(): ProfileContextSource {
+export type RealProfileDeps = {
+  baseUrl: string;
+  session: () => Promise<ViewerSession>;
+  selected: (session: ViewerSession, id: string) => Promise<void>;
+  fetch?: FetchLike;
+  invalidated?: () => Promise<void>;
+};
+export function createRealProfileContext(deps?: RealProfileDeps): ProfileContextSource {
+  let list: Promise<Profile[]> | undefined;
+  const session = async () => {
+    if (!deps) throw new AuthError("UNAUTHENTICATED", 401);
+    return deps.session();
+  };
+  async function load(): Promise<Profile[]> {
+    const viewer = await session();
+    const fetcher = deps!.fetch ?? fetch;
+    const profiles: Profile[] = [];
+    const ids = new Set<string>();
+    let cursor: string | undefined;
+    // Exhaust the owner's list, never use public ID lookups as proof of ownership.
+    for (let page = 0; page < 100; page++) {
+      const url = new URL(deps!.baseUrl + "/api/v1/accounts");
+      url.searchParams.set("limit", "100");
+      // Emumet's runtime accepts next/prev (its route annotation still says asc/desc).
+      url.searchParams.set("direction", "next");
+      if (cursor) url.searchParams.set("cursor", cursor);
+      let response: Response;
+      try {
+        response = await fetcher(url, { headers: { Authorization: "Bearer " + viewer.accessToken, Accept: "application/json" },
+          redirect: "manual", signal: AbortSignal.timeout(10_000) });
+      } catch { throw new AuthError("UPSTREAM_UNAVAILABLE", 502); }
+      if (response.status === 401) {
+        await deps!.invalidated?.();
+        throw new AuthError("UNAUTHENTICATED", 401);
+      }
+      if (response.status === 403) throw new AuthError("FORBIDDEN", 403);
+      if (!response.ok) throw new AuthError("UPSTREAM_UNAVAILABLE", 502);
+      let data: { items?: unknown; last?: unknown };
+      try { data = await response.json(); } catch { throw new AuthError("INVALID_UPSTREAM_RESPONSE", 502); }
+      if (!data || !Array.isArray(data.items)) throw new AuthError("INVALID_UPSTREAM_RESPONSE", 502);
+      for (const item of data.items) {
+        if (!item || typeof item.id !== "string" || !item.id || ids.has(item.id) || typeof item.name !== "string" || !item.name ||
+          !(item.display_name === null || typeof item.display_name === "string") || !Object.hasOwn(item, "moderation")) {
+          throw new AuthError("INVALID_UPSTREAM_RESPONSE", 502);
+        }
+        // An owned account is not necessarily allowed to act; do not promote moderated identities.
+        if (item.moderation !== null) throw new AuthError("FORBIDDEN", 403);
+        ids.add(item.id);
+        profiles.push({ id: item.id, handle: item.name, displayName: item.display_name ?? item.name });
+      }
+      if (data.items.length < 100) return profiles;
+      if (typeof data.last !== "string" || data.last !== profiles.at(-1)?.id || data.last === cursor) {
+        throw new AuthError("INVALID_UPSTREAM_RESPONSE", 502);
+      }
+      cursor = data.last;
+    }
+    throw new AuthError("INVALID_UPSTREAM_RESPONSE", 502);
+  }
+  const available = () => list ??= load();
   return {
     mode: "real",
+    availableProfiles: available,
     async getProfileContext() {
-      throw new ShuttlePubApiError(
-        "not_implemented",
-        "Profile context requires authentication, which is not implemented yet",
-      );
+      const viewer = await session();
+      // Even an unselected context requires a successful authenticated Emumet read.
+      const profiles = await available();
+      if (!viewer.activeProfileId) return { activeProfile: null };
+      const activeProfile = profiles.find(profile => profile.id === viewer.activeProfileId);
+      if (!activeProfile) throw new AuthError("PROFILE_UNAVAILABLE", 403);
+      return { activeProfile };
+    },
+    async selectProfile(id) {
+      const viewer = await session();
+      const activeProfile = (await available()).find(profile => profile.id === id);
+      if (!activeProfile) throw new AuthError("PROFILE_UNAVAILABLE", 403);
+      await deps!.selected(viewer, id);
+      return { activeProfile };
     },
   };
 }

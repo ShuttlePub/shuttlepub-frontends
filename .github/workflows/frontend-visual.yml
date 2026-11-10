@@ -69,12 +69,6 @@ jobs:
           export PATH="$GITHUB_WORKSPACE/current/apps/ui-catalog/node_modules/.bin:$PATH"
           for side in current baseline; do
             for app in ui-catalog booskiff-web emumet-web shuttlepub-web; do
-              # A baseline that predates an app (see OPTIONAL_BASELINE_APPS in
-              # visual/screens/cases.ts) has nothing to build; its cases are added coverage.
-              if [ "$side" = baseline ] && [ "$app" = shuttlepub-web ] && [ ! -d "$GITHUB_WORKSPACE/$side/apps/$app" ]; then
-                echo "baseline has no apps/$app; skipping"
-                continue
-              fi
               bash current/apps/ui-catalog/visual/build.sh "$GITHUB_WORKSPACE/$side/apps/$app"
             done
           done

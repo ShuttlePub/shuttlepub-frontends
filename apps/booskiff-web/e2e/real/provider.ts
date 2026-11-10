@@ -16,7 +16,10 @@ const decisionSchema = z.object({
   decision: z.enum(["allow", "deny"]),
 });
 const admin = "http://hydra:4445/admin/oauth2/auth/requests";
-const origin = "http://127.0.0.1:3212";
+const origin = process.env.PROVIDER_ORIGIN ?? "http://127.0.0.1:3212";
+// Opt-in FA regression mode mirrors Emumet's remembered-subject skip branch.
+const rememberLogin = process.env.PROVIDER_REMEMBER_LOGIN === "true";
+const rememberedEmails = new Map<string, string>();
 
 class ProviderResponseError extends Error {
   constructor(readonly status: number) {
@@ -41,12 +44,24 @@ async function decide(url: string, body: unknown): Promise<Response> {
 
 // Test-only relying-party bridge: credentials and tokens are owned by Kratos/Hydra.
 Bun.serve({
-  port: 3212,
+  port: Number(new URL(origin).port),
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/health") return new Response("ok");
     if (url.pathname === "/login" && request.method === "GET") {
       const challenge = z.string().min(1).parse(url.searchParams.get("login_challenge"));
+      if (rememberLogin) {
+        const login = z.object({ skip: z.boolean(), subject: z.string().nullish() }).parse(
+          await providerRequest(`${admin}/login?login_challenge=${encodeURIComponent(challenge)}`),
+        );
+        if (login.skip) {
+          const email = rememberedEmails.get(login.subject ?? "");
+          if (!email) throw new Error("Unknown remembered test identity");
+          return decide(`${admin}/login/accept?login_challenge=${encodeURIComponent(challenge)}`, {
+            subject: login.subject, context: { email }, remember: true, remember_for: 3600,
+          });
+        }
+      }
       const session = await fetch("http://kratos:4433/sessions/whoami", {
         headers: { Cookie: request.headers.get("cookie") ?? "" },
         signal: AbortSignal.timeout(10_000),
@@ -58,14 +73,17 @@ Bun.serve({
       }
       if (!session.ok) throw new ProviderResponseError(session.status);
       const { identity } = identitySchema.parse(await session.json());
+      if (rememberLogin) rememberedEmails.set(identity.id, identity.traits.email);
       return decide(`${admin}/login/accept?login_challenge=${encodeURIComponent(challenge)}`, {
-        subject: identity.id, context: { email: identity.traits.email }, remember: false,
+        subject: identity.id, context: { email: identity.traits.email }, remember: rememberLogin,
+        ...(rememberLogin ? { remember_for: 3600 } : {}),
       });
     }
     if (url.pathname === "/consent" && request.method === "GET") {
       const challenge = z.string().min(1).parse(url.searchParams.get("consent_challenge"));
-      consentSchema.parse(await providerRequest(`${admin}/consent?consent_challenge=${encodeURIComponent(challenge)}`));
-      return new Response(`<form method="post" action="/consent"><input type="hidden" name="consent_challenge" value="${Bun.escapeHTML(challenge)}"><button name="decision" value="allow">Allow</button><button name="decision" value="deny">Deny</button></form>`, {
+      const consent = consentSchema.parse(await providerRequest(`${admin}/consent?consent_challenge=${encodeURIComponent(challenge)}`));
+      const marker = rememberLogin ? ` data-email="${Bun.escapeHTML(consent.context.email)}"` : "";
+      return new Response(`<form method="post" action="/consent"${marker}><input type="hidden" name="consent_challenge" value="${Bun.escapeHTML(challenge)}"><button name="decision" value="allow">Allow</button><button name="decision" value="deny">Deny</button></form>`, {
         headers: { "Content-Type": "text/html", "Cache-Control": "no-store" },
       });
     }

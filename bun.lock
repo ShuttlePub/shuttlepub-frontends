@@ -56,6 +56,8 @@
       "name": "shuttlepub-web",
       "dependencies": {
         "@graphql-tools/schema": "^10.0.38",
+        "@shuttlepub/auth-bun": "workspace:*",
+        "@shuttlepub/auth-core": "workspace:*",
         "@shuttlepub/design-tokens": "workspace:*",
         "@shuttlepub/styles": "workspace:*",
         "@urql/core": "^1.16.2",
@@ -63,10 +65,12 @@
         "graphql": "^16",
         "graphql-ws": "^5.9.1",
         "graphql-yoga": "^5.21.2",
+        "jose": "6.2.2",
         "openapi-fetch": "0.17.0",
         "wonka": "^4.0.14",
       },
       "devDependencies": {
+        "@playwright/test": "^1.55.0",
         "@tailwindcss/cli": "^4.2.1",
         "@types/bun": "latest",
         "openapi-typescript": "7.13.0",

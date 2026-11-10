@@ -111,7 +111,10 @@ async function verifyMock(browser: Browser, frontendRoot: string, coreURL: strin
 async function verifyRealFailure(browser: Browser, frontendRoot: string, status: 500 | 501) {
   const backend = startBackend(status);
   const server = await startApp(frontendRoot, "ShuttlePub", backend.url, {
-    env: { SHUTTLEPUB_API_MODE: "real", SHUTTLEPUB_API_URL: backend.url },
+    env: { SHUTTLEPUB_API_MODE: "real", SHUTTLEPUB_API_URL: backend.url,
+      EMUMET_API_URL: backend.url, HYDRA_PUBLIC_URL: backend.url, KRATOS_PUBLIC_URL: backend.url,
+      HYDRA_CLIENT_ID: "visual-shuttlepub", HYDRA_CLIENT_SECRET: "visual-fixture-only",
+      SHUTTLEPUB_COOKIE_SECRET_BASE64: Buffer.alloc(32, 9).toString("base64") },
   });
   const expectedCode = status === 501 ? "not_implemented" : "upstream_error";
   try {
@@ -131,7 +134,7 @@ async function verifyRealFailure(browser: Browser, frontendRoot: string, status:
         await expect(page.getByTestId("profile-context")).not.toContainText("Fixture Profile");
         if (status === 501) {
           await expect(statusRow).toContainText("Not implemented");
-          await expect(page.getByTestId("profile-context")).toHaveAttribute("data-error", "not_implemented");
+          await expect(page.getByTestId("profile-context")).toHaveAttribute("data-error", "unauthenticated");
         }
         // The BFF answers GraphQL errors with HTTP 200; the browser console stays clean.
         expect(errors, `real ${status} ${viewport.name}: browser errors`).toEqual([]);
