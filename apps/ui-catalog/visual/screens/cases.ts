@@ -2,7 +2,16 @@ export const FIXED_TIME = "2026-01-15T12:00:00.000Z";
 export const MOCK_IDENTIFIER = "visual-review@example.com";
 export const MOCK_PASSWORD = "password";
 
-export type ScreenApp = "Booskiff" | "Emumet";
+export type ScreenApp = "Booskiff" | "Emumet" | "ShuttlePub";
+
+/**
+ * Apps whose directory may be absent from FRONTEND_ROOT. The current driver captures
+ * both revisions, so the main baseline that predates an app lacks it: its cases are
+ * then reported as added coverage (new images) instead of failing the baseline
+ * capture. Every other app must exist; a missing build still fails for all of them.
+ * Remove an app from this list once the main baseline contains it.
+ */
+export const OPTIONAL_BASELINE_APPS: readonly ScreenApp[] = ["ShuttlePub"];
 export type DataState = "populated" | "empty";
 
 const routes = [
@@ -20,6 +29,10 @@ const routes = [
   { app: "Emumet", id: "account-detail-edit", path: "/accounts/acc_01", authenticated: true, data: "populated" },
   { app: "Emumet", id: "settings", path: "/settings", authenticated: true, data: "populated" },
   { app: "Emumet", id: "not-found", path: "/visual-route-not-found", authenticated: true, data: "populated" },
+  // ShuttlePub F0 foundation: the plain placeholder only. This registers the capture
+  // route and proves SSR + hydration at both widths; it does not fix any screen layout.
+  { app: "ShuttlePub", id: "home", path: "/", authenticated: false, data: "populated" },
+  { app: "ShuttlePub", id: "not-found", path: "/visual-route-not-found", authenticated: false, data: "populated" },
 ] as const satisfies readonly {
   app: ScreenApp; id: string; path: string; authenticated: boolean; data: DataState;
 }[];

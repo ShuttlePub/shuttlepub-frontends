@@ -1,0 +1,38 @@
+# GraphQL SDL owned by apps/shuttlepub-web (the BFF data API for the PureScript client).
+#
+# This file is HAND-WRITTEN and is the single source of truth for the app's data API.
+# PureScript types in src/Generated/ are generated from it (bun run codegen).
+#
+# The REST contract with the ShuttlePub backend is a separate, pinned artifact:
+# openapi/shuttlepub.json. Resolvers reach it only through the typed adapter in
+# bff/rest/. A backend answer of 501 (not implemented) is surfaced as an error with
+# extensions.code = NOT_IMPLEMENTED; it is never converted into data.
+
+"""Which data source the BFF was started with. Fixed at startup; never switches at runtime."""
+enum ApiMode {
+  MOCK
+  REAL
+}
+
+"""Maps GET /api/v1/status (operation getApiStatus)."""
+type ApiStatus {
+  apiVersion: String!
+}
+
+"""A Profile the viewer can act as."""
+type Profile {
+  id: ID!
+  handle: String!
+  displayName: String!
+}
+
+"""The Profile the viewer is currently acting as. Null when there is none."""
+type ProfileContext {
+  activeProfile: Profile
+}
+
+type Query {
+  apiMode: ApiMode!
+  apiStatus: ApiStatus!
+  profileContext: ProfileContext!
+}

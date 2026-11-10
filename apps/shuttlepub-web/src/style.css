@@ -1,0 +1,3 @@
+@import "@shuttlepub/styles";
+@source "./**/*.purs";
+@source "../../../packages/ui/src/**/*.purs";
