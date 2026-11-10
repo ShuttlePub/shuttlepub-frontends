@@ -15,7 +15,7 @@ import Type.Proxy as Type.Proxy
 type Schema =
   { directives :: Type.Proxy.Proxy Directives
   , query :: Query
-  , mutation :: Data.Void.Void
+  , mutation :: Mutation
   , subscription :: Data.Void.Void
   }
 
@@ -26,11 +26,21 @@ type Id =
 newtype Query = Query
   { apiMode :: {} -> AsGql "ApiMode" ApiMode
   , apiStatus :: {} -> AsGql "ApiStatus" ApiStatus
+  , availableProfiles :: {} -> Array (AsGql "Profile" Profile)
   , profileContext :: {} -> AsGql "ProfileContext" ProfileContext
   }
 
 derive instance Data.Newtype.Newtype Query _
--- | A Profile the viewer can act as.
+newtype Mutation = Mutation
+  { selectProfile ::
+      { id :: NotNull (AsGql "ID" GraphQL.Client.ID.ID) }
+      ->
+      -- | Select an identity from the current viewer's owned Emumet accounts (integrated Profile API).
+      AsGql "ProfileContext" ProfileContext
+  }
+
+derive instance Data.Newtype.Newtype Mutation _
+-- | An owned Emumet integrated Account/Profile. id is its public Account nanoid; the current API does not expose an internal Profile id.
 newtype Profile = Profile
   { displayName :: {} -> AsGql "String" String
   , handle :: {} -> AsGql "String" String

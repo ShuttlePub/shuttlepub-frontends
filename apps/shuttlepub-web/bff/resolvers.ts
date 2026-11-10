@@ -1,4 +1,5 @@
 import { GraphQLError } from "graphql";
+import { AuthError } from "./auth-error.ts";
 import type { ProfileContextSource } from "./profile.ts";
 import { ShuttlePubApiError, type ShuttlePubApi, type ShuttlePubApiErrorKind } from "./rest/client.ts";
 
@@ -19,6 +20,7 @@ export const ERROR_CODES: Record<ShuttlePubApiErrorKind, string> = {
  * originalError is intentionally not attached: Yoga masks errors that wrap a non-GraphQL error.
  */
 export function toGraphQLError(error: unknown): unknown {
+  if (error instanceof AuthError) return new GraphQLError(error.code, { extensions: { code: error.code } });
   if (!(error instanceof ShuttlePubApiError)) return error;
   return new GraphQLError(error.message, {
     extensions: {
@@ -37,7 +39,13 @@ async function guarded<T>(work: () => Promise<T>): Promise<T> {
 }
 
 export const resolvers = {
+  Mutation: {
+    selectProfile: (_root: unknown, args: { id: string }, context: GraphQLContext) =>
+      guarded(() => context.profiles.selectProfile(args.id)),
+  },
   Query: {
+    availableProfiles: (_root: unknown, _args: unknown, context: GraphQLContext) =>
+      guarded(() => context.profiles.availableProfiles()),
     apiMode: (_root: unknown, _args: unknown, context: GraphQLContext) => context.api.mode.toUpperCase(),
     apiStatus: (_root: unknown, _args: unknown, context: GraphQLContext) =>
       guarded(async () => {

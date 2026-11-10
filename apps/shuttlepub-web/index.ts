@@ -12,6 +12,8 @@ import { join } from "node:path";
 import { createApp } from "./bff/app.ts";
 import { ConfigError, loadConfig } from "./bff/config.ts";
 import { createSsrRenderer } from "./bff/ssr.ts";
+import { loadAuthConfig } from "./bff/auth-config.ts";
+import { privateResponse } from "./bff/auth.ts";
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -25,7 +27,7 @@ try {
   }
   throw error;
 }
-const app = createApp(config);
+const app = createApp(config, config.mode === "real" ? { auth: loadAuthConfig() } : {});
 
 const staticFiles: Record<string, { path: string; contentType: string }> = {
   "/app.js": { path: "dist/app.js", contentType: "application/javascript" },
@@ -64,9 +66,13 @@ Bun.serve({
     const staticResponse = serveStatic(url.pathname);
     if (staticResponse) return staticResponse;
 
+    if (url.pathname.startsWith("/auth/")) {
+      return app.auth ? app.auth.handle(req) : new Response(null, { status: 404 });
+    }
     if (url.pathname === "/graphql") return app.handleGraphql(req);
 
-    return serveSSR(url);
+    const response = await serveSSR(url);
+    return config.mode === "real" ? privateResponse(response) : response;
   },
 });
 

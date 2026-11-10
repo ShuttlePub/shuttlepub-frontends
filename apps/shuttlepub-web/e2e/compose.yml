@@ -1,0 +1,145 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: e2e
+      POSTGRES_PASSWORD: e2e-only
+      POSTGRES_DB: emumet
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/real.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U e2e -d emumet"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  hydra-migrate:
+    image: oryd/hydra:v2.3.0
+    environment:
+      DSN: postgres://e2e:e2e-only@postgres:5432/hydra?sslmode=disable
+    command: migrate sql -e --yes
+    depends_on:
+      postgres:
+        condition: service_healthy
+  hydra:
+    image: oryd/hydra:v2.3.0
+    environment:
+      DSN: postgres://e2e:e2e-only@postgres:5432/hydra?sslmode=disable
+      SECRETS_SYSTEM: ${REAL_E2E_SECRET:?run scripts/e2e-real.sh}
+    volumes:
+      - ./hydra.yml:/config/hydra.yml:ro
+    command: serve all -c /config/hydra.yml --dev
+    ports:
+      - "127.0.0.1:4544:4544"
+      - "127.0.0.1:3231:3231"
+    depends_on:
+      hydra-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4544/health/ready"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  kratos-migrate:
+    image: oryd/kratos:v1.3.1
+    environment:
+      DSN: postgres://e2e:e2e-only@postgres:5432/kratos?sslmode=disable
+    command: migrate sql -e --yes
+    depends_on:
+      postgres:
+        condition: service_healthy
+  kratos:
+    image: oryd/kratos:v1.3.1
+    environment:
+      DSN: postgres://e2e:e2e-only@postgres:5432/kratos?sslmode=disable
+      SECRETS_COOKIE: ${REAL_E2E_SECRET}
+    volumes:
+      - ./kratos.yml:/config/kratos.yml:ro
+      - ../../booskiff-web/e2e/real/identity.schema.json:/config/identity.schema.json:ro
+    command: serve -c /config/kratos.yml --dev
+    depends_on:
+      kratos-migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4433/health/ready"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  seed:
+    image: oryd/kratos:v1.3.1
+    volumes:
+      - ../../booskiff-web/e2e/real/seed-users.json:/config/seed-users.json:ro
+    command: import identities /config/seed-users.json -e http://kratos:4434
+    depends_on:
+      kratos:
+        condition: service_healthy
+  client:
+    image: oryd/hydra:v2.3.0
+    command: ["create", "oauth2-client", "--endpoint", "http://hydra:4445", "--id", "shuttlepub-bff", "--secret", "${REAL_E2E_SECRET}", "--grant-type", "authorization_code,refresh_token", "--response-type", "code", "--scope", "openid,profile,email,offline_access", "--audience", "account", "--redirect-uri", "http://127.0.0.1:3231/auth/callback", "--token-endpoint-auth-method", "client_secret_basic"]
+    depends_on:
+      hydra:
+        condition: service_healthy
+  provider:
+    build:
+      context: ../../..
+      dockerfile: apps/booskiff-web/e2e/real/Provider.Containerfile
+    environment:
+      PROVIDER_ORIGIN: http://127.0.0.1:3232
+    ports:
+      - "127.0.0.1:3232:3232"
+    depends_on:
+      kratos:
+        condition: service_healthy
+      hydra:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:3232/health').then(r => process.exit(r.ok ? 0 : 1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  emumet:
+    image: ${EMUMET_E2E_IMAGE:?run scripts/e2e-real.sh}
+    network_mode: service:hydra
+    environment:
+      DATABASE_URL: postgres://e2e:e2e-only@postgres:5432/emumet
+      HYDRA_ISSUER_URL: http://127.0.0.1:4544
+      HYDRA_ADMIN_URL: http://127.0.0.1:4445
+      KRATOS_PUBLIC_URL: http://kratos:4433
+      EXPECTED_AUDIENCE: account
+    depends_on:
+      hydra:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "test $$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/api/v1/accounts) = 401"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  web:
+    build:
+      context: ../../..
+      dockerfile: apps/shuttlepub-web/e2e/Web.Containerfile
+    network_mode: service:hydra
+    environment:
+      PORT: "3231"
+      APP_ORIGIN: http://127.0.0.1:3231
+      SHUTTLEPUB_API_MODE: real
+      SHUTTLEPUB_API_URL: http://127.0.0.1:8099
+      EMUMET_API_URL: http://127.0.0.1:8080
+      KRATOS_PUBLIC_URL: http://kratos:4433
+      HYDRA_PUBLIC_URL: http://127.0.0.1:4544
+      HYDRA_CLIENT_ID: shuttlepub-bff
+      HYDRA_CLIENT_SECRET: ${REAL_E2E_SECRET}
+      SHUTTLEPUB_COOKIE_SECRET_BASE64: ${REAL_E2E_COOKIE_SECRET}
+    depends_on:
+      emumet:
+        condition: service_healthy
+      provider:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+      client:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:3231/').then(r => process.exit(r.ok ? 0 : 1))"]
+      interval: 2s
+      timeout: 3s
+      retries: 30

@@ -13,7 +13,7 @@ async function run(app: App, query: string): Promise<GraphQLResponse> {
   const response = await app.handleGraphql(
     new Request("http://app.test/graphql", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", Origin: "http://app.test" },
       body: JSON.stringify({ query }),
     }),
   );
@@ -82,10 +82,10 @@ describe("real mode", () => {
     expect(down.errors![0]!.extensions).toMatchObject({ code: "UPSTREAM_UNAVAILABLE" });
   });
 
-  test("profile context is not implemented in real mode (no invented profile)", async () => {
+  test("profile context fails closed without authentication (no invented profile)", async () => {
     const app = createApp(loadConfig({ SHUTTLEPUB_API_MODE: "real", SHUTTLEPUB_API_URL: "http://127.0.0.1:1" }));
     const result = await run(app, "{ profileContext { activeProfile { id } } }");
     expect(result.data).toBeNull();
-    expect(result.errors![0]!.extensions).toMatchObject({ code: "NOT_IMPLEMENTED" });
+    expect(result.errors![0]!.extensions).toMatchObject({ code: "UNAUTHENTICATED" });
   });
 });

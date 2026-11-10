@@ -1,0 +1,17 @@
+serve:
+  public:
+    port: 4544
+  admin:
+    port: 4445
+urls:
+  self:
+    issuer: http://127.0.0.1:4544
+  login: http://127.0.0.1:3232/login
+  consent: http://127.0.0.1:3232/consent
+strategies:
+  access_token: jwt
+oidc:
+  subject_identifiers:
+    supported_types: [public]
+log:
+  level: info

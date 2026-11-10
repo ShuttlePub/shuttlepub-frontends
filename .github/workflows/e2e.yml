@@ -5,12 +5,64 @@ on:
   pull_request:
     paths:
       - apps/booskiff-web/**
+      - apps/shuttlepub-web/**
+      - packages/auth-core/**
+      - packages/auth-bun/**
+      - bun.lock
       - .github/workflows/e2e.yml
 
 permissions:
   contents: read
 
 jobs:
+  shuttlepub-real-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      EMUMET_AVAILABLE: ${{ secrets.EMUMET_READ_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          persist-credentials: false
+      - name: Skip when Emumet checkout token is unavailable
+        if: env.EMUMET_AVAILABLE != 'true'
+        run: echo "SKIPPED - EMUMET_READ_TOKEN not configured; run apps/shuttlepub-web/scripts/e2e-real.sh locally"
+      - name: Read pinned Emumet revision
+        if: env.EMUMET_AVAILABLE == 'true'
+        id: emumet
+        run: |
+          revision="$(<apps/shuttlepub-web/e2e/emumet-revision)"
+          [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
+      - name: Checkout real Emumet API
+        if: env.EMUMET_AVAILABLE == 'true'
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          repository: ShuttlePub/Emumet
+          ref: ${{ steps.emumet.outputs.revision }}
+          path: Emumet-checkout
+          token: ${{ secrets.EMUMET_READ_TOKEN }}
+          persist-credentials: false
+      - if: env.EMUMET_AVAILABLE == 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: latest
+      - if: env.EMUMET_AVAILABLE == 'true'
+        run: bun install --frozen-lockfile --ignore-scripts
+      - if: env.EMUMET_AVAILABLE == 'true'
+        run: bunx playwright install --with-deps chromium
+        working-directory: apps/shuttlepub-web
+      - name: Real Kratos/Hydra login, Emumet read and logout
+        if: env.EMUMET_AVAILABLE == 'true'
+        run: EMUMET_CORE_DIR="$GITHUB_WORKSPACE/Emumet-checkout" bash scripts/e2e-real.sh
+        working-directory: apps/shuttlepub-web
+      - name: Upload Playwright report
+        if: failure() && env.EMUMET_AVAILABLE == 'true'
+        uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
+        with:
+          name: shuttlepub-web-real-playwright-report
+          path: apps/shuttlepub-web/e2e/playwright-report/
+          if-no-files-found: ignore
   e2e:
     runs-on: ubuntu-latest
     strategy:

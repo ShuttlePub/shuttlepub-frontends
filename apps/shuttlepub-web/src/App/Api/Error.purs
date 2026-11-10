@@ -13,7 +13,10 @@ import Data.Show.Generic (genericShow)
 -- | Why a data request failed. Every constructor is shown to the viewer as an
 -- | error; none of them is ever turned into data (no silent fallback to mock).
 data ApiError
-  = NotImplemented String
+  = Unauthenticated String
+  | Forbidden String
+  | ProfileUnavailable String
+  | NotImplemented String
   | UpstreamError String
   | Unavailable String
   | InvalidResponse String
@@ -35,6 +38,9 @@ instance DecodeJson ApiError where
 -- | Maps the BFF's GraphQL `extensions.code` (bff/resolvers.ts ERROR_CODES).
 fromGqlCode :: Maybe String -> String -> ApiError
 fromGqlCode code message = case code of
+  Just "UNAUTHENTICATED" -> Unauthenticated message
+  Just "FORBIDDEN" -> Forbidden message
+  Just "PROFILE_UNAVAILABLE" -> ProfileUnavailable message
   Just "NOT_IMPLEMENTED" -> NotImplemented message
   Just "UPSTREAM_ERROR" -> UpstreamError message
   Just "UPSTREAM_UNAVAILABLE" -> Unavailable message
@@ -43,6 +49,9 @@ fromGqlCode code message = case code of
 
 describe :: ApiError -> String
 describe = case _ of
+  Unauthenticated _ -> "Login required"
+  Forbidden _ -> "Access denied"
+  ProfileUnavailable _ -> "Selected profile is no longer available"
   NotImplemented message -> "Not implemented: " <> message
   UpstreamError message -> "Backend error: " <> message
   Unavailable message -> "Backend unavailable: " <> message
@@ -53,6 +62,9 @@ describe = case _ of
 -- | Stable machine-readable tag for tests and styling hooks.
 tag :: ApiError -> String
 tag = case _ of
+  Unauthenticated _ -> "unauthenticated"
+  Forbidden _ -> "forbidden"
+  ProfileUnavailable _ -> "profile_unavailable"
   NotImplemented _ -> "not_implemented"
   UpstreamError _ -> "upstream_error"
   Unavailable _ -> "unavailable"

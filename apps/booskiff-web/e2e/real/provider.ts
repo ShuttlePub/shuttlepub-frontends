@@ -16,7 +16,7 @@ const decisionSchema = z.object({
   decision: z.enum(["allow", "deny"]),
 });
 const admin = "http://hydra:4445/admin/oauth2/auth/requests";
-const origin = "http://127.0.0.1:3212";
+const origin = process.env.PROVIDER_ORIGIN ?? "http://127.0.0.1:3212";
 
 class ProviderResponseError extends Error {
   constructor(readonly status: number) {
@@ -41,7 +41,7 @@ async function decide(url: string, body: unknown): Promise<Response> {
 
 // Test-only relying-party bridge: credentials and tokens are owned by Kratos/Hydra.
 Bun.serve({
-  port: 3212,
+  port: Number(new URL(origin).port),
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === "/health") return new Response("ok");
