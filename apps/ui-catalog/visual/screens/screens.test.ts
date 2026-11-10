@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { createBooskiffClient } from "../../../booskiff-web/bff/booskiff/real.ts";
 import { startBooskiffStub } from "./booskiff-stub.ts";
-import { FIXED_TIME, OPTIONAL_BASELINE_APPS, SCREEN_CASES } from "./cases.ts";
+import { FIXED_TIME, SCREEN_CASES } from "./cases.ts";
 import { AVATAR_SVG, BANNER_SVG, BILLING, FILES, FOLDERS, localImage } from "./fixtures.ts";
 import { appExists, stopChild } from "./servers.ts";
 
@@ -35,10 +35,9 @@ test("ShuttlePub placeholder cases register both routes at both widths and need 
     "ShuttlePub-not-found-desktop.png", "ShuttlePub-not-found-mobile.png",
   ]);
   expect(cases.every((item) => !item.authenticated)).toBe(true);
-  expect(OPTIONAL_BASELINE_APPS).toEqual(["ShuttlePub"]);
 });
 
-test("a baseline checkout that predates ShuttlePub is detected as missing the app, not as an empty app", async () => {
+test("app availability distinguishes a missing app directory from an existing app", async () => {
   // Given
   const scratch = await mkdtemp(resolve(tmpdir(), "visual-baseline-test-"));
   try {

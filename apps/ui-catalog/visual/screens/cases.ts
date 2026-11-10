@@ -4,14 +4,6 @@ export const MOCK_PASSWORD = "password";
 
 export type ScreenApp = "Booskiff" | "Emumet" | "ShuttlePub";
 
-/**
- * Apps whose directory may be absent from FRONTEND_ROOT. The current driver captures
- * both revisions, so the main baseline that predates an app lacks it: its cases are
- * then reported as added coverage (new images) instead of failing the baseline
- * capture. Every other app must exist; a missing build still fails for all of them.
- * Remove an app from this list once the main baseline contains it.
- */
-export const OPTIONAL_BASELINE_APPS: readonly ScreenApp[] = ["ShuttlePub"];
 export type DataState = "populated" | "empty";
 
 const routes = [
