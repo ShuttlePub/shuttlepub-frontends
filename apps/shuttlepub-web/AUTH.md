@@ -61,6 +61,8 @@ Emumet/IdP の設定をこのアプリが書き換えることはありません
 
 全 POST（GraphQL query も含む）は設定済み `APP_ORIGIN` との **Origin 完全一致**が必須。
 欠落・`null`・異なる Origin を Referer で救済しません。GraphQL GET mutation は405。
+GraphQL の CORS は無効です（同一 origin のブラウザ専用）。Yoga の既定の Origin 反射/
+credentials 許可を使って、別 origin から cookie 付き GET query を読み出すことはできません。
 return URL は相対 `/...` のみで、絶対 URL・`//`・backslash・encoded slash・制御文字等は `/` に戻します。
 認証/GraphQL/real SSR は `Cache-Control: no-store`、`Referrer-Policy: no-referrer`。
 上流のエラー本文・token・credentials はレスポンスや診断へ反射しません。

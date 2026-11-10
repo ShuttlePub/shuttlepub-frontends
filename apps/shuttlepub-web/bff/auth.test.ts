@@ -154,6 +154,9 @@ describe("OIDC BFF security boundary", () => {
     const response = await app.handleGraphql(req("/graphql", { method: "POST", headers: { "Content-Type": "application/json", Origin: "https://evil.example" }, body: JSON.stringify({ query: 'mutation { selectProfile(id: "other") { activeProfile { id } } }' }) }));
     expect(response.status).toBe(403);
     expect((await app.handleGraphql(req('/graphql?query=' + encodeURIComponent('mutation { selectProfile(id: "other") { activeProfile { id } } }')))).status).toBe(405);
+    const crossOriginRead = await app.handleGraphql(req("/graphql?query=%7BapiMode%7D", { headers: { Origin: "https://evil.example" } }));
+    expect(crossOriginRead.headers.get("access-control-allow-origin")).toBeNull();
+    expect(crossOriginRead.headers.get("access-control-allow-credentials")).toBeNull();
   });
   test("unsolicited callback errors cannot log out an existing viewer or destroy another pending flow", async () => {
     const f = await fixture();

@@ -9,6 +9,9 @@ export function createGraphqlHandler(context: GraphQLContext): (request: Request
     graphqlEndpoint: "/graphql",
     graphiql: false,
     landingPage: false,
+    // The browser uses this BFF same-origin only; Yoga otherwise reflects arbitrary
+    // origins with credentials, which could expose GET queries to sibling sites.
+    cors: false,
     context: () => context,
   });
   return async (request) => await yoga.fetch(request);
