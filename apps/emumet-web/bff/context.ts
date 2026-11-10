@@ -3,6 +3,7 @@
 // アダプタと EmumetClient ファクトリは index.ts から DI される。
 // ============================================================
 
+import { GraphQLError } from "graphql";
 import type { SessionAdapter } from "@shuttlepub/auth-bun";
 import type { EmumetClient } from "./emumet/client.ts";
 import { emptyLoaders, makeLoaders as createLoaders, type Loaders } from "./loaders.ts";
@@ -22,6 +23,14 @@ export type ContextDeps = {
   /** 認証済みリクエストでのみ呼ばれる。Real: token から Real client、Mock: プロセス共有の Mock client を返す */
   readonly createEmumetClient: (accessToken: string) => EmumetClient;
 };
+
+/** リゾルバ入口の認証ガード。未認証 (emumet 非注入) なら UNAUTHENTICATED を投げる */
+export function requireEmumet(context: GraphQLContext): EmumetClient {
+  if (!context.emumet) {
+    throw new GraphQLError("Unauthenticated", { extensions: { code: "UNAUTHENTICATED" } });
+  }
+  return context.emumet;
+}
 
 export async function buildContext(req: Request, deps: ContextDeps): Promise<GraphQLContext> {
   const session = await deps.adapter.getSession(req);

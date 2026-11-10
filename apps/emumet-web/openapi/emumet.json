@@ -1,0 +1,4343 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Emumet Account Service API",
+    "description": "Account Service for ShuttlePub",
+    "contact": {
+      "name": "turtton"
+    },
+    "license": {
+      "name": "AGPL-3.0",
+      "url": "https://www.gnu.org/licenses/agpl-3.0.html"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/.well-known/webfinger": {
+      "get": {
+        "tags": [
+          "ActivityPub"
+        ],
+        "description": "WebFinger account discovery for ActivityPub.",
+        "operationId": "webfinger",
+        "parameters": [
+          {
+            "name": "resource",
+            "in": "query",
+            "description": "Resource URI (acct:user@domain)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "WebFinger response",
+            "content": {
+              "application/jrd+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebFingerResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid resource format"
+          },
+          "404": {
+            "description": "Account not found"
+          }
+        }
+      }
+    },
+    "/ap/accounts/{account_id}": {
+      "get": {
+        "tags": [
+          "ActivityPub"
+        ],
+        "description": "Retrieve an ActivityPub Actor document for a local account.",
+        "operationId": "get_actor",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ActivityPub Actor",
+            "content": {
+              "application/activity+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Actor"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Actor not found"
+          }
+        }
+      }
+    },
+    "/ap/accounts/{account_id}/followers": {
+      "get": {
+        "tags": [
+          "ActivityPub"
+        ],
+        "description": "Retrieve an ActivityPub followers OrderedCollection for a local account.",
+        "operationId": "get_followers",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Followers collection",
+            "content": {
+              "application/activity+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderedCollection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid account ID"
+          },
+          "404": {
+            "description": "Account not found"
+          }
+        }
+      }
+    },
+    "/ap/accounts/{account_id}/following": {
+      "get": {
+        "tags": [
+          "ActivityPub"
+        ],
+        "description": "Retrieve an ActivityPub following OrderedCollection for a local account.",
+        "operationId": "get_following",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Following collection",
+            "content": {
+              "application/activity+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderedCollection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid account ID"
+          },
+          "404": {
+            "description": "Account not found"
+          }
+        }
+      }
+    },
+    "/ap/accounts/{account_id}/inbox": {
+      "post": {
+        "tags": [
+          "ActivityPub"
+        ],
+        "description": "ActivityPub inbox for signed inbound federation activities.",
+        "operationId": "post_inbox",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/activity+json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Activity accepted or ignored"
+          },
+          "400": {
+            "description": "Malformed ActivityPub activity"
+          },
+          "401": {
+            "description": "Missing or invalid HTTP Signature"
+          },
+          "404": {
+            "description": "Local actor not found"
+          }
+        }
+      }
+    },
+    "/ap/accounts/{account_id}/outbox": {
+      "get": {
+        "tags": [
+          "ActivityPub"
+        ],
+        "description": "Retrieve an ActivityPub outbox OrderedCollection for a local account.",
+        "operationId": "get_outbox",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of activities to return",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Return activities with IDs older than this cursor",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Outbox collection",
+            "content": {
+              "application/activity+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrderedCollection"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid account ID or pagination parameter"
+          },
+          "404": {
+            "description": "Account not found"
+          }
+        }
+      }
+    },
+    "/api/v1/accounts": {
+      "get": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Retrieve accounts by IDs or with cursor-based pagination.",
+        "operationId": "get_accounts",
+        "parameters": [
+          {
+            "name": "ids",
+            "in": "query",
+            "description": "Comma-separated account IDs",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Pagination limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Pagination cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "description": "Pagination direction (asc/desc)",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of accounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountsResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request parameters"
+          },
+          "404": {
+            "description": "No accounts found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Create a new account with a generated signing key pair.",
+        "operationId": "create_account",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Account created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/accounts/{account_id}": {
+      "get": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Retrieve one integrated account resource.",
+        "operationId": "get_account_by_id",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Integrated account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Account not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Deactivate an account and cascade-delete related resources.",
+        "operationId": "deactivate_account_by_id",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Account deactivated"
+          },
+          "400": {
+            "description": "Invalid request"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "patch": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Update account properties.",
+        "operationId": "update_account_by_id",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Account updated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/accounts/{account_id}/block": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Block a local or remote account. Also removes any follow relationships between the two accounts in both directions.",
+        "operationId": "block_account",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Local account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlockAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Account blocked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "404": {
+            "description": "Account not found"
+          },
+          "422": {
+            "description": "Cannot block (self-block or already blocked)"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/accounts/{account_id}/blocks": {
+      "get": {
+        "tags": [
+          "Account"
+        ],
+        "description": "List accounts blocked by the given account.",
+        "operationId": "get_blocks",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Local account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Blocked accounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelationListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "404": {
+            "description": "Account not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/accounts/{account_id}/follow": {
+      "post": {
+        "tags": [
+          "ActivityPub"
+        ],
+        "description": "Follow a remote ActivityPub account.",
+        "operationId": "follow_account",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Local account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FollowAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Follow initiated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FollowAccountResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "404": {
+            "description": "Account not found"
+          },
+          "409": {
+            "description": "Already following"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/accounts/{account_id}/followers": {
+      "get": {
+        "tags": [
+          "Account"
+        ],
+        "description": "List approved followers of the given account.",
+        "operationId": "get_followers",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Local account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Approved followers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelationListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "404": {
+            "description": "Account not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/accounts/{account_id}/following": {
+      "get": {
+        "tags": [
+          "Account"
+        ],
+        "description": "List approved accounts followed by the given account.",
+        "operationId": "get_following",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Local account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Approved following accounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelationListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "404": {
+            "description": "Account not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/accounts/{account_id}/mute": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Mute a local or remote account.",
+        "operationId": "mute_account",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Local account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MuteAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Account muted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "404": {
+            "description": "Account not found"
+          },
+          "422": {
+            "description": "Cannot mute (self-mute or already muted)"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/accounts/{account_id}/mutes": {
+      "get": {
+        "tags": [
+          "Account"
+        ],
+        "description": "List accounts muted by the given account.",
+        "operationId": "get_mutes",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Local account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Muted accounts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelationListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "404": {
+            "description": "Account not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/accounts/{account_id}/reactivate": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Reactivate a deactivated account owned by the authenticated principal.",
+        "operationId": "reactivate_account_by_id",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Account reactivated"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "403": {
+            "description": "Account is not linked to the authenticated principal"
+          },
+          "404": {
+            "description": "Account not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/accounts/{account_id}/unblock": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Remove a block on a local or remote account.",
+        "operationId": "unblock_account",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Local account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlockAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Block removed"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "404": {
+            "description": "Account or block relationship not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/accounts/{account_id}/unfollow": {
+      "post": {
+        "tags": [
+          "ActivityPub"
+        ],
+        "description": "Unfollow a remote ActivityPub account by delivering a signed Undo(Follow).",
+        "operationId": "unfollow_account",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Local account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FollowAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Follow removed"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "403": {
+            "description": "Insufficient permission"
+          },
+          "404": {
+            "description": "Account or follow relationship not found"
+          },
+          "422": {
+            "description": "Undo delivery failed"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/accounts/{account_id}/unmute": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Remove a mute on a local or remote account.",
+        "operationId": "unmute_account",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Local account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MuteAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Mute removed"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "404": {
+            "description": "Account or mute relationship not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/accounts/{account_id}/ban": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Permanently ban an account.",
+        "operationId": "ban_account_by_id",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BanAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Account banned"
+          },
+          "400": {
+            "description": "Invalid request"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/accounts/{account_id}/roles/{role}": {
+      "put": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Assign an instance role (admin or moderator) to the owner of an account.",
+        "operationId": "assign_instance_role",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "role",
+            "in": "path",
+            "description": "Instance role: admin or moderator",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Instance role assigned"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Account not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Revoke an instance role (admin or moderator) from the owner of an account. Admins cannot revoke their own admin role.",
+        "operationId": "revoke_instance_role",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "role",
+            "in": "path",
+            "description": "Instance role: admin or moderator",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Instance role revoked"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Account not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/accounts/{account_id}/suspend": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Suspend an account with a reason and optional expiry.",
+        "operationId": "suspend_account_by_id",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SuspendAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Account suspended"
+          },
+          "400": {
+            "description": "Invalid request"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/accounts/{account_id}/unban": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Remove ban from an account.",
+        "operationId": "unban_account_by_id",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Account unbanned"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Account not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/accounts/{account_id}/unsuspend": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Remove suspension from an account.",
+        "operationId": "unsuspend_account_by_id",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Account unsuspended"
+          },
+          "400": {
+            "description": "Invalid request"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/accounts/{account_id}/warnings": {
+      "get": {
+        "tags": [
+          "Account"
+        ],
+        "description": "List warnings issued to an account.",
+        "operationId": "list_account_warnings",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Warning history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AccountWarningResponse"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Account not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Issue a warning to an account.",
+        "operationId": "warn_account_by_id",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "description": "Account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WarnAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Warning issued"
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Account not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/registration-gate": {
+      "get": {
+        "tags": [
+          "RegistrationGate"
+        ],
+        "description": "Get the registration gate state. `override.active` is true while the override is in effect so the admin UI can keep showing the warning on every page. NOTE: E15a is the control plane only. Until the Kratos enforcement unit (E15d) is connected, opening, closing or overriding the gate does NOT block or allow real Kratos registrations; real registration is not protected yet.",
+        "operationId": "get_registration_gate",
+        "responses": {
+          "200": {
+            "description": "Registration gate state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationGateResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/registration-gate/close": {
+      "post": {
+        "tags": [
+          "RegistrationGate"
+        ],
+        "description": "Manually close the registration gate. The closure is never lifted automatically. NOTE: E15a is the control plane only. Until the Kratos enforcement unit (E15d) is connected, opening, closing or overriding the gate does NOT block or allow real Kratos registrations; real registration is not protected yet.",
+        "operationId": "close_registration_gate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistrationGateRevisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Gate closed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationGateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "409": {
+            "description": "Revision conflict"
+          },
+          "422": {
+            "description": "Already closed"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/registration-gate/notifications": {
+      "get": {
+        "tags": [
+          "RegistrationGate"
+        ],
+        "description": "List registration gate notification events (newest first) with the caller's own read state.",
+        "operationId": "list_registration_gate_notifications",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "path",
+            "description": "1〜100 (既定 50)。",
+            "required": true,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "before",
+            "in": "path",
+            "description": "前ページ最後の通知イベント ID。これより古いものを返す。",
+            "required": true,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Notification events",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationGateNotificationListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/registration-gate/notifications/read": {
+      "post": {
+        "tags": [
+          "RegistrationGate"
+        ],
+        "description": "Mark the given notification events as read for the calling admin only. Other admins' read state is unaffected.",
+        "operationId": "mark_registration_gate_notifications_read",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarkNotificationsReadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Unread count after marking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnreadCountResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/registration-gate/notifications/read-all": {
+      "post": {
+        "tags": [
+          "RegistrationGate"
+        ],
+        "description": "Mark every notification event as read for the calling admin only.",
+        "operationId": "mark_all_registration_gate_notifications_read",
+        "responses": {
+          "200": {
+            "description": "Unread count after marking",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnreadCountResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/registration-gate/notifications/unread-count": {
+      "get": {
+        "tags": [
+          "RegistrationGate"
+        ],
+        "description": "Unread notification count for the calling admin only.",
+        "operationId": "unread_registration_gate_notifications",
+        "responses": {
+          "200": {
+            "description": "Unread count",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UnreadCountResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/registration-gate/open": {
+      "post": {
+        "tags": [
+          "RegistrationGate"
+        ],
+        "description": "Open (or manually resume after a config-loss stop) the registration gate. Succeeds only when at least one protection (email or bot) is verified; clears the stop latch. NOTE: E15a is the control plane only. Until the Kratos enforcement unit (E15d) is connected, opening, closing or overriding the gate does NOT block or allow real Kratos registrations; real registration is not protected yet.",
+        "operationId": "open_registration_gate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistrationGateRevisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Gate opened",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationGateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "409": {
+            "description": "Revision conflict"
+          },
+          "422": {
+            "description": "Minimum protection condition not met, or already open"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/registration-gate/override": {
+      "post": {
+        "tags": [
+          "RegistrationGate"
+        ],
+        "description": "Open the registration gate with override: allowed even without a verified protection, but only after the warning is explicitly acknowledged. Stays in effect until explicitly revoked; automatic stop and outage rejection are not applied while it is active (verified protections are still enforced). NOTE: E15a is the control plane only. Until the Kratos enforcement unit (E15d) is connected, opening, closing or overriding the gate does NOT block or allow real Kratos registrations; real registration is not protected yet.",
+        "operationId": "enable_registration_gate_override",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EnableOverrideRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Override enabled and gate opened",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationGateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or warning not acknowledged"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "409": {
+            "description": "Revision conflict"
+          },
+          "422": {
+            "description": "Override already active"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/registration-gate/override/revoke": {
+      "post": {
+        "tags": [
+          "RegistrationGate"
+        ],
+        "description": "Revoke the override and return to normal judgement, re-evaluated against the current observation. Never closes the gate by itself. NOTE: E15a is the control plane only. Until the Kratos enforcement unit (E15d) is connected, opening, closing or overriding the gate does NOT block or allow real Kratos registrations; real registration is not protected yet.",
+        "operationId": "revoke_registration_gate_override",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistrationGateRevisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Override revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationGateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "409": {
+            "description": "Revision conflict"
+          },
+          "422": {
+            "description": "Override is not active"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/reports": {
+      "get": {
+        "tags": [
+          "Report"
+        ],
+        "description": "List open account reports for the moderator queue.",
+        "operationId": "list_reports",
+        "responses": {
+          "200": {
+            "description": "Open reports",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountReportListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/reports/{id}/dismiss": {
+      "post": {
+        "tags": [
+          "Report"
+        ],
+        "description": "Dismiss an open account report.",
+        "operationId": "dismiss_report",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account report ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloseReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Report dismissed"
+          },
+          "400": {
+            "description": "Invalid report ID or close reason"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Report not found"
+          },
+          "422": {
+            "description": "Report already closed"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/reports/{id}/resolve": {
+      "post": {
+        "tags": [
+          "Report"
+        ],
+        "description": "Resolve an open account report.",
+        "operationId": "resolve_report",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account report ID",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloseReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Report resolved"
+          },
+          "400": {
+            "description": "Invalid report ID or close reason"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Report not found"
+          },
+          "422": {
+            "description": "Report already closed"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/images": {
+      "post": {
+        "tags": [
+          "Media"
+        ],
+        "description": "Upload an image to Emumet media storage.",
+        "operationId": "upload_image",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "string"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Image uploaded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UploadedImageResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid image upload"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me": {
+      "get": {
+        "tags": [
+          "Me"
+        ],
+        "description": "Retrieve the authenticated account and direct instance roles.",
+        "operationId": "get_me",
+        "responses": {
+          "200": {
+            "description": "Authenticated session",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MeResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "503": {
+            "description": "Instance role service unavailable"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/organizations": {
+      "get": {
+        "tags": [
+          "Organization"
+        ],
+        "operationId": "list_my_organizations",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MyOrganizationsResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/me/session-context": {
+      "get": {
+        "tags": [
+          "Me"
+        ],
+        "operationId": "get_session_context",
+        "parameters": [
+          {
+            "name": "X-Organization-Id",
+            "in": "header",
+            "description": "Organization account nanoid used for this request",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionContextResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated person is not an active organization member"
+          },
+          "404": {
+            "description": "Organization not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/organizations": {
+      "post": {
+        "tags": [
+          "Organization"
+        ],
+        "operationId": "create_organization",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOrganizationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/organizations/{org}/invites": {
+      "post": {
+        "tags": [
+          "Organization"
+        ],
+        "operationId": "invite_member",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InviteMemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "422": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/organizations/{org}/invites/{account_id}/accept": {
+      "post": {
+        "tags": [
+          "Organization"
+        ],
+        "operationId": "accept_invite",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "422": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/organizations/{org}/members": {
+      "get": {
+        "tags": [
+          "Organization"
+        ],
+        "operationId": "list_organization_members",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OrganizationMembersResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/organizations/{org}/members/{account_id}": {
+      "delete": {
+        "tags": [
+          "Organization"
+        ],
+        "operationId": "remove_member",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "422": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/organizations/{org}/members/{account_id}/role": {
+      "put": {
+        "tags": [
+          "Organization"
+        ],
+        "operationId": "change_role",
+        "parameters": [
+          {
+            "name": "org",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeRoleRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "403": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "422": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/profile-transfer-requests/{request_nanoid}/accept": {
+      "post": {
+        "tags": [
+          "ProfileTransfer"
+        ],
+        "description": "Accept a profile transfer request as an organization owner or admin.",
+        "operationId": "accept_profile_transfer_request",
+        "parameters": [
+          {
+            "name": "request_nanoid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Transfer accepted"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Transfer request not found"
+          },
+          "422": {
+            "description": "Request not pending"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/profile-transfer-requests/{request_nanoid}/cancel": {
+      "post": {
+        "tags": [
+          "ProfileTransfer"
+        ],
+        "description": "Cancel a pending profile transfer request as the requester.",
+        "operationId": "cancel_profile_transfer_request",
+        "parameters": [
+          {
+            "name": "request_nanoid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Transfer request cancelled"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Transfer request not found"
+          },
+          "422": {
+            "description": "Request not pending"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/profile-transfer-requests/{request_nanoid}/reject": {
+      "post": {
+        "tags": [
+          "ProfileTransfer"
+        ],
+        "description": "Reject a profile transfer request as an organization owner or admin.",
+        "operationId": "reject_profile_transfer_request",
+        "parameters": [
+          {
+            "name": "request_nanoid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Transfer rejected"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Transfer request not found"
+          },
+          "422": {
+            "description": "Request not pending"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/profiles": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "operationId": "create_profile",
+        "parameters": [
+          {
+            "name": "X-Organization-Id",
+            "in": "header",
+            "description": "Organization account nanoid that owns the profile",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProfileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Authenticated person is not an active organization member"
+          },
+          "404": {
+            "description": "Organization not found"
+          },
+          "422": {
+            "description": "Organization profile already exists"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/profiles/{profile_nanoid}/transfer-requests": {
+      "post": {
+        "tags": [
+          "ProfileTransfer"
+        ],
+        "description": "Request transfer of a personal profile to an organization.",
+        "operationId": "create_profile_transfer_request",
+        "parameters": [
+          {
+            "name": "profile_nanoid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProfileTransferRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Transfer request created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileTransferRequestResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Profile or organization not found"
+          },
+          "422": {
+            "description": "Duplicate pending request"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/reports": {
+      "post": {
+        "tags": [
+          "Report"
+        ],
+        "description": "Create an account moderation report.",
+        "operationId": "create_report",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Report created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountReportResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid report"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "404": {
+            "description": "Target account not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/accounts/{id}/public-key": {
+      "get": {
+        "tags": [
+          "Signing"
+        ],
+        "description": "Retrieve the public key for an account.",
+        "operationId": "get_public_key",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Public key info",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicKeyResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Account or signing key not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/internal/v1/accounts/{id}/sign": {
+      "post": {
+        "tags": [
+          "Signing"
+        ],
+        "description": "Sign an HTTP request using the account's signing key.",
+        "operationId": "sign_request",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Account nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignRequestBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Signed headers",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Insufficient permissions"
+          },
+          "404": {
+            "description": "Account or signing key not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/oauth2/consent": {
+      "get": {
+        "tags": [
+          "OAuth2"
+        ],
+        "description": "Retrieve consent request details or auto-accept if skip is configured.",
+        "operationId": "get_consent",
+        "parameters": [
+          {
+            "name": "consent_challenge",
+            "in": "query",
+            "description": "Hydra consent challenge",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Consent details for user approval",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuth2Response"
+                }
+              }
+            }
+          },
+          "302": {
+            "description": "Redirect (auto-accepted or skipped)"
+          },
+          "502": {
+            "description": "Bad gateway (Hydra error)"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "OAuth2"
+        ],
+        "description": "Submit consent decision (accept or reject).",
+        "operationId": "post_consent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConsentDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "302": {
+            "description": "Redirect after consent decision"
+          },
+          "400": {
+            "description": "Invalid scope requested"
+          },
+          "502": {
+            "description": "Bad gateway (Hydra error)"
+          }
+        }
+      }
+    },
+    "/oauth2/login": {
+      "get": {
+        "tags": [
+          "OAuth2"
+        ],
+        "description": "Handle OAuth2 login flow. Verifies Kratos session and accepts Hydra login.",
+        "operationId": "login",
+        "parameters": [
+          {
+            "name": "login_challenge",
+            "in": "query",
+            "description": "Hydra login challenge",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to Hydra callback"
+          },
+          "502": {
+            "description": "Bad gateway (Hydra/Kratos error)"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AccountField": {
+        "type": "object",
+        "required": [
+          "label",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "AccountReportListResponse": {
+        "type": "object",
+        "required": [
+          "reports",
+          "open_count"
+        ],
+        "properties": {
+          "open_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "reports": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountReportResponse"
+            }
+          }
+        }
+      },
+      "AccountReportResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "nanoid",
+          "target",
+          "reported_by",
+          "category",
+          "status"
+        ],
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "close_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "nanoid": {
+            "type": "string"
+          },
+          "reported_by": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "resolution": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "target": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "AccountResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "is_bot",
+          "fields",
+          "created_at"
+        ],
+        "properties": {
+          "banner_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountField"
+            }
+          },
+          "icon_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "is_bot": {
+            "type": "boolean"
+          },
+          "moderation": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ModerationResponse"
+              }
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AccountWarningResponse": {
+        "type": "object",
+        "required": [
+          "reason",
+          "warned_at"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "warned_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "AccountsResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "first": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountResponse"
+            }
+          },
+          "last": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Actor": {
+        "type": "object",
+        "description": "An ActivityPub Actor representing a local Account.\n\nSerialized as a `Person` type with public key, inbox/outbox URLs,\nand optional profile fields.",
+        "required": [
+          "@context",
+          "id",
+          "type",
+          "preferredUsername",
+          "url",
+          "inbox",
+          "outbox",
+          "followers",
+          "following",
+          "publicKey"
+        ],
+        "properties": {
+          "@context": {
+            "type": "array",
+            "items": {}
+          },
+          "followers": {
+            "type": "string"
+          },
+          "following": {
+            "type": "string"
+          },
+          "icon": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ImageObject"
+              }
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "image": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ImageObject"
+              }
+            ]
+          },
+          "inbox": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outbox": {
+            "type": "string"
+          },
+          "preferredUsername": {
+            "type": "string"
+          },
+          "publicKey": {
+            "$ref": "#/components/schemas/PublicKey"
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "BanAccountRequest": {
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "BlockAccountRequest": {
+        "type": "object",
+        "required": [
+          "target"
+        ],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "Local account nanoid, remote actor URL (e.g. https://remote.example/users/bob) or acct:user@domain"
+          }
+        }
+      },
+      "ChangeRoleRequest": {
+        "type": "object",
+        "required": [
+          "role"
+        ],
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/OrganizationRole"
+          }
+        }
+      },
+      "CloseReportRequest": {
+        "type": "object",
+        "required": [
+          "close_reason"
+        ],
+        "properties": {
+          "close_reason": {
+            "type": "string"
+          },
+          "resolution": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ConsentDecision": {
+        "type": "object",
+        "required": [
+          "consent_challenge",
+          "accept"
+        ],
+        "properties": {
+          "accept": {
+            "type": "boolean"
+          },
+          "consent_challenge": {
+            "type": "string"
+          },
+          "grant_scope": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "CreateAccountRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "is_bot"
+        ],
+        "properties": {
+          "is_bot": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateOrganizationRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateProfileRequest": {
+        "type": "object",
+        "properties": {
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "CreateProfileTransferRequest": {
+        "type": "object",
+        "required": [
+          "org_account_nanoid"
+        ],
+        "properties": {
+          "org_account_nanoid": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateReportRequest": {
+        "type": "object",
+        "required": [
+          "target",
+          "category"
+        ],
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "comment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target": {
+            "type": "string"
+          }
+        }
+      },
+      "EnableOverrideRequest": {
+        "type": "object",
+        "required": [
+          "revision"
+        ],
+        "properties": {
+          "acknowledge_warning": {
+            "type": "boolean",
+            "description": "保護が整っていない状態でも一般登録を開放する危険を理解したことの明示確認。false なら 400。"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "取得した状態の revision。一致しなければ 409。"
+          }
+        }
+      },
+      "FollowAccountRequest": {
+        "type": "object",
+        "required": [
+          "target"
+        ],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "Remote actor URL (e.g. https://remote.example/users/bob) or acct:user@domain"
+          }
+        }
+      },
+      "FollowAccountResponse": {
+        "type": "object",
+        "required": [
+          "followId",
+          "remoteActorUrl",
+          "activityId",
+          "approved"
+        ],
+        "properties": {
+          "activityId": {
+            "type": "string"
+          },
+          "approved": {
+            "type": "boolean"
+          },
+          "followId": {
+            "type": "string"
+          },
+          "remoteActorUrl": {
+            "type": "string"
+          }
+        }
+      },
+      "ImageObject": {
+        "type": "object",
+        "description": "An ActivityPub Image object (e.g. profile avatar).",
+        "required": [
+          "type"
+        ],
+        "properties": {
+          "mediaType": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "type": "string"
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "InviteMemberRequest": {
+        "type": "object",
+        "required": [
+          "account_id",
+          "role"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/OrganizationRole"
+          }
+        }
+      },
+      "MarkNotificationsReadRequest": {
+        "type": "object",
+        "required": [
+          "event_ids"
+        ],
+        "properties": {
+          "event_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "既読にする通知イベント ID (1〜100 件)。"
+          }
+        }
+      },
+      "MeResponse": {
+        "type": "object",
+        "required": [
+          "account_id",
+          "instance_roles"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "instance_roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "MembershipStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "active"
+        ]
+      },
+      "ModerationResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "reason",
+              "suspended_at",
+              "type"
+            ],
+            "properties": {
+              "expires_at": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "date-time"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "suspended_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "suspended"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "reason",
+              "banned_at",
+              "type"
+            ],
+            "properties": {
+              "banned_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "banned"
+                ]
+              }
+            }
+          }
+        ]
+      },
+      "MuteAccountRequest": {
+        "type": "object",
+        "required": [
+          "target"
+        ],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "Local account nanoid, remote actor URL (e.g. https://remote.example/users/bob) or acct:user@domain"
+          }
+        }
+      },
+      "MyOrganizationResponse": {
+        "type": "object",
+        "required": [
+          "organization",
+          "role"
+        ],
+        "properties": {
+          "organization": {
+            "$ref": "#/components/schemas/OrganizationResponse"
+          },
+          "role": {
+            "$ref": "#/components/schemas/OrganizationRole"
+          }
+        }
+      },
+      "MyOrganizationsResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MyOrganizationResponse"
+            }
+          }
+        }
+      },
+      "OAuth2Response": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "redirect_to",
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "redirect"
+                ]
+              },
+              "redirect_to": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "consent_challenge",
+              "requested_scope",
+              "action"
+            ],
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "show_consent"
+                ]
+              },
+              "client_name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "consent_challenge": {
+                "type": "string"
+              },
+              "requested_scope": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "OrderedCollection": {
+        "type": "object",
+        "description": "An ActivityPub `OrderedCollection` (e.g. followers, following, outbox).",
+        "required": [
+          "@context",
+          "id",
+          "type"
+        ],
+        "properties": {
+          "@context": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "first": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "last": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "orderedItems": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {}
+          },
+          "totalItems": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "minimum": 0
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "OrganizationContextResponse": {
+        "type": "object",
+        "required": [
+          "org_account_id",
+          "role"
+        ],
+        "properties": {
+          "org_account_id": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          }
+        }
+      },
+      "OrganizationMemberResponse": {
+        "type": "object",
+        "required": [
+          "account_id",
+          "name",
+          "role",
+          "status",
+          "invited_by",
+          "created_at"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "invited_by": {
+            "type": "string",
+            "description": "Nanoid of the account that issued the invitation.",
+            "example": "V1StGXR8_Z5jdHi6B-myT"
+          },
+          "name": {
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/OrganizationRole"
+          },
+          "status": {
+            "$ref": "#/components/schemas/MembershipStatus"
+          }
+        }
+      },
+      "OrganizationMembersResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OrganizationMemberResponse"
+            }
+          }
+        }
+      },
+      "OrganizationResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "name"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "OrganizationRole": {
+        "type": "string",
+        "enum": [
+          "owner",
+          "admin",
+          "member"
+        ]
+      },
+      "OverrideResponse": {
+        "type": "object",
+        "required": [
+          "active"
+        ],
+        "properties": {
+          "activated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "activated_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "active": {
+            "type": "boolean",
+            "description": "override 有効中は true。管理画面は全ページで常時警告表示する。"
+          }
+        }
+      },
+      "ProfileResponse": {
+        "type": "object",
+        "required": [
+          "account_id",
+          "id"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "banner_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "icon_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string"
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ProfileTransferRequestResponse": {
+        "type": "object",
+        "required": [
+          "nanoid",
+          "profile_nanoid",
+          "org_account_nanoid",
+          "status"
+        ],
+        "properties": {
+          "nanoid": {
+            "type": "string"
+          },
+          "org_account_nanoid": {
+            "type": "string"
+          },
+          "profile_nanoid": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "ProtectionObservationResponse": {
+        "type": "object",
+        "required": [
+          "configured",
+          "probe"
+        ],
+        "properties": {
+          "configured": {
+            "type": "boolean"
+          },
+          "probe": {
+            "type": "string",
+            "description": "`healthy` / `unhealthy` / `unknown`"
+          }
+        }
+      },
+      "PublicKey": {
+        "type": "object",
+        "description": "An ActivityPub public key object attached to an Actor.",
+        "required": [
+          "id",
+          "owner",
+          "publicKeyPem"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "publicKeyPem": {
+            "type": "string"
+          }
+        }
+      },
+      "PublicKeyResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "owner",
+          "publicKeyPem"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "owner": {
+            "type": "string"
+          },
+          "publicKeyPem": {
+            "type": "string"
+          }
+        }
+      },
+      "RegistrationGateNotificationListResponse": {
+        "type": "object",
+        "required": [
+          "notifications",
+          "unread_count"
+        ],
+        "properties": {
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "次ページを取るための `before` 値。最後のページでは null。"
+          },
+          "notifications": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RegistrationGateNotificationResponse"
+            }
+          },
+          "unread_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "呼び出した管理者自身の未読件数。"
+          }
+        }
+      },
+      "RegistrationGateNotificationResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "revision",
+          "observation",
+          "created_at",
+          "read"
+        ],
+        "properties": {
+          "actor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "override の開始・解除を実行した管理者 (auth account ID)。"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "description": "安定した通知イベント ID (外部 Webhook 配送の重複排除キーにもなる)。"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`outage_started` / `outage_recovered` / `protection_degraded` /\n`protection_lost_stopped` / `override_started` / `override_revoked`"
+          },
+          "observation": {
+            "$ref": "#/components/schemas/RegistrationObservationResponse"
+          },
+          "read": {
+            "type": "boolean",
+            "description": "呼び出した管理者自身の既読状態。"
+          },
+          "read_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "このイベントを生んだ遷移後のゲート revision。"
+          }
+        }
+      },
+      "RegistrationGateResponse": {
+        "type": "object",
+        "description": "E15a は control plane のみ。Kratos 遮断 (E15d) が接続されるまで、この状態は実際の登録を\n遮断も許可もしない (実登録はまだ守られない)。",
+        "required": [
+          "revision",
+          "admin_state",
+          "decision",
+          "accepting",
+          "requires_manual_resume",
+          "config_lost_latch",
+          "health_episode",
+          "enforced_protections",
+          "degraded_protections",
+          "override",
+          "observation",
+          "updated_at"
+        ],
+        "properties": {
+          "accepting": {
+            "type": "boolean"
+          },
+          "admin_state": {
+            "type": "string",
+            "description": "`open` / `closed` (管理者の開閉状態)"
+          },
+          "config_lost_latch": {
+            "type": "boolean"
+          },
+          "decision": {
+            "type": "string",
+            "description": "`accepting` / `admin_closed` / `stopped` / `temporary_reject`"
+          },
+          "degraded_protections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "設定済みだが検証 API が応答しない対策 (防御低下)"
+          },
+          "enforced_protections": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "登録時に課す対策 (検証 API が実際に応答した対策のみ)"
+          },
+          "health_episode": {
+            "type": "string",
+            "description": "`none` / `outage` / `degraded`"
+          },
+          "observation": {
+            "$ref": "#/components/schemas/RegistrationObservationResponse"
+          },
+          "override": {
+            "$ref": "#/components/schemas/OverrideResponse"
+          },
+          "requires_manual_resume": {
+            "type": "boolean",
+            "description": "`stopped` (設定喪失の停止ラッチ) のとき true。復旧しても自動再開せず手動再開が必要。"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "RegistrationGateRevisionRequest": {
+        "type": "object",
+        "required": [
+          "revision"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "取得した状態の revision。一致しなければ 409。"
+          }
+        }
+      },
+      "RegistrationObservationResponse": {
+        "type": "object",
+        "required": [
+          "email",
+          "bot"
+        ],
+        "properties": {
+          "bot": {
+            "$ref": "#/components/schemas/ProtectionObservationResponse"
+          },
+          "email": {
+            "$ref": "#/components/schemas/ProtectionObservationResponse"
+          }
+        }
+      },
+      "RelationListResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RelationResponse"
+            }
+          }
+        }
+      },
+      "RelationResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "targetType",
+          "target"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "targetType": {
+            "type": "string"
+          }
+        }
+      },
+      "SessionContextResponse": {
+        "type": "object",
+        "required": [
+          "auth_account_id",
+          "instance_roles"
+        ],
+        "properties": {
+          "auth_account_id": {
+            "type": "string"
+          },
+          "instance_roles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "org_context": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OrganizationContextResponse"
+              }
+            ]
+          }
+        }
+      },
+      "SignRequestBody": {
+        "type": "object",
+        "required": [
+          "method",
+          "url",
+          "headers"
+        ],
+        "properties": {
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Base64-encoded request body (optional)"
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "method": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "SignResponse": {
+        "type": "object",
+        "required": [
+          "cavage",
+          "rfc9421"
+        ],
+        "properties": {
+          "cavage": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "rfc9421": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SuspendAccountRequest": {
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "UnreadCountResponse": {
+        "type": "object",
+        "required": [
+          "unread_count"
+        ],
+        "properties": {
+          "unread_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "呼び出した管理者自身の未読件数。"
+          }
+        }
+      },
+      "UpdateAccountRequest": {
+        "type": "object",
+        "properties": {
+          "banner_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "display_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "fields": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/AccountField"
+            }
+          },
+          "icon_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_bot": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "UploadedImageResponse": {
+        "type": "object",
+        "required": [
+          "id",
+          "url",
+          "hash",
+          "blur_hash"
+        ],
+        "properties": {
+          "blur_hash": {
+            "type": "string"
+          },
+          "hash": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "WarnAccountRequest": {
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "WebFingerLink": {
+        "type": "object",
+        "description": "A single link entry within a WebFinger response.",
+        "required": [
+          "rel",
+          "type",
+          "href"
+        ],
+        "properties": {
+          "href": {
+            "type": "string"
+          },
+          "rel": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
+        }
+      },
+      "WebFingerResponse": {
+        "type": "object",
+        "description": "A WebFinger response describing a resource and its links.\n\nBoth `links` and `aliases` are optional per RFC 7033 §4.",
+        "required": [
+          "subject"
+        ],
+        "properties": {
+          "aliases": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "type": "string"
+            }
+          },
+          "links": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/WebFingerLink"
+            }
+          },
+          "subject": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearer_auth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "Account",
+      "description": "Account management"
+    },
+    {
+      "name": "Me",
+      "description": "Authenticated session"
+    },
+    {
+      "name": "Media",
+      "description": "Image uploads"
+    },
+    {
+      "name": "OAuth2",
+      "description": "OAuth2 Login/Consent Provider"
+    },
+    {
+      "name": "Signing",
+      "description": "HTTP Signature signing"
+    },
+    {
+      "name": "ActivityPub",
+      "description": "ActivityPub discovery and actor endpoints"
+    },
+    {
+      "name": "Report",
+      "description": "Account moderation reports"
+    },
+    {
+      "name": "ProfileTransfer",
+      "description": "Profile ownership transfer requests"
+    },
+    {
+      "name": "Organization",
+      "description": "Organization account and membership management"
+    },
+    {
+      "name": "RegistrationGate",
+      "description": "Registration readiness gate control plane (admin only). NOTE: E15a is the control plane only. Until the Kratos enforcement unit (E15d) is connected, opening, closing or overriding the gate does NOT block or allow real Kratos registrations; real registration is not protected yet."
+    }
+  ]
+}

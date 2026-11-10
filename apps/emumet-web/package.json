@@ -3,10 +3,17 @@
   "module": "index.ts",
   "type": "module",
   "private": true,
+  "scripts": {
+    "codegen": "bun scripts/codegen.ts",
+    "codegen:check": "bun scripts/codegen.ts --check",
+    "openapi:sync": "bun scripts/sync-openapi.ts",
+    "openapi:verify": "bun scripts/verify-openapi.ts"
+  },
   "devDependencies": {
     "@apidevtools/swagger-parser": "^12.1.0",
     "@tailwindcss/cli": "^4.2.1",
     "@types/bun": "latest",
+    "openapi-typescript": "7.13.0",
     "purescript-graphql-client": "^10.1.1",
     "spago": "^1.0.3",
     "tailwindcss": "^4.2.1",
@@ -19,6 +26,7 @@
     "@shuttlepub/design-tokens": "workspace:*",
     "@shuttlepub/styles": "workspace:*",
     "@urql/core": "^1.16.2",
+    "ajv": "8.18.0",
     "dataloader": "^2.2.3",
     "graphql": "^16",
     "graphql-ws": "^5.9.1",

@@ -20,6 +20,7 @@ Development tools are managed via Nix flake + direnv. Entering the project direc
 - **Run tests:** `spago test`
 - **BFF tests:** `bun test`
 - **GraphQL codegen:** `bun scripts/sync-graphql.ts` (regenerate PureScript types from `bff/schema.graphql`)
+- **All codegen (GraphQL + OpenAPI REST types):** `bun run codegen` / verify with `bun run codegen:check`
 - **Install JS dependencies:** `bun install`
 
 ## Architecture
@@ -47,10 +48,14 @@ bff/
   session.ts               -- Session foundation: seal/unseal, cookie helpers, refresh, SessionAdapter interface
   loaders.ts               -- DataLoader: profile + metadata, request-scoped, memoized per request
   resolvers.ts             -- Query/Mutation resolvers
+  registration-gate-resolvers.ts -- Registration gate (D15) resolvers + error classification (extensions.code)
+  openapi/                 -- Pinned Emumet OpenAPI (lock verification, contract validation); see README
   emumet/
     client.ts              -- EmumetClient interface + DTOs (camelCase)
     real.ts                -- REST-backed EmumetClient (snake_case ↔ camelCase mapping)
     mock.ts                -- In-memory stateful MockEmumetClient
+    registration-gate*.ts  -- Registration gate client contract / real / stateful mock / all-state fixtures (BFF only, no UI)
+    generated/             -- openapi-typescript output (never hand-edit; `bun run codegen`)
   *.test.ts                -- BFF test files (bun test)
 src/
   style.css               -- Tailwind CSS entry point (@import "tailwindcss" + @source)

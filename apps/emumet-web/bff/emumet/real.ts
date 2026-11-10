@@ -3,6 +3,7 @@
 // ワイヤ形式は snake_case、DTO (client.ts) は camelCase。境界で相互変換する。
 // ============================================================
 
+import { createRealRegistrationGateClient } from "./registration-gate-real.ts";
 import {
   EmumetApiError,
   EmumetNotFoundError,
@@ -19,6 +20,8 @@ import {
 
 export type RealEmumetConfig = {
   readonly baseUrl: string;
+  /** 登録ゲート API の接続・応答待ち上限 (ms)。省略時は registration-gate-real.ts の既定値 */
+  readonly registrationGateTimeoutMs?: number;
 };
 
 // --- ワイヤ型 (snake_case) ---
@@ -123,13 +126,14 @@ function profileFieldsToWire(fields: ProfileFields): Record<string, string | nul
 }
 
 export function createRealEmumetClient(config: RealEmumetConfig, accessToken: string): EmumetClient {
-  async function request(method: string, path: string, body?: unknown): Promise<Response> {
+  async function request(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<Response> {
     const headers: Record<string, string> = { Authorization: `Bearer ${accessToken}` };
     if (body !== undefined) headers["Content-Type"] = "application/json";
     return fetch(`${config.baseUrl}${path}`, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
+      ...(timeoutMs !== undefined ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
     });
   }
 
@@ -165,7 +169,13 @@ export function createRealEmumetClient(config: RealEmumetConfig, accessToken: st
     return wires.map(toMetadata);
   }
 
+  const registrationGate = createRealRegistrationGateClient(
+    { request },
+    config.registrationGateTimeoutMs === undefined ? {} : { timeoutMs: config.registrationGateTimeoutMs },
+  );
+
   return {
+    ...registrationGate,
     async listAccounts(): Promise<AccountConnection> {
       const resp = await request("GET", "/accounts");
       if (resp.status === 404) {

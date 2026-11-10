@@ -16,13 +16,28 @@ import {
   type Profile,
   type ProfileFields,
 } from "./client.ts";
+import {
+  createMockRegistrationGate,
+  type MockRegistrationGateControl,
+  type MockRegistrationGateOptions,
+} from "./registration-gate-mock.ts";
+
+export type MockEmumetClientOptions = {
+  readonly registrationGate?: MockRegistrationGateOptions;
+};
+
+/** EmumetClient に、テスト・fixture 専用の登録ゲート制御 (観測入力・権限・障害注入) を足したもの */
+export type MockEmumetClient = EmumetClient & {
+  readonly registrationGateControl: MockRegistrationGateControl;
+};
 
 /** Tristate 更新解決 (resolveTristateUpdate 相当): undefined → 既存維持 / null → null / 値 → 値 */
 function resolveUpdate(value: string | null | undefined, existing: string | null): string | null {
   return value !== undefined ? value : existing;
 }
 
-export function createMockEmumetClient(): EmumetClient {
+export function createMockEmumetClient(options: MockEmumetClientOptions = {}): MockEmumetClient {
+  const registrationGate = createMockRegistrationGate(options.registrationGate);
   let idCounter = 100;
   function nextId(): string {
     return String(idCounter++);
@@ -60,6 +75,8 @@ export function createMockEmumetClient(): EmumetClient {
   }
 
   return {
+    ...registrationGate.client,
+    registrationGateControl: registrationGate.control,
     async listAccounts(): Promise<AccountConnection> {
       return { items: accounts, first: null, last: null };
     },
