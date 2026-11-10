@@ -3,15 +3,19 @@ import { expect, test, type Page } from "@playwright/test";
 const origin = "http://127.0.0.1:3231";
 const tokenPattern = /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|"(?:access_token|refresh_token|id_token)"\s*:/;
 
-async function enterCredentials(page: Page) {
+async function submitCredentials(page: Page, identifier = "testuser@example.com", password = "testuser") {
   // No login screen is being designed: use the JSON Kratos bridge, then navigate
   // through the same real Hydra provider/consent used by booskiff-web's E2E.
   const response = await page.request.post("/auth/login", {
     headers: { Origin: origin },
-    data: { identifier: "testuser@example.com", password: "testuser" },
+    data: { identifier, password },
   });
   expect(response.status()).toBe(200);
   expect(await response.json()).toEqual({ next: "/auth/oauth/start" });
+}
+
+async function enterCredentials(page: Page) {
+  await submitCredentials(page);
   await page.goto("/auth/oauth/start");
   await expect(page.getByRole("button", { name: "Allow", exact: true })).toBeVisible();
 }
@@ -85,5 +89,36 @@ test("state mismatch and a real Hydra invalid-code response fail closed", async 
   const invalidCode = await page.request.get("/auth/callback?code=invalid-code&state=" + encodeURIComponent(state!));
   expect(invalidCode.status()).toBe(401);
   expect(await invalidCode.json()).toEqual({ error: "UNAUTHENTICATED" });
+  await signedOut(page);
+});
+
+test("A logout -> B login rechecks Kratos despite Hydra remembering A", async ({ page }) => {
+  await enterCredentials(page);
+  await expect(page.locator("form[data-email]")).toHaveAttribute("data-email", "testuser@example.com");
+  await page.getByRole("button", { name: "Allow", exact: true }).click();
+  await expect(page).toHaveURL(origin + "/");
+  expect((await page.request.post("/auth/logout", { headers: { Origin: origin } })).status()).toBe(204);
+  await signedOut(page);
+  await submitCredentials(page, "testuser-b@example.com", "testuser-b");
+
+  // Positive control: without prompt=login the provider's real remembered skip
+  // branch chooses A, even though Kratos now belongs to B.
+  const probe = await page.request.get("/auth/oauth/start", { maxRedirects: 0 });
+  const remembered = new URL(probe.headers()["location"]!);
+  expect(remembered.searchParams.get("prompt")).toBe("login");
+  remembered.searchParams.delete("prompt");
+  await page.goto(remembered.toString());
+  await expect(page.locator("form[data-email]")).toHaveAttribute("data-email", "testuser@example.com");
+  expect((await page.request.get("/auth/session")).status()).toBe(401);
+
+  await page.goto("/auth/oauth/start");
+  await expect(page.locator("form[data-email]")).toHaveAttribute("data-email", "testuser-b@example.com");
+  const callback = page.waitForResponse(response => new URL(response.url()).pathname === "/auth/callback");
+  await page.getByRole("button", { name: "Allow", exact: true }).click();
+  expect((await callback).status()).toBe(302);
+  await expect(page).toHaveURL(origin + "/");
+  expect((await page.request.get("/auth/session")).status()).toBe(200);
+  expect(await (await profiles(page)).json()).toEqual({ data: { availableProfiles: [], profileContext: { activeProfile: null } } });
+  expect((await page.request.post("/auth/logout", { headers: { Origin: origin } })).status()).toBe(204);
   await signedOut(page);
 });

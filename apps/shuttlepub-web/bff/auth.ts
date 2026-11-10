@@ -21,7 +21,7 @@ export function safeAppReturnTo(value: string | null): string {
     const decoded = decodeURIComponent(path);
     if (/[\\\x00-\x20\x7f]/.test(path + decoded) || !/^\/(?!\/)/.test(decoded)) return "/";
     const url = new URL(path, "https://app.invalid");
-    if (url.origin !== "https://app.invalid") return "/";
+    if (url.origin !== "https://app.invalid" || url.pathname.startsWith("//")) return "/";
     return url.pathname + url.search + url.hash;
   } catch { return "/"; }
 }
@@ -29,6 +29,12 @@ export function safeAppReturnTo(value: string | null): string {
 export function checkOrigin(request: Request, origin: string): Response | null {
   return request.headers.get("origin") === origin
     ? null : Response.json({ error: "FORBIDDEN" }, { status: 403 });
+}
+
+function uniqueAuthCookie(header: string | null, name: string): string | null {
+  // Cookie headers omit Domain/Path: choosing the first duplicate permits cookie tossing.
+  const matches = (header ?? "").split(";").filter(part => part.trim().split("=", 1)[0] === name);
+  return matches.length === 1 ? parseCookieValue(header, name) : null;
 }
 
 async function scopedSecret(secret: string, purpose: string): Promise<string> {
@@ -45,7 +51,7 @@ export function createAuth(config: AuthConfig, deps: AuthDependencies = {}) {
   const fetcher = deps.fetch ?? fetch;
   const secure = config.appOrigin.startsWith("https:");
   const sessionCookieName = secure ? "__Host-shuttlepub_session" : "shuttlepub_session";
-  const oauthCookieName = secure ? "__Secure-shuttlepub_oauth" : "shuttlepub_oauth";
+  const oauthCookieName = secure ? "__Host-shuttlepub_oauth" : "shuttlepub_oauth";
   const sessionAdapter = scopedSecret(config.cookieSecret, "session").then(cookieSecretBase64 => createSessionAdapter({
     cookieSecretBase64, sessionCookieName, isSecureOrigin: secure,
     hydraPublicUrl: config.hydraPublicUrl, hydraClientId: config.clientId,
@@ -56,7 +62,7 @@ export function createAuth(config: AuthConfig, deps: AuthDependencies = {}) {
   const now = () => Math.floor(Date.now() / 1000);
   const redirectUri = config.appOrigin + "/auth/callback";
   const basic = "Basic " + btoa(encodeURIComponent(config.clientId) + ":" + encodeURIComponent(config.clientSecret));
-  const oauthCookie = (value: string, maxAge: number) => buildCookieHeader(secure, oauthCookieName, value, { path: "/auth", maxAge });
+  const oauthCookie = (value: string, maxAge: number) => buildCookieHeader(secure, oauthCookieName, value, { path: "/", maxAge });
   const clearOAuth = () => oauthCookie("", 0);
   const request = (url: string, init: RequestInit = {}) => fetcher(url, {
     ...init, redirect: "manual", signal: AbortSignal.timeout(10_000),
@@ -70,6 +76,7 @@ export function createAuth(config: AuthConfig, deps: AuthDependencies = {}) {
   }
   async function clearSession(): Promise<string> { return (await sessionAdapter).clearSessionCookie(); }
   async function readSession(req: Request): Promise<ViewerSession | null> {
+    if (!uniqueAuthCookie(req.headers.get("cookie"), sessionCookieName)) return null;
     const session = await (await sessionAdapter).getSession(req) as ViewerSession | null;
     if (!session || session.v !== 1 || !session.sub || typeof session.accessToken !== "string" ||
       !session.accessToken || session.tokenType !== "Bearer" || typeof session.scope !== "string" ||
@@ -142,7 +149,8 @@ export function createAuth(config: AuthConfig, deps: AuthDependencies = {}) {
       response_type: "code", client_id: config.clientId, redirect_uri: redirectUri,
       scope: "openid profile email offline_access", audience: EMUMET_AUDIENCE,
       state: pending.state, nonce: pending.nonce, code_challenge: await pkceChallenge(pending.codeVerifier),
-      code_challenge_method: "S256",
+      // Re-check the current Kratos identity, not Hydra's previously remembered subject.
+      code_challenge_method: "S256", prompt: "login",
     })) url.searchParams.set(name, value);
     return new Response(null, { status: 302, headers: { Location: url.toString(),
       "Set-Cookie": oauthCookie(await sealWithKey(await oauthKey, pending), OAUTH_TTL) } });
@@ -155,7 +163,7 @@ export function createAuth(config: AuthConfig, deps: AuthDependencies = {}) {
       const code = url.searchParams.get("code");
       const state = url.searchParams.get("state");
       if (!state || url.searchParams.getAll("state").length !== 1) throw new Error();
-      const cookie = parseCookieValue(req.headers.get("cookie"), oauthCookieName);
+      const cookie = uniqueAuthCookie(req.headers.get("cookie"), oauthCookieName);
       const pending = cookie ? await unsealWithKey<Pending>(await oauthKey, cookie) : null;
       if (!pending || pending.state !== state || pending.expiresAt <= now() || !pending.nonce || !pending.codeVerifier) throw new Error();
       matchedState = true;

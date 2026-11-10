@@ -72,6 +72,14 @@ services:
     depends_on:
       kratos:
         condition: service_healthy
+  seed-second:
+    image: oryd/kratos:v1.3.1
+    volumes:
+      - ./seed-second-user.json:/config/seed-users.json:ro
+    command: import identities /config/seed-users.json -e http://kratos:4434
+    depends_on:
+      kratos:
+        condition: service_healthy
   client:
     image: oryd/hydra:v2.3.0
     command: ["create", "oauth2-client", "--endpoint", "http://hydra:4445", "--id", "shuttlepub-bff", "--secret", "${REAL_E2E_SECRET}", "--grant-type", "authorization_code,refresh_token", "--response-type", "code", "--scope", "openid,profile,email,offline_access", "--audience", "account", "--redirect-uri", "http://127.0.0.1:3231/auth/callback", "--token-endpoint-auth-method", "client_secret_basic"]
@@ -84,6 +92,7 @@ services:
       dockerfile: apps/booskiff-web/e2e/real/Provider.Containerfile
     environment:
       PROVIDER_ORIGIN: http://127.0.0.1:3232
+      PROVIDER_REMEMBER_LOGIN: "true"
     ports:
       - "127.0.0.1:3232:3232"
     depends_on:
@@ -135,6 +144,8 @@ services:
       provider:
         condition: service_healthy
       seed:
+        condition: service_completed_successfully
+      seed-second:
         condition: service_completed_successfully
       client:
         condition: service_completed_successfully

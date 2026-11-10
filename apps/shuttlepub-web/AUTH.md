@@ -33,6 +33,7 @@ Emumet/IdP の設定をこのアプリが書き換えることはありません
 
 - `GET /auth/login` / `GET /auth/oauth/start?return_to=/...` → Hydra へ302。
   code + PKCE S256、32 bytes の state/nonce を生成し、verifier と共に300秒の暗号化 pending cookie に保存。
+  `prompt=login` を必ず付け、Hydra の remembered subject ではなく現在の Kratos identity を再確認させます。
   ログイン画面は IdP/provider に委譲します。
 - `POST /auth/login` は booskiff-web 同様の **JSON のみ**の Kratos bridge
   (`identifier`, `password`)。Kratos browser flow の CSRF node を使い、成功時は
@@ -47,9 +48,12 @@ Emumet/IdP の設定をこのアプリが書き換えることはありません
   token は暗号化 HttpOnly cookie 内のみで、HTML・JSON・JS storage・ログへ渡しません。
   app 専用32-byte keyから HKDF-SHA256 の `shuttlepub-web/v1` + `session` / `oauth` purpose で鍵を分離。
   `Secure` な公開環境は `__Host-shuttlepub_session`（Path=/）と
-  `__Secure-shuttlepub_oauth`（Path=/auth）、loopback HTTP は `shuttlepub_session` / `shuttlepub_oauth`。
+  `__Host-shuttlepub_oauth`（Path=/）、loopback HTTP は `shuttlepub_session` / `shuttlepub_oauth`（いずれもPath=/）。
   いずれも HttpOnly・SameSite=Lax・Domain なし。session cookie は browser session 限り、
   暗号文中にも24時間の絶対期限を持ちます。4096 bytes を超える cookie は成功扱いにしません。
+  pending も `__Host-` にすることで sibling subdomain からの Domain cookie 注入を拒否します。
+  session/pending の同名 cookie が複数届けば、順序によらず認証を拒否します。
+  共有 parser の挙動は変更せず、この app の入口で一意性を確認します。
 - access token の期限60秒前から lazy refresh。新 token の署名・audience・subject も再検証します。
   refresh 失敗時は、まだ署名/期限が有効な旧 token のみ使用可能（booskiff-web と同方針）。
   期限切れ・不正 token は cookie を消して fail closed。BFF 再起動でも同じ鍵なら session は有効、
@@ -58,12 +62,15 @@ Emumet/IdP の設定をこのアプリが書き換えることはありません
 - `POST /auth/logout` は session/pending を削除し、Hydra access/refresh revoke と Kratos logout を
   best effort で行います。IdP 障害でもローカル logout は204。GET logout は405。
   これはローカル app session の終了であり、すべての他アプリの session を一括破棄する API ではありません。
+  Hydra の remembered login cookie は残り得ますが、次の明示ログインは `prompt=login` により
+  前のユーザーへ戻りません（A logout → B login の回帰テスト）。
 
 全 POST（GraphQL query も含む）は設定済み `APP_ORIGIN` との **Origin 完全一致**が必須。
 欠落・`null`・異なる Origin を Referer で救済しません。GraphQL GET mutation は405。
 GraphQL の CORS は無効です（同一 origin のブラウザ専用）。Yoga の既定の Origin 反射/
 credentials 許可を使って、別 origin から cookie 付き GET query を読み出すことはできません。
 return URL は相対 `/...` のみで、絶対 URL・`//`・backslash・encoded slash・制御文字等は `/` に戻します。
+dot segment 正規化後に `//` になるパスも拒否します。
 認証/GraphQL/real SSR は `Cache-Control: no-store`、`Referrer-Policy: no-referrer`。
 上流のエラー本文・token・credentials はレスポンスや診断へ反射しません。
 
@@ -96,6 +103,7 @@ bun test                 # BFF の改ざん/state/PKCE/nonce/JWT/Origin/cookie/�
 bunx tsc --noEmit
 bun run codegen:check     # SDL を変更したら bun run codegen。生成物の手編集禁止
 spago build && spago test
+bunx playwright test --config=e2e/playwright.config.ts cookie-isolation.spec.ts # Docker不要
 EMUMET_CORE_DIR=/path/to/Emumet bash scripts/e2e-real.sh
 ```
 
@@ -107,6 +115,12 @@ ports 3231/3232/4544 が埋まっていれば中止し、他の stack を止め�
 Docker image に `.env` をコピーしません。
 
 実 login→PKCE callback→Emumet 本人一覧読取→logout と、同意拒否・state/不正code を検証します。
+FA の provider だけ `PROVIDER_REMEMBER_LOGIN=true` とし、remembered subject の skip 分岐も
+Emumet と同様に再現します（booskiff の既定値は従来の false）。
+A logout 後に B の Kratos credentials を入れ、`prompt` を外した対照では A、
+通常の認可開始では B の consent/callback になることを検証します。
+別の Chromium 試験では sibling Domain cookie に旧 `__Secure-` 名が通る対照を確認した上で、
+新 `__Host-` 名の注入が拒否されることを検証します。この試験は private checkout 不要で常時 CI 実行します。
 新しい identity の本人一覧は空です（作成/編集は範囲外）。成功した所有Profile選択・再読取は
 BFF の API 契約テストで検証し、実 E2E では存在しないProfileの選択拒否を検証します。
 本格 UI/SSR hydration は既存 visual CI に任せ、この E2E は BFF-only image を使用します。

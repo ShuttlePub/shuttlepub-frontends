@@ -17,8 +17,11 @@ function req(path: string, init?: RequestInit) { return new Request(origin + pat
 function cookie(response: Response, name: string) {
   return response.headers.getSetCookie().find(value => value.startsWith(name + "="))?.split(";")[0] ?? "";
 }
-async function fixture() {
+async function fixture(rememberLogin = false) {
   let authorize: URL;
+  let currentSubject = "viewer";
+  let rememberedSubject: string | undefined;
+  let selectedSubject = "viewer";
   let mode = "ok";
   let exchanges = 0;
   const jwk = { ...await exportJWK(keys.publicKey), kid: "test-key", alg: "RS256", use: "sig" };
@@ -44,8 +47,8 @@ async function fixture() {
         await pkceChallenge(body.get("code_verifier") ?? "") !== authorize.searchParams.get("code_challenge")) {
         return Response.json({ error: "invalid_grant", leak: "SENSITIVE_PROVIDER_RESPONSE" }, { status: 400 });
       }
-      accessToken = await access(mode === "access-aud" ? { aud: "wrong-api" } : mode === "access-sub" ? { sub: "different-viewer" } : {});
-      const payload: JWTPayload = { iss: issuer, sub: "viewer", aud: "shuttlepub-bff", iat: now(), exp: now() + 3600,
+      accessToken = await access({ sub: selectedSubject, ...(mode === "access-aud" ? { aud: "wrong-api" } : mode === "access-sub" ? { sub: "different-viewer" } : {}) });
+      const payload: JWTPayload = { iss: issuer, sub: selectedSubject, aud: "shuttlepub-bff", iat: now(), exp: now() + 3600,
         nonce: authorize.searchParams.get("nonce") };
       if (mode === "issuer") payload.iss = "https://evil.example";
       if (mode === "audience") payload.aud = "booskiff-bff";
@@ -68,6 +71,9 @@ async function fixture() {
   async function start(returnTo = "/") {
     const response = await auth.handle(req("/auth/oauth/start?return_to=" + encodeURIComponent(returnTo)));
     authorize = new URL(response.headers.get("location")!);
+    selectedSubject = rememberLogin && authorize.searchParams.get("prompt") !== "login"
+      ? rememberedSubject ?? currentSubject : currentSubject;
+    if (rememberLogin) rememberedSubject = selectedSubject;
     return { response, pending: cookie(response, auth.oauthCookieName), authorize };
   }
   async function callback(pending: string, state = authorize.searchParams.get("state")!) {
@@ -80,6 +86,7 @@ async function fixture() {
     return cookie(response, auth.sessionCookieName);
   }
   return { auth, config, start, callback, login, access, setMode: (value: string) => { mode = value; },
+    setIdentity: (value: string) => { currentSubject = value; },
     get exchanges() { return exchanges; }, get accessToken() { return accessToken; }, revoked };
 }
 
@@ -88,14 +95,18 @@ describe("OIDC BFF security boundary", () => {
     const f = await fixture();
     const { response, pending, authorize } = await f.start("/settings?tab=profile");
     expect(authorize.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(authorize.searchParams.get("prompt")).toBe("login");
     expect(authorize.searchParams.get("audience")).toBe("account");
     expect(authorize.searchParams.get("nonce")).toHaveLength(43);
     expect(authorize.searchParams.get("state")).toHaveLength(43);
     expect(authorize.searchParams.get("redirect_uri")).toBe(origin + "/auth/callback");
-    expect(response.headers.get("set-cookie")).toContain("Path=/auth; HttpOnly; SameSite=Lax; Secure; Max-Age=300");
+    expect(f.auth.oauthCookieName).toBe("__Host-shuttlepub_oauth");
+    expect(response.headers.get("set-cookie")).toContain("Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=300");
+    expect(response.headers.get("set-cookie")).not.toContain("Domain=");
     const callback = await f.callback(pending);
     expect(callback.status).toBe(302);
     expect(callback.headers.get("location")).toBe("/settings?tab=profile");
+    expect(callback.headers.getSetCookie()).toContainEqual(expect.stringContaining("__Host-shuttlepub_oauth=; Path=/; HttpOnly; SameSite=Lax; Secure; Max-Age=0"));
     const sessionHeader = callback.headers.getSetCookie().find(v => v.startsWith(f.auth.sessionCookieName + "="))!;
     expect(sessionHeader).toContain("Path=/; HttpOnly; SameSite=Lax; Secure");
     expect(sessionHeader).not.toContain("Domain=");
@@ -114,6 +125,46 @@ describe("OIDC BFF security boundary", () => {
     expect(otherApp.status).toBe(401);
     const otherKey = createAuth({ ...f.config, cookieSecret: Buffer.alloc(32, 8).toString("base64") });
     expect((await otherKey.handle(req("/auth/session", { headers: { Cookie: sessionCookie } }))).status).toBe(401);
+  });
+
+  test("ambiguous pending cookies fail closed in either order before token exchange", async () => {
+    const f = await fixture();
+    const victim = await f.start();
+    const attacker = await f.start();
+    for (const pending of [
+      attacker.pending + "; " + victim.pending,
+      victim.pending + "; " + attacker.pending,
+      attacker.pending + "; " + attacker.pending,
+      f.auth.oauthCookieName + "=; " + attacker.pending,
+    ]) {
+      const response = await f.callback(pending, attacker.authorize.searchParams.get("state")!);
+      expect(response.status).toBe(401);
+      expect(response.headers.getSetCookie()).toEqual([]);
+    }
+    expect(f.exchanges).toBe(0);
+  });
+
+  test("duplicate session cookies never choose the first valid identity", async () => {
+    const f = await fixture();
+    const session = await f.login();
+    for (const cookies of [session + "; " + session, session + "; " + f.auth.sessionCookieName + "=invalid",
+      f.auth.sessionCookieName + "=invalid; " + session]) {
+      expect((await f.auth.handle(req("/auth/session", { headers: { Cookie: cookies } }))).status).toBe(401);
+    }
+  });
+
+  test("A logout -> B login bypasses a modeled remembered Hydra subject", async () => {
+    const f = await fixture(true);
+    f.setIdentity("viewer-a");
+    const first = await f.login();
+    expect((await f.auth.resolveSession(req("/", { headers: { Cookie: first } }), [])).sub).toBe("viewer-a");
+    expect((await f.auth.handle(req("/auth/logout", {
+      method: "POST", headers: { Origin: origin, Cookie: first },
+    }))).status).toBe(204);
+    // Only the current Kratos identity changes; the modeled Hydra login still remembers A.
+    f.setIdentity("viewer-b");
+    const second = await f.login();
+    expect((await f.auth.resolveSession(req("/", { headers: { Cookie: second } }), [])).sub).toBe("viewer-b");
   });
 
   for (const mode of ["signature", "issuer", "audience", "expiry", "nonce", "multi-audience", "missing-exp", "missing-id", "pkce", "access-aud", "access-sub", "token-type", "invalid-ttl"]) {
@@ -217,7 +268,7 @@ describe("OIDC BFF security boundary", () => {
 });
 
 test("safe return URL rejects normalization, encoded slash/backslash/control and absolute redirects", () => {
-  for (const value of ["https://evil.example", "//evil.example", "/\\evil.example", "/\nevil.example", "/%2f%2fevil.example", "/%5cevil.example", "/%0d%0aLocation:evil", "/bad%", "javascript:alert(1)"]) {
+  for (const value of ["https://evil.example", "//evil.example", "/a/..//evil.example", "/a/%2e%2e//evil.example", "/\\evil.example", "/\nevil.example", "/%2f%2fevil.example", "/%5cevil.example", "/%0d%0aLocation:evil", "/bad%", "javascript:alert(1)"]) {
     expect(safeAppReturnTo(value)).toBe("/");
   }
   expect(safeAppReturnTo("/settings?tab=profile#selection")).toBe("/settings?tab=profile#selection");
