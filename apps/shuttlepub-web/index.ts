@@ -4,13 +4,14 @@
 // backend, other repositories or network. Real talks to SHUTTLEPUB_API_URL and
 // never falls back to mock data.
 //
-// SSR: dist/server.js (spago bundle output) is imported dynamically so that
-// `bun index.ts` still starts on a fresh checkout, serving a minimal shell
-// until `spago bundle` has run (see scripts/dev.sh).
+// SSR: dist/server.js (spago bundle output) is loaded lazily and re-loaded when it is
+// rebuilt (bff/ssr.ts), so `bun index.ts` starts on a fresh checkout, serving a minimal
+// shell until `spago bundle` has run, and dev rebuilds need no server restart.
 
 import { join } from "node:path";
 import { createApp } from "./bff/app.ts";
 import { ConfigError, loadConfig } from "./bff/config.ts";
+import { createSsrRenderer } from "./bff/ssr.ts";
 
 const PORT = Number(process.env.PORT) || 3000;
 
@@ -40,10 +41,6 @@ function serveStatic(pathname: string): Response | null {
   });
 }
 
-type SsrModule = {
-  renderPage: (path: string) => () => string;
-};
-
 const SSR_SHELL_HTML = `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ShuttlePub</title><link rel="stylesheet" href="/style.css"></head>
@@ -52,14 +49,11 @@ const SSR_SHELL_HTML = `<!doctype html>
 
 const HTML_HEADERS = { "Content-Type": "text/html; charset=utf-8" };
 
+const ssr = createSsrRenderer(join(import.meta.dir, "dist"));
+
 async function serveSSR(url: URL): Promise<Response> {
-  const serverPath = join(import.meta.dir, "dist", "server.js");
-  if (await Bun.file(serverPath).exists()) {
-    const mod: SsrModule = await import("./dist/server.js");
-    const html: string = mod.renderPage(url.pathname + url.search)();
-    return new Response(html, { headers: HTML_HEADERS });
-  }
-  return new Response(SSR_SHELL_HTML, { headers: HTML_HEADERS });
+  const html = await ssr.render(url.pathname + url.search);
+  return new Response(html ?? SSR_SHELL_HTML, { headers: HTML_HEADERS });
 }
 
 Bun.serve({

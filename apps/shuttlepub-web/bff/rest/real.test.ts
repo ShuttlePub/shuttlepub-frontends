@@ -76,6 +76,13 @@ describe("real adapter", () => {
     expect(error.kind).toBe("invalid_response");
   });
 
+  test("a 200 whose body is not JSON is invalid_response, not unavailable", async () => {
+    const { fetch } = respond(200, "<html>proxy error page</html>", { raw: true });
+    const error = await failure(createRealApi({ baseUrl: "http://backend.test", fetch }).getApiStatus());
+    expect(error.kind).toBe("invalid_response");
+    expect(error.status).toBe(200);
+  });
+
   test("a success status the contract does not document is invalid_response", async () => {
     const fetch = async () => new Response(null, { status: 204 });
     const error = await failure(createRealApi({ baseUrl: "http://backend.test", fetch }).getApiStatus());

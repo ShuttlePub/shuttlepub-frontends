@@ -15,18 +15,29 @@ export type RealApiOptions = {
  * particular the stub's 501 is `not_implemented`, never data and never mock data.
  */
 export function createRealApi(options: RealApiOptions): ShuttlePubApi {
-  const client = createClient<paths>({
-    baseUrl: options.baseUrl,
-    ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
-  });
+  const client = createClient<paths>({ baseUrl: options.baseUrl });
 
   return {
     mode: "real",
     async getApiStatus(): Promise<ApiStatus> {
+      // openapi-fetch parses the body inside client.GET, so a thrown error is either a
+      // transport failure (no response at all) or a response whose body could not be
+      // parsed; only the former is "unavailable".
+      let received: Response | undefined;
+      const sendRequest = options.fetch ?? ((request: Request) => globalThis.fetch(request));
       let result;
       try {
-        result = await client.GET("/api/v1/status");
+        result = await client.GET("/api/v1/status", {
+          fetch: async (request) => (received = await sendRequest(request)),
+        });
       } catch (cause) {
+        if (received !== undefined) {
+          throw new ShuttlePubApiError(
+            "invalid_response",
+            `GET /api/v1/status answered HTTP ${received.status} with a body that is not valid JSON: ${String(cause)}`,
+            { status: received.status, cause },
+          );
+        }
         throw new ShuttlePubApiError("unavailable", `ShuttlePub API request failed: ${String(cause)}`, { cause });
       }
       const { data, error, response } = result;
