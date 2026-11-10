@@ -1,10 +1,14 @@
 // ============================================================
 // MockRegistrationGate — 登録ゲートの stateful mock
 //
-// kernel の純粋状態機械 (Emumet kernel/src/entity/registration_gate/machine.rs、E15a PR #67) を
+// kernel の純粋状態機械 (Emumet kernel/src/entity/registration_gate/machine.rs、E15a PR #67 = 0ac9e9c) を
 // 手で移植したもの。判定 (evaluate)・管理者操作 (apply_command)・観測入力 (apply_observation) と
-// 通知イベントの生成条件を同じ表で実装し、API の応答状態 (409/422/400/403) も本物と同じ規則で返す。
-// 契約との乖離は registration-gate-mock.test.ts が fixture (OpenAPI 照合済み) で検出する。
+// 通知イベントの生成条件を同じ表で実装し、API の応答状態 (409/422/400/403) も同じ規則で返す。
+//
+// 保証範囲: 手書き fixture (OpenAPI 照合済み) の導出フィールド (decision・accepting など) が移植した判定と
+// 一致すること、および registration-gate-mock.test.ts が書き下した状態表のシナリオ。遷移条件・revision 増分・
+// 通知生成が Rust 実装と常に同一であることまでは、この repo では独立に保証しない
+// (Emumet 側の状態機械が変わったら、このファイルを機械の差分に合わせて手で更新する)。
 //
 // 公開 HTTP に観測の書込口は無いため、観測入力は control.observe (テスト・fixture 専用) からのみ行う。
 // ============================================================
@@ -370,8 +374,10 @@ export function createMockRegistrationGate(options: MockRegistrationGateOptions 
     },
     async listRegistrationGateNotifications(query): Promise<RegistrationGateNotificationPage> {
       guard();
-      const limit = query?.limit ?? DEFAULT_PAGE_LIMIT;
-      if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE_LIMIT) throw status(400);
+      // Emumet は limit を 1〜100 に丸める (範囲外は 400 ではない)
+      const requested = query?.limit ?? DEFAULT_PAGE_LIMIT;
+      if (!Number.isInteger(requested)) throw status(400);
+      const limit = Math.min(Math.max(requested, 1), MAX_PAGE_LIMIT);
       let before: number | null = null;
       if (query?.before !== undefined) {
         if (!/^-?\d+$/.test(query.before.trim())) throw status(400);

@@ -117,6 +117,8 @@ describe("fixture coverage of the D15 state vocabulary", () => {
   });
 });
 
+// 保証範囲は判定表 (decision / accepting / requires_manual_resume / enforced / degraded) の整合のみ。
+// 遷移条件・revision 増分・通知生成は registration-gate-mock.test.ts のシナリオで確認する (Rust 実装との同一性は未保証)。
 describe("fixtures agree with the ported kernel judgement table (derived fields are not hand-copied wrongly)", () => {
   for (const name of REGISTRATION_GATE_FIXTURE_NAMES) {
     test(name, () => {

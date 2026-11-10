@@ -216,9 +216,17 @@ describe("通知: 一覧・未読・既読", () => {
     expect(last.notifications).toHaveLength(2);
     expect(last.nextCursor).toBeNull();
     expect(first.unreadCount).toBe(10);
-    for (const query of [{ limit: 0 }, { limit: 101 }, { before: "abc" }]) {
-      expect(await status(client.listRegistrationGateNotifications(query))).toBe(400);
-    }
+    expect(await status(client.listRegistrationGateNotifications({ before: "abc" }))).toBe(400);
+  });
+
+  test("limit は 1〜100 に丸められる (Emumet と同じ。400 にはならない)", async () => {
+    const { client } = make("accepting_protected", "mixed");
+    expect((await client.listRegistrationGateNotifications({ limit: 0 })).notifications).toHaveLength(1);
+    expect((await client.listRegistrationGateNotifications({ limit: -5 })).notifications).toHaveLength(1);
+    expect((await client.listRegistrationGateNotifications({ limit: 101 })).notifications).toHaveLength(3);
+    const many = createMockRegistrationGate({ fixture: "accepting_protected", notifications: "many_first_page", now: fixed() });
+    expect((await many.client.listRegistrationGateNotifications({ limit: 500 })).notifications).toHaveLength(50);
+    expect((await many.client.listRegistrationGateNotifications({ limit: 100 })).notifications).toHaveLength(50);
   });
 
   test("既読化の入力検証 (空・101 件・整数でない ID は 400)", async () => {

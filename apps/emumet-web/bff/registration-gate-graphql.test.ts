@@ -318,3 +318,99 @@ describe("(d) secret 非表示・Webhook は未接続", () => {
     expect(fields.filter((name) => /webhook/i.test(name))).toEqual([]);
   });
 });
+
+// Yoga の既定マスキングは originalError が通常の Error の GraphQLError を INTERNAL_SERVER_ERROR に置換する。
+// graphql() 直実行では見えないため、実際の /graphql ハンドラ (createYogaHandler) 経由で分類が保たれることを固定する。
+describe("(e) HTTP 経路 (createYogaHandler) でもエラー分類が保たれる", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    Object.assign(globalThis, { fetch: originalFetch });
+  });
+
+  const cookie = `ratcap_session=${encodeMockCookie({ token: "t", username: "admin" })}`;
+  const UPSTREAM_SECRET = "SECRET-BODY database password=hunter2";
+
+  type HttpResult = { status: number; body: { data: unknown; errors?: { message: string; extensions: Record<string, unknown> }[] } };
+
+  async function post(handler: (req: Request) => Promise<Response>, query: string): Promise<HttpResult> {
+    const response = await handler(
+      new Request("http://localhost/graphql", {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie },
+        body: JSON.stringify({ query }),
+      }),
+    );
+    return { status: response.status, body: (await response.json()) as HttpResult["body"] };
+  }
+
+  function realHandler(timeoutMs = 50) {
+    return createYogaHandler(createMockSessionAdapter("ratcap_session", false), (token) =>
+      createRealEmumetClient({ baseUrl: "http://emumet.test", registrationGateTimeoutMs: timeoutMs }, token),
+    );
+  }
+
+  const MUTATION = "mutation { openRegistrationGate(revision: 1) { revision } }";
+  const QUERY = "{ registrationGate { revision } }";
+
+  test("上流 401/403/409/422/400 は HTTP 経路でも別々のコードのまま、上流本文は出ない", async () => {
+    const expected: [number, string][] = [
+      [401, "UNAUTHENTICATED"],
+      [403, "FORBIDDEN"],
+      [409, "REVISION_CONFLICT"],
+      [422, "PRECONDITION_FAILED"],
+      [400, "BAD_REQUEST"],
+    ];
+    for (const [status, code] of expected) {
+      stubFetch(() => new Response(UPSTREAM_SECRET, { status }));
+      const { body } = await post(realHandler(), MUTATION);
+      expect(body.errors?.[0]?.extensions["code"], String(status)).toBe(code);
+      expect(body.errors?.[0]?.extensions["upstreamStatus"]).toBe(status);
+      expect(JSON.stringify(body)).not.toContain("hunter2");
+      expect(body.data).toBeNull();
+    }
+  });
+
+  test("503・接続失敗・タイムアウトは TEMPORARILY_UNAVAILABLE + retryable のまま", async () => {
+    stubFetch(() => new Response(UPSTREAM_SECRET, { status: 503 }));
+    const unavailable = (await post(realHandler(), QUERY)).body.errors?.[0];
+    expect(unavailable?.extensions["code"]).toBe("TEMPORARILY_UNAVAILABLE");
+    expect(unavailable?.extensions["retryable"]).toBe(true);
+    expect(unavailable?.extensions["upstreamStatus"]).toBe(503);
+
+    stubFetch(() => {
+      throw new TypeError("fetch failed");
+    });
+    const network = (await post(realHandler(), QUERY)).body.errors?.[0];
+    expect(network?.extensions["code"]).toBe("TEMPORARILY_UNAVAILABLE");
+    expect(network?.extensions["retryable"]).toBe(true);
+
+    Object.assign(globalThis, {
+      fetch: (_url: unknown, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal?.reason))),
+    });
+    const timeout = (await post(realHandler(30), QUERY)).body.errors?.[0];
+    expect(timeout?.extensions["code"]).toBe("TEMPORARILY_UNAVAILABLE");
+    expect(timeout?.extensions["retryable"]).toBe(true);
+  });
+
+  test("契約違反の 200 は INVALID_UPSTREAM_RESPONSE、想定外の内部エラーは従来どおり INTERNAL_SERVER_ERROR (詳細非公開)", async () => {
+    stubFetch(() => jsonResponse(200, { ...REGISTRATION_GATE_FIXTURES.accepting_protected, decision: "reopened" }));
+    const invalid = (await post(realHandler(), QUERY)).body.errors?.[0];
+    expect(invalid?.extensions["code"]).toBe("INVALID_UPSTREAM_RESPONSE");
+    expect(JSON.stringify(invalid)).not.toContain("reopened");
+
+    const broken: EmumetClient = createMockEmumetClient();
+    Object.assign(broken, { getRegistrationGate: () => Promise.reject(new Error("db host=10.0.0.5 exploded")) });
+    const internal = await post(createYogaHandler(createMockSessionAdapter("ratcap_session", false), () => broken), QUERY);
+    expect(internal.body.errors?.[0]?.extensions["code"]).toBe("INTERNAL_SERVER_ERROR");
+    expect(JSON.stringify(internal.body)).not.toContain("10.0.0.5");
+  });
+
+  test("mock クライアントの非管理者 (403)・競合 (409) も HTTP 経路で区別される", async () => {
+    const mock = createMockEmumetClient({ registrationGate: { fixture: "accepting_protected", role: "non-admin" } });
+    const handler = createYogaHandler(createMockSessionAdapter("ratcap_session", false), () => mock);
+    expect((await post(handler, QUERY)).body.errors?.[0]?.extensions["code"]).toBe("FORBIDDEN");
+    mock.registrationGateControl.setRole("admin");
+    expect((await post(handler, "mutation { closeRegistrationGate(revision: 1) { revision } }")).body.errors?.[0]?.extensions["code"]).toBe("REVISION_CONFLICT");
+  });
+});
