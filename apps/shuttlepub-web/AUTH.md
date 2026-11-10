@@ -40,7 +40,9 @@ Emumet/IdP の設定をこのアプリが書き換えることはありません
 - `GET /auth/callback`: state・期限を照合し、verifier を token endpoint に送信。
   ID token は JWKS/RS256・issuer・client audience・expiry・sub/iat・nonce・必要時 azp を検証。
   access token も RS256・issuer・`account` audience・expiry・ID token と同一 subject を検証。
-  改ざんや拒否時は session を作らず、pending/session cookie を消して固定の401を返します。
+  改ざんや拒否時は session を作らず固定の401を返します。
+  pending state と一致した失敗応答だけが pending/session cookie を削除できます。
+  未要求の callback で既存 session や別の pending flow を消す logout CSRF は許しません。
 - session は共有 `auth-bun` adapter / `auth-core` の AES-GCM codec を使用。
   token は暗号化 HttpOnly cookie 内のみで、HTML・JSON・JS storage・ログへ渡しません。
   app 専用32-byte keyから HKDF-SHA256 の `shuttlepub-web/v1` + `session` / `oauth` purpose で鍵を分離。

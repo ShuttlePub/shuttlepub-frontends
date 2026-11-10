@@ -148,16 +148,19 @@ export function createAuth(config: AuthConfig, deps: AuthDependencies = {}) {
       "Set-Cookie": oauthCookie(await sealWithKey(await oauthKey, pending), OAUTH_TTL) } });
   }
   async function callback(req: Request): Promise<Response> {
-    const headers = new Headers({ "Set-Cookie": clearOAuth() });
+    const headers = new Headers();
+    let matchedState = false;
     try {
       const url = new URL(req.url);
       const code = url.searchParams.get("code");
       const state = url.searchParams.get("state");
-      if (url.searchParams.has("error") || !code || !state ||
-        url.searchParams.getAll("code").length !== 1 || url.searchParams.getAll("state").length !== 1) throw new Error();
+      if (!state || url.searchParams.getAll("state").length !== 1) throw new Error();
       const cookie = parseCookieValue(req.headers.get("cookie"), oauthCookieName);
       const pending = cookie ? await unsealWithKey<Pending>(await oauthKey, cookie) : null;
       if (!pending || pending.state !== state || pending.expiresAt <= now() || !pending.nonce || !pending.codeVerifier) throw new Error();
+      matchedState = true;
+      headers.append("Set-Cookie", clearOAuth());
+      if (url.searchParams.has("error") || !code || url.searchParams.getAll("code").length !== 1) throw new Error();
       const tokens = await tokenRequest(new URLSearchParams({ grant_type: "authorization_code", code,
         redirect_uri: redirectUri, code_verifier: pending.codeVerifier }));
       if (typeof tokens.idToken !== "string") throw new Error();
@@ -175,7 +178,8 @@ export function createAuth(config: AuthConfig, deps: AuthDependencies = {}) {
       headers.set("Location", safeAppReturnTo(pending.returnTo));
       return new Response(null, { status: 302, headers });
     } catch {
-      headers.append("Set-Cookie", await clearSession());
+      // An unsolicited GET callback must not provide a cross-site logout primitive.
+      if (matchedState) headers.append("Set-Cookie", await clearSession());
       return Response.json({ error: "UNAUTHENTICATED" }, { status: 401, headers });
     }
   }

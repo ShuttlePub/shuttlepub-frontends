@@ -155,6 +155,18 @@ describe("OIDC BFF security boundary", () => {
     expect(response.status).toBe(403);
     expect((await app.handleGraphql(req('/graphql?query=' + encodeURIComponent('mutation { selectProfile(id: "other") { activeProfile { id } } }')))).status).toBe(405);
   });
+  test("unsolicited callback errors cannot log out an existing viewer or destroy another pending flow", async () => {
+    const f = await fixture();
+    const sessionCookie = await f.login();
+    const { pending } = await f.start();
+    for (const path of ["/auth/callback?error=access_denied", "/auth/callback?code=invalid&state=foreign"]) {
+      const response = await f.auth.handle(req(path, { headers: { Cookie: sessionCookie + "; " + pending } }));
+      expect(response.status).toBe(401);
+      expect(response.headers.getSetCookie()).toHaveLength(0);
+    }
+    expect((await f.auth.handle(req("/auth/session", { headers: { Cookie: sessionCookie } }))).status).toBe(200);
+    expect((await f.callback(pending)).status).toBe(302);
+  });
   test("logout revokes both tokens, clears cookies even when Kratos is unavailable", async () => {
     const f = await fixture();
     const session = await f.login();
