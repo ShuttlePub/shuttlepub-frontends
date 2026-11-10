@@ -1,5 +1,5 @@
 # Build only source directories from the pinned Emumet checkout; never COPY .env.
-FROM rust:1.93-bookworm AS build
+FROM rust:1.94.1-bookworm AS build
 RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev && rm -r /var/lib/apt/lists/*
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./

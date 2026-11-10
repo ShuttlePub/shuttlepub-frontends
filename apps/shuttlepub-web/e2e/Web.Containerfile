@@ -10,5 +10,6 @@ COPY packages ./packages
 RUN bun install --frozen-lockfile --ignore-scripts
 COPY apps/shuttlepub-web/index.ts ./apps/shuttlepub-web/index.ts
 COPY apps/shuttlepub-web/bff ./apps/shuttlepub-web/bff
+COPY apps/shuttlepub-web/openapi/shuttlepub.json ./apps/shuttlepub-web/openapi/shuttlepub.json
 WORKDIR /web/apps/shuttlepub-web
 CMD ["bun", "index.ts"]
