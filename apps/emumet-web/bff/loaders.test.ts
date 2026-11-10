@@ -31,6 +31,15 @@ function fakeEmumetClient(overrides: BatchOverrides): EmumetClient {
     createMetadata: () => notUsed("createMetadata"),
     updateMetadata: () => notUsed("updateMetadata"),
     deleteMetadata: () => notUsed("deleteMetadata"),
+    getRegistrationGate: () => notUsed("getRegistrationGate"),
+    openRegistrationGate: () => notUsed("openRegistrationGate"),
+    closeRegistrationGate: () => notUsed("closeRegistrationGate"),
+    enableRegistrationGateOverride: () => notUsed("enableRegistrationGateOverride"),
+    revokeRegistrationGateOverride: () => notUsed("revokeRegistrationGateOverride"),
+    listRegistrationGateNotifications: () => notUsed("listRegistrationGateNotifications"),
+    countUnreadRegistrationGateNotifications: () => notUsed("countUnreadRegistrationGateNotifications"),
+    markRegistrationGateNotificationsRead: () => notUsed("markRegistrationGateNotificationsRead"),
+    markAllRegistrationGateNotificationsRead: () => notUsed("markAllRegistrationGateNotificationsRead"),
     ...overrides,
   };
 }

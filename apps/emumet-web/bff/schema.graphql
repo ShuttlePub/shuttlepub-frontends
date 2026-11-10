@@ -75,3 +75,131 @@ type Mutation {
   updateMetadata(accountId: ID!, nanoid: ID!, input: UpsertMetadataInput!): Metadata!
   deleteMetadata(accountId: ID!, nanoid: ID!): Boolean!
 }
+
+# ----------------------------------------------------------------
+# 登録ゲート (D15 registration-readiness-gate) — 管理者向け。
+# 認可の正本は Emumet API (instance:administrate)。BFF は権限を判断せず、
+# 未認証 UNAUTHENTICATED / 権限なし FORBIDDEN / revision 競合 REVISION_CONFLICT /
+# 前提条件違反 PRECONDITION_FAILED / 不正リクエスト BAD_REQUEST /
+# 一時障害 TEMPORARILY_UNAVAILABLE (extensions.retryable = true) /
+# 契約違反の応答 INVALID_UPSTREAM_RESPONSE / その他の上流エラー UPSTREAM_ERROR を
+# extensions.code で区別して返す。状態 (RegistrationGate) とエラーは別の型であり混同しない。
+# E15a は control plane のみで、実 Kratos 登録をまだ遮断も許可もしない (E15d で接続)。
+# secret は一切含まない。
+# ----------------------------------------------------------------
+
+"判定。ACCEPTING 受付中 / TEMPORARY_REJECT 一時拒否 (復旧で自動再開) / STOPPED 設定喪失で停止 (手動再開が必要) / ADMIN_CLOSED 管理者閉鎖"
+enum RegistrationDecision {
+  ACCEPTING
+  ADMIN_CLOSED
+  STOPPED
+  TEMPORARY_REJECT
+}
+
+enum RegistrationAdminState {
+  OPEN
+  CLOSED
+}
+
+"継続中の健全性 episode。OUTAGE 一時障害で effective な対策が 0 件 / DEGRADED 片方のみ障害 (防御低下)"
+enum RegistrationHealthEpisode {
+  NONE
+  OUTAGE
+  DEGRADED
+}
+
+enum RegistrationProtection {
+  EMAIL
+  BOT
+}
+
+enum RegistrationProbeStatus {
+  HEALTHY
+  UNHEALTHY
+  UNKNOWN
+}
+
+enum RegistrationGateEventKind {
+  OUTAGE_STARTED
+  OUTAGE_RECOVERED
+  PROTECTION_DEGRADED
+  PROTECTION_LOST_STOPPED
+  OVERRIDE_STARTED
+  OVERRIDE_REVOKED
+}
+
+type RegistrationProtectionObservation {
+  configured: Boolean!
+  probe: RegistrationProbeStatus!
+}
+
+type RegistrationObservation {
+  email: RegistrationProtectionObservation!
+  bot: RegistrationProtectionObservation!
+}
+
+"override の状態。decision とは独立で、管理者閉鎖中でも active のまま保持される"
+type RegistrationOverride {
+  active: Boolean!
+  activatedBy: String
+  activatedAt: String
+}
+
+type RegistrationGate {
+  "楽観ロック用。変更系の mutation はこの値を送り、不一致は REVISION_CONFLICT"
+  revision: Int!
+  adminState: RegistrationAdminState!
+  decision: RegistrationDecision!
+  accepting: Boolean!
+  "decision が STOPPED のとき true。復旧しても自動再開しない"
+  requiresManualResume: Boolean!
+  configLostLatch: Boolean!
+  healthEpisode: RegistrationHealthEpisode!
+  "登録時に課す対策 (検証 API が実際に応答した対策のみ)"
+  enforcedProtections: [RegistrationProtection!]!
+  "防御低下: 設定済みだが検証 API が応答しない対策"
+  degradedProtections: [RegistrationProtection!]!
+  override: RegistrationOverride!
+  observation: RegistrationObservation!
+  updatedAt: String!
+}
+
+type RegistrationGateNotification {
+  id: ID!
+  kind: RegistrationGateEventKind!
+  revision: Int!
+  "override の開始・解除を実行した管理者 (auth account ID)"
+  actor: String
+  observation: RegistrationObservation!
+  createdAt: String!
+  "呼び出した管理者自身の既読状態 (管理者間で共有されない)"
+  read: Boolean!
+  readAt: String
+}
+
+type RegistrationGateNotificationConnection {
+  notifications: [RegistrationGateNotification!]!
+  "呼び出した管理者自身の未読件数 (ページ範囲ではなく全体)"
+  unreadCount: Int!
+  "次ページ取得用の before。最後のページでは null"
+  nextCursor: String
+}
+
+extend type Query {
+  registrationGate: RegistrationGate!
+  "limit は 1〜100 (既定 50)、before は前ページ最後の通知 ID"
+  registrationGateNotifications(limit: Int, before: String): RegistrationGateNotificationConnection!
+  registrationGateUnreadCount: Int!
+}
+
+extend type Mutation {
+  "開放。設定喪失で停止中の手動再開も同じ操作。最低条件 (メール認証 OR BOT 対策) を満たさなければ PRECONDITION_FAILED"
+  openRegistrationGate(revision: Int!): RegistrationGate!
+  closeRegistrationGate(revision: Int!): RegistrationGate!
+  "acknowledgeWarning が false なら BAD_REQUEST。override は明示解除まで有効"
+  enableRegistrationGateOverride(revision: Int!, acknowledgeWarning: Boolean!): RegistrationGate!
+  revokeRegistrationGateOverride(revision: Int!): RegistrationGate!
+  "戻り値は既読化後の未読件数"
+  markRegistrationGateNotificationsRead(eventIds: [ID!]!): Int!
+  markAllRegistrationGateNotificationsRead: Int!
+}

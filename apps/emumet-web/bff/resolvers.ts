@@ -14,15 +14,10 @@ import type {
   ProfileFields,
 } from "./emumet/client.ts";
 import { EmumetNotFoundError } from "./emumet/client.ts";
-import type { GraphQLContext } from "./context.ts";
+import { requireEmumet, type GraphQLContext } from "./context.ts";
+import { registrationGateResolvers } from "./registration-gate-resolvers.ts";
 
-/** リゾルバ入口の認証ガード。未認証 (emumet 非注入) なら UNAUTHENTICATED を投げる */
-export function requireEmumet(context: GraphQLContext): EmumetClient {
-  if (!context.emumet) {
-    throw new GraphQLError("Unauthenticated", { extensions: { code: "UNAUTHENTICATED" } });
-  }
-  return context.emumet;
-}
+export { requireEmumet };
 
 function toGraphQLError(error: unknown): GraphQLError {
   if (error instanceof GraphQLError) return error;
@@ -46,6 +41,7 @@ async function withEmumetErrors<T>(call: () => Promise<T>): Promise<T> {
 
 export const resolvers = {
   Query: {
+    ...registrationGateResolvers.Query,
     accounts: (_parent: unknown, _args: unknown, context: GraphQLContext) =>
       withEmumetErrors(() => requireEmumet(context).listAccounts()),
     account: (_parent: unknown, args: { id: string }, context: GraphQLContext) =>
@@ -58,6 +54,7 @@ export const resolvers = {
       withEmumetErrors(() => context.makeLoaders().metadata.load(parent.id)),
   },
   Mutation: {
+    ...registrationGateResolvers.Mutation,
     createAccount: (_parent: unknown, args: { input: CreateAccountInput }, context: GraphQLContext) =>
       withEmumetErrors(() => requireEmumet(context).createAccount(args.input)),
     updateProfile: (

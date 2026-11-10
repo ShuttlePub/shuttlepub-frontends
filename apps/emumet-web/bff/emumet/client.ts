@@ -1,3 +1,5 @@
+import type { RegistrationGateClient } from "./registration-gate.ts";
+
 // ============================================================
 // EmumetClient — Emumet REST API への抽象インターフェース
 // DTO は bff/schema.graphql と同じ camelCase 形状。
@@ -89,7 +91,7 @@ export class EmumetNotFoundError extends Error {
  * 基本操作 (DataLoader の batchFn からそのまま呼ばれる)。getProfile は
  * listProfiles([id]) の薄いラッパとして各実装が提供する。
  */
-export interface EmumetClient {
+export interface EmumetClient extends RegistrationGateClient {
   listAccounts(): Promise<AccountConnection>;
   getAccount(id: string): Promise<Account | null>;
   createAccount(input: CreateAccountInput): Promise<Account>;

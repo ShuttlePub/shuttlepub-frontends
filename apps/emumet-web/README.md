@@ -147,3 +147,32 @@ bun scripts/sync-graphql.ts
 ```
 
 `src/Generated/` 配下の型が再生成されます。生成物は git で管理 (コミット) する運用です。`--schema <path>` フラグで別の SDL ファイルを指定することもできます。
+
+`bun run codegen` は GraphQL の型 (`src/Generated/`) と下記の REST 型を一度に再生成します。`bun run codegen:check` は再生成して差分があれば失敗します。`bun test` でも「コミット済みの生成物が再生成結果と一致する」ことを検査します (`purs-tidy` が PATH に必要)。
+
+## 登録ゲート管理 (D15 / F15) — BFF・API 接続のみ
+
+管理者向けの登録ゲート操作 (状態・開閉・手動再開・override・通知一覧/未読/既読) の **BFF 層** です。
+画面 (ページ・コンポーネント・文言・ナビ) はモック合意後の別 PR で実装するため、**この層に UI はありません**。
+
+- GraphQL: `bff/schema.graphql` 末尾の「登録ゲート」節 (`registrationGate` / `openRegistrationGate` など)。
+  手動再開は `openRegistrationGate` (API が同じ操作)。変更系は取得した `revision` を送る
+- Emumet REST: `bff/emumet/registration-gate-real.ts` (`/api/v1/admin/registration-gate*`、snake_case ↔ camelCase、200 の OpenAPI 照合)
+- mock: `bff/emumet/registration-gate-mock.ts` (kernel 状態表の stateful 移植)、全状態 fixture: `registration-gate-fixtures.ts`
+- 認可の正本は Emumet API。BFF は権限を判断せず、上流の 401/403 を区別して返します (fail closed)
+- エラーは `extensions.code` で区別: `UNAUTHENTICATED` / `FORBIDDEN` / `BAD_REQUEST` / `REVISION_CONFLICT` (409) /
+  `PRECONDITION_FAILED` (422) / `TEMPORARILY_UNAVAILABLE` (408・429・5xx・接続失敗・タイムアウト、`retryable: true`) /
+  `INVALID_UPSTREAM_RESPONSE` (契約違反の 2xx) / `UPSTREAM_ERROR`。手動再開が必要な状態 (`decision: STOPPED`) はエラーではなく状態です
+- secret は扱いません。Webhook (E15w) は API 契約の公開待ちで未接続です (schema にも無く、架空の成功は返しません)
+- E15a は control plane のみで、実 Kratos 登録をまだ遮断も許可もしません (E15d で接続)
+
+### Emumet OpenAPI の固定取込
+
+- `openapi/emumet.json`: Emumet (`ShuttlePub/Emumet` の `openapi.json`) の生成物をそのまま取り込んだもの。手編集しない
+- `openapi/producer.lock.json`: producer の commit SHA と、取り込んだバイト列の SHA-256
+- `bff/emumet/generated/emumet-api.ts`: `RegistrationGate` タグの操作だけから `openapi-typescript` で生成 (手編集しない)
+
+```bash
+bun run openapi:sync -- --commit <40桁 SHA> --producer-dir /path/to/Emumet [--ref main]
+bun run codegen
+```
