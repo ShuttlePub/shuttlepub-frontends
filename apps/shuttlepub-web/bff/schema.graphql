@@ -31,9 +31,59 @@ type ProfileContext {
   activeProfile: Profile
 }
 
+# --- Timeline / posts (PROVISIONAL) -------------------------------------------------
+# The pinned OpenAPI schema has no timeline/post endpoint yet. These types are owned by
+# this app so the screen layout can be built against mock fixtures; in real mode every
+# field below fails with extensions.code = NOT_IMPLEMENTED (no invented data).
+# Reaction data (D03) is deliberately absent: the quick-reaction UI adds it later.
+
+"""PROVISIONAL. Which timeline to read."""
+enum TimelineKind {
+  HOME
+  LOCAL
+  FEDERATED
+}
+
+"""PROVISIONAL placeholder mirroring Misskey. ShuttlePub's visibility model is undecided."""
+enum PostVisibility {
+  PUBLIC
+  HOME
+  FOLLOWERS
+  DIRECT
+}
+
+"""PROVISIONAL. The author of a post. handle is user@host without the leading @."""
+type PostAuthor {
+  id: ID!
+  handle: String!
+  displayName: String!
+}
+
+"""PROVISIONAL. A post as shown on a timeline or the post detail screen."""
+type Post {
+  id: ID!
+  author: PostAuthor!
+  text: String!
+  """ISO 8601 instant."""
+  createdAt: String!
+  replyCount: Int!
+  repostCount: Int!
+  """Set when this timeline entry is someone's repost."""
+  repostedBy: PostAuthor
+  inReplyToId: ID
+}
+
+"""PROVISIONAL. Input of the compose form."""
+input CreatePostInput {
+  text: String!
+  visibility: PostVisibility!
+}
+
 type Mutation {
   """Select an identity from the current viewer's owned Emumet accounts (integrated Profile API)."""
   selectProfile(id: ID!): ProfileContext!
+  """PROVISIONAL. Always NOT_IMPLEMENTED (both modes) until the backend publishes a contract."""
+  createPost(input: CreatePostInput!): Post!
 }
 
 type Query {
@@ -41,4 +91,10 @@ type Query {
   apiMode: ApiMode!
   apiStatus: ApiStatus!
   profileContext: ProfileContext!
+  """PROVISIONAL. Newest first."""
+  timeline(kind: TimelineKind!): [Post!]!
+  """PROVISIONAL. Null when the post does not exist."""
+  post(id: ID!): Post
+  """PROVISIONAL. Direct replies, oldest first."""
+  replies(postId: ID!): [Post!]!
 }

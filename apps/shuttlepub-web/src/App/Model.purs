@@ -3,7 +3,8 @@ module App.Model where
 import Prelude
 
 import App.Api.Error (ApiError)
-import App.Profile (ProfileContext)
+import App.Post (Post, TimelineTab(..), Visibility(..))
+import App.Profile (Profile, ProfileContext)
 import App.Route (Route)
 import Data.Argonaut.Decode.Class (class DecodeJson)
 import Data.Argonaut.Decode.Generic (genericDecodeJson)
@@ -11,7 +12,7 @@ import Data.Argonaut.Encode.Class (class EncodeJson)
 import Data.Argonaut.Encode.Generic (genericEncodeJson)
 import Data.Either (Either(..))
 import Data.Generic.Rep (class Generic)
-import Data.Maybe (Maybe)
+import Data.Maybe (Maybe(..))
 import Data.Show.Generic (genericShow)
 import Generated.Schema.Gql.Enum.ApiMode (ApiMode)
 
@@ -42,14 +43,65 @@ type ApiStatus =
   { apiVersion :: String
   }
 
+-- | Post detail screen data: Nothing when the post does not exist.
+type PostDetailData =
+  { post :: Maybe Post
+  , replies :: Array Post
+  }
+
+-- | Tabs of the post detail screen (ui-spec D1: 返信 is the default).
+data DetailTab = RepliesTab | ReactionsTab
+
+derive instance Generic DetailTab _
+derive instance Eq DetailTab
+
+instance Show DetailTab where
+  show = genericShow
+
+instance EncodeJson DetailTab where
+  encodeJson = genericEncodeJson
+
+instance DecodeJson DetailTab where
+  decodeJson = genericDecodeJson
+
+-- | The modal compose form (ui-spec L2). opener is the id of the button that opened
+-- | it; focus returns there when the form closes.
+type ComposeState =
+  { text :: String
+  , visibility :: Visibility
+  , visibilityMenuOpen :: Boolean
+  , submitting :: Boolean
+  , error :: Maybe ApiError
+  , opener :: String
+  }
+
+-- | The Profile switcher (ui-spec L1). opener as for ComposeState.
+type ProfileMenuState =
+  { opener :: String
+  , error :: Maybe ApiError
+  }
+
 -- | Record encode/decode instances come from argonaut-codecs, so the Flame
 -- | serialized state round-trips without hand-written instances.
+-- |
+-- | isMobile and now are client facts: SSR renders with false / 0.0 and the client
+-- | fills them in on hydration. Nothing SSR renders depends on them (layout switches
+-- | by CSS media query; times appear only with data that is fetched after hydration).
 type Model =
   { route :: Maybe Route
   , isHydrated :: Boolean
+  , isMobile :: Boolean
+  , now :: Number
   , apiMode :: RemoteData ApiMode
   , apiStatus :: RemoteData ApiStatus
   , profileContext :: RemoteData ProfileContext
+  , availableProfiles :: RemoteData (Array Profile)
+  , timelineTab :: TimelineTab
+  , timeline :: RemoteData (Array Post)
+  , detail :: RemoteData PostDetailData
+  , detailTab :: DetailTab
+  , compose :: Maybe ComposeState
+  , profileMenu :: Maybe ProfileMenuState
   }
 
 -- | Initial model used by SSR (and as the base for tests). Data is requested by
@@ -58,7 +110,31 @@ initialModel :: Maybe Route -> Model
 initialModel route =
   { route
   , isHydrated: false
+  , isMobile: false
+  , now: 0.0
   , apiMode: NotAsked
   , apiStatus: NotAsked
   , profileContext: NotAsked
+  , availableProfiles: NotAsked
+  , timelineTab: HomeTimeline
+  , timeline: NotAsked
+  , detail: NotAsked
+  , detailTab: RepliesTab
+  , compose: Nothing
+  , profileMenu: Nothing
   }
+
+emptyCompose :: String -> ComposeState
+emptyCompose opener =
+  { text: ""
+  , visibility: Public
+  , visibilityMenuOpen: false
+  , submitting: false
+  , error: Nothing
+  , opener
+  }
+
+activeProfile :: Model -> Maybe Profile
+activeProfile model = case model.profileContext of
+  Loaded context -> context.activeProfile
+  _ -> Nothing

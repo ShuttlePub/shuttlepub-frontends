@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createApp, type App } from "./app.ts";
 import { loadConfig } from "./config.ts";
-import { profileContextFixture } from "./profile.ts";
+import { profileContextFixture, availableProfilesFixture } from "./profile.ts";
 import { apiStatusFixture, notImplementedFixture } from "./rest/fixtures.ts";
+import { timelinePostFixtures, replyPostFixtures } from "./rest/post-fixtures.ts";
 
 type GraphQLResponse = {
   data: Record<string, unknown> | null;
@@ -43,6 +44,51 @@ describe("mock mode", () => {
       profileContext: { activeProfile: profileContextFixture.activeProfile },
     });
   });
+
+  const POST_FIELDS = "id text createdAt replyCount repostCount inReplyToId author { id handle displayName } repostedBy { id handle displayName }";
+
+  test("serves the provisional timeline fixtures per tab", async () => {
+    const home = await run(app, `{ timeline(kind: HOME) { ${POST_FIELDS} } }`);
+    expect(home.errors).toBeUndefined();
+    expect(home.data!.timeline).toEqual(timelinePostFixtures);
+
+    const local = await run(app, "{ timeline(kind: LOCAL) { id author { handle } repostedBy { id } } }");
+    const localPosts = local.data!.timeline as { author: { handle: string }; repostedBy: unknown }[];
+    expect(localPosts.length).toBeGreaterThan(0);
+    expect(localPosts.length).toBeLessThan(timelinePostFixtures.length);
+    for (const entry of localPosts) {
+      expect(entry.author.handle.endsWith("@shuttlepub.example")).toBe(true);
+      expect(entry.repostedBy).toBeNull();
+    }
+  });
+
+  test("post detail returns the post and its replies, and null for an unknown id", async () => {
+    const detail = await run(app, `{ post(id: "post-sora-zine") { ${POST_FIELDS} } replies(postId: "post-sora-zine") { id inReplyToId } }`);
+    expect(detail.errors).toBeUndefined();
+    expect((detail.data!.post as { id: string }).id).toBe("post-sora-zine");
+    expect(detail.data!.replies).toEqual(replyPostFixtures.map((reply) => ({ id: reply.id, inReplyToId: "post-sora-zine" })));
+
+    const missing = await run(app, '{ post(id: "no-such-post") { id } replies(postId: "no-such-post") { id } }');
+    expect(missing).toEqual({ data: { post: null, replies: [] } });
+  });
+
+  test("posting is not simulated: createPost is NOT_IMPLEMENTED even in mock mode", async () => {
+    const result = await run(app, 'mutation { createPost(input: { text: "hi", visibility: PUBLIC }) { id } }');
+    expect(result.data).toBeNull();
+    expect(result.errors![0]!.extensions).toMatchObject({ code: "NOT_IMPLEMENTED" });
+  });
+
+  test("lists every mock Profile and selects one without persisting it", async () => {
+    const list = await run(app, "{ availableProfiles { id handle displayName } }");
+    expect(list.data!.availableProfiles).toEqual(availableProfilesFixture);
+    const second = availableProfilesFixture[1]!;
+    const selected = await run(app, `mutation { selectProfile(id: "${second.id}") { activeProfile { id } } }`);
+    expect(selected.data).toEqual({ selectProfile: { activeProfile: { id: second.id } } });
+    const after = await run(app, "{ profileContext { activeProfile { id } } }");
+    expect(after.data).toEqual({ profileContext: { activeProfile: { id: profileContextFixture.activeProfile!.id } } });
+    const unknown = await run(app, 'mutation { selectProfile(id: "someone-else") { activeProfile { id } } }');
+    expect(unknown.errors![0]!.extensions).toMatchObject({ code: "PROFILE_UNAVAILABLE" });
+  });
 });
 
 describe("real mode", () => {
@@ -80,6 +126,27 @@ describe("real mode", () => {
     const down = await run(unreachable, "{ apiStatus { apiVersion } }");
     expect(down.data).toBeNull();
     expect(down.errors![0]!.extensions).toMatchObject({ code: "UPSTREAM_UNAVAILABLE" });
+  });
+
+  test("timeline / post operations have no endpoint: NOT_IMPLEMENTED without contacting the backend", async () => {
+    const seen: string[] = [];
+    const url = backend((request) => {
+      seen.push(new URL(request.url).pathname);
+      return Response.json(apiStatusFixture);
+    });
+    const app = createApp(loadConfig({ SHUTTLEPUB_API_MODE: "real", SHUTTLEPUB_API_URL: url }));
+    for (const query of [
+      "{ timeline(kind: HOME) { id } }",
+      '{ post(id: "post-sora-zine") { id } }',
+      '{ replies(postId: "post-sora-zine") { id } }',
+      'mutation { createPost(input: { text: "hi", visibility: PUBLIC }) { id } }',
+    ]) {
+      const result = await run(app, query);
+      // A nullable field (post) is null alongside the error; nothing carries data.
+      expect(Object.values(result.data ?? {}).every((value) => value === null)).toBe(true);
+      expect(result.errors![0]!.extensions).toMatchObject({ code: "NOT_IMPLEMENTED" });
+    }
+    expect(seen).toEqual([]);
   });
 
   test("profile context fails closed without authentication (no invented profile)", async () => {

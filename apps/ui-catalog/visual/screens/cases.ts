@@ -6,6 +6,16 @@ export type ScreenApp = "Booskiff" | "Emumet" | "ShuttlePub";
 
 export type DataState = "populated" | "empty";
 
+/**
+ * A screen feature a capture case depends on. The driver runs against both the PR
+ * and the main checkout; a case whose feature the checkout does not have yet is
+ * skipped on the baseline side only (CAPTURE_SIDE=baseline) and reported by compare
+ * as a New image. On the branch side a missing feature fails the capture.
+ *  - sns-shell: the ShuttlePub SNS layout (ui-spec v6), detected by the SSR marker
+ *    data-testid="app-shell".
+ */
+export type ScreenFeature = "sns-shell";
+
 const routes = [
   { app: "Booskiff", id: "login", path: "/login", authenticated: false, data: "populated" },
   { app: "Booskiff", id: "drive-populated", path: "/drive", authenticated: true, data: "populated" },
@@ -21,12 +31,18 @@ const routes = [
   { app: "Emumet", id: "account-detail-edit", path: "/accounts/acc_01", authenticated: true, data: "populated" },
   { app: "Emumet", id: "settings", path: "/settings", authenticated: true, data: "populated" },
   { app: "Emumet", id: "not-found", path: "/visual-route-not-found", authenticated: true, data: "populated" },
-  // ShuttlePub F0 foundation: the plain placeholder only. This registers the capture
-  // route and proves SSR + hydration at both widths; it does not fix any screen layout.
+  // ShuttlePub SNS shell (host intents/shuttlepub/features/quick-reaction-ui/ui-spec.md v6):
+  // home timeline, post detail, compose modal, visibility menu, Profile switcher, settings.
+  // home / not-found existed as F0 placeholders on main, so they compare as changed.
   { app: "ShuttlePub", id: "home", path: "/", authenticated: false, data: "populated" },
+  { app: "ShuttlePub", id: "post-detail", path: "/posts/post-sora-zine", authenticated: false, data: "populated", requires: "sns-shell" },
+  { app: "ShuttlePub", id: "compose", path: "/", authenticated: false, data: "populated", requires: "sns-shell" },
+  { app: "ShuttlePub", id: "compose-visibility", path: "/", authenticated: false, data: "populated", requires: "sns-shell" },
+  { app: "ShuttlePub", id: "profile-menu", path: "/", authenticated: false, data: "populated", requires: "sns-shell" },
+  { app: "ShuttlePub", id: "settings", path: "/settings", authenticated: false, data: "populated", requires: "sns-shell" },
   { app: "ShuttlePub", id: "not-found", path: "/visual-route-not-found", authenticated: false, data: "populated" },
 ] as const satisfies readonly {
-  app: ScreenApp; id: string; path: string; authenticated: boolean; data: DataState;
+  app: ScreenApp; id: string; path: string; authenticated: boolean; data: DataState; requires?: ScreenFeature;
 }[];
 
 const viewports = [
