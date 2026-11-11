@@ -38,6 +38,7 @@ const wireAccount = {
   fields: [],
   created_at: "2025-01-15T09:00:00Z",
   moderation: null,
+  profile_id: "prof_01",
 };
 
 const originalFetch = globalThis.fetch;
@@ -76,10 +77,10 @@ describe("(a) createAccount / Account の Profile 参照", () => {
     expect(JSON.parse(calls[0]?.body ?? "null")).toEqual({ name: "alice", is_bot: true });
   });
 
-  test("AccountResponse に profile_id / profile_username が無い (未実装の Emumet) → null (未取得) として扱う", async () => {
+  test("profile_username が省略されていても null (未設定) として扱う", async () => {
     stubFetch(() => jsonResponse(200, { items: [wireAccount], first: null, last: null }));
     const { items } = await makeClient().listAccounts();
-    expect(items[0]?.profileId).toBeNull();
+    expect(items[0]?.profileId).toBe("prof_01");
     expect(items[0]?.profileUsername).toBeNull();
   });
 
@@ -228,8 +229,8 @@ describe("(b) setProfileUsername — 一回限り設定", () => {
     expect(await rejection(makeClient().setProfileUsername("prof_01", "bob"))).toBeInstanceOf(EmumetUsernameConflictError);
   });
 
-  test("409: Profile を特定できない・profile_id が来ない・再確認に失敗 → 推測せず Conflict", async () => {
-    stubFetch((call) => (call.method === "POST" ? plain(409) : jsonResponse(200, { items: [wireAccount], first: null, last: null })));
+  test("409: 一覧に対象 Profile が無い (別 Account の Profile のみ)・再確認に失敗 → 推測せず Conflict", async () => {
+    stubFetch((call) => (call.method === "POST" ? plain(409) : jsonResponse(200, { items: [{ ...wireAccount, profile_id: "prof_other" }], first: null, last: null })));
     expect(await rejection(makeClient().setProfileUsername("prof_01", "bob"))).toBeInstanceOf(EmumetUsernameConflictError);
     stubFetch((call) => (call.method === "POST" ? plain(409) : plain(500)));
     expect(await rejection(makeClient().setProfileUsername("prof_01", "bob"))).toBeInstanceOf(EmumetUsernameConflictError);

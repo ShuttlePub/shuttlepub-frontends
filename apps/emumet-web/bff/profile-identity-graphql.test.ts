@@ -70,9 +70,12 @@ describe("(a) 読取と未設定の表現", () => {
     ]);
   });
 
-  test("Profile を持たない Account (組織 Account 等) は profileId・profile とも null で、エラーにならない", async () => {
+  test("Profile を移管で失った Account は profileId・profile とも null で、エラーにならない", async () => {
     const emumet = createMockEmumetClient();
-    const created = emumet.profileIdentityControl.createProfilelessAccount("org");
+    const org = await emumet.createAccount({ name: "org" });
+    const personal = await emumet.createAccount({ name: "moved-away", username: "moved-away" });
+    emumet.profileIdentityControl.transferProfile(personal.profileId as string, org.id);
+    const created = personal;
     const result = await run("query($id: ID!) { account(id: $id) { profileId profileUsername profile { nanoid } } }", await authenticated(emumet), { id: created.id });
     expect(result.errors).toBeUndefined();
     expect(result.data?.["account"]).toEqual({ profileId: null, profileUsername: null, profile: null });

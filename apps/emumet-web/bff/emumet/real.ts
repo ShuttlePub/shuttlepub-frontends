@@ -53,8 +53,9 @@ type WireAccount = {
   public_key: string;
   created_at: string;
   moderation?: WireModeration | null;
-  /** AccountResponse への追加 (profile-identity-read-exposure) がマージされるまでは来ない */
-  profile_id?: string | null;
+  /** この Account を記述する Profile の nanoid (OpenAPI では必須。組織 Account は最小 id の Profile) */
+  profile_id: string;
+  /** 未設定は null */
   profile_username?: string | null;
 };
 

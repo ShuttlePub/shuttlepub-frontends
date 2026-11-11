@@ -27,6 +27,7 @@ const wireAccount1 = {
   public_key: "ed25519:AAAA",
   created_at: "2025-01-15T09:00:00Z",
   moderation: null,
+  profile_id: "prof_01",
 };
 const wireAccountSuspended = {
   ...wireAccount1,
@@ -82,7 +83,7 @@ describe("(f) REST contract — method/path/query/body/Authorization", () => {
       publicKey: "ed25519:AAAA",
       createdAt: "2025-01-15T09:00:00Z",
       moderation: null,
-      profileId: null,
+      profileId: "prof_01",
       profileUsername: null,
     });
     expect(result.items[1]?.moderation).toEqual({

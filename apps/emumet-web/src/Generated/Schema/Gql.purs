@@ -93,16 +93,16 @@ newtype Account = Account
   , name :: {} -> AsGql "String" String
   , profile :: {} -> AsGql "Profile" (Data.Maybe.Maybe (AsGql "Profile" Profile))
   , publicKey :: {} -> AsGql "String" String
-  , profileId ::
-      {}
-      ->
-      -- | この Account (個人) の Profile nanoid。Emumet が AccountResponse に載せるまでは取得できず null (未取得)
-      AsGql "ID" (Data.Maybe.Maybe (AsGql "ID" GraphQL.Client.ID.ID))
   , profileUsername ::
       {}
       ->
-      -- | この Account の Profile の username。profileId があるのに null なら未設定 (一回限り設定できる)。Account 名から導出しない
+      -- | profileId の Profile の username。profileId があるのに null なら未設定 (一回限り設定できる)。Account 名から導出しない
       AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , profileId ::
+      {}
+      ->
+      -- | この Account を記述する Profile の nanoid (組織 Account は最小 id の Profile)。Profile を持たない場合は null
+      AsGql "ID" (Data.Maybe.Maybe (AsGql "ID" GraphQL.Client.ID.ID))
   }
 
 derive instance Data.Newtype.Newtype Account _

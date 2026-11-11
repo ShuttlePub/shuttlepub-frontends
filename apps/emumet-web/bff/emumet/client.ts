@@ -25,9 +25,10 @@ export type Account = {
   readonly createdAt: string;
   readonly moderation: Moderation | null;
   /**
-   * この Account (個人) の Profile nanoid と username。Emumet が AccountResponse に載せるまで
-   * (profile-identity-read-exposure) はフィールド自体が来ないため、null は「未取得」と区別できない。
-   * profileId が非 null で profileUsername が null のときだけ「username 未設定」を意味する。
+   * この Account を記述する Profile の nanoid と username (AccountResponse.profile_id / profile_username)。
+   * 個人 Account は Profile が 1 つ、組織 Account は複数ありうるが最小 id のもの。
+   * profileId が非 null で profileUsername が null のとき「username 未設定」。
+   * profileId が null になるのは Profile を持たない Account (mock の移管元) だけ。
    */
   readonly profileId: string | null;
   readonly profileUsername: string | null;

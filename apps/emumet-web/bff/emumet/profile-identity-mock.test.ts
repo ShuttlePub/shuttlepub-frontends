@@ -157,7 +157,7 @@ describe("作成時の username", () => {
 describe("Profile 移管でも username は変わらない", () => {
   test("移管先の Account 名・移管元に依存せず、Profile の username・nanoid が維持される", async () => {
     const mock = createMockEmumetClient();
-    const org = mock.profileIdentityControl.createProfilelessAccount("Org Account");
+    const org = await mock.createAccount({ name: "Org Account" });
     mock.profileIdentityControl.transferProfile("prof_01", org.id);
     const moved = await mock.getProfile(org.id);
     expect(moved).toMatchObject({ nanoid: "prof_01", username: "alice", accountId: org.id });
@@ -169,15 +169,23 @@ describe("Profile 移管でも username は変わらない", () => {
 
   test("移管後も username は変更できず、他の Profile へも移らない (AlreadySet / Taken)", async () => {
     const mock = createMockEmumetClient();
-    const org = mock.profileIdentityControl.createProfilelessAccount("Org Account");
+    const org = await mock.createAccount({ name: "Org Account" });
     mock.profileIdentityControl.transferProfile("prof_01", org.id);
     expect(await rejection(mock.setProfileUsername("prof_01", "renamed"))).toBeInstanceOf(EmumetUsernameAlreadySetError);
     expect(await rejection(mock.setProfileUsername("prof_02", "alice"))).toBeInstanceOf(EmumetUsernameTakenError);
   });
 
-  test("移管先に既に Profile がある・対象が無い場合は拒否する", async () => {
+  test("移管先は複数 Profile を持ち、Account の記述は作成順で最も古い Profile (実 API は最小 id)。移管元は Profile を失う", async () => {
     const mock = createMockEmumetClient();
-    expect(() => mock.profileIdentityControl.transferProfile("prof_01", "acc_02")).toThrow();
+    const org = await mock.createAccount({ name: "Org Account" });
+    mock.profileIdentityControl.transferProfile("prof_02", org.id);
+    expect((await mock.listProfiles([org.id])).map((p) => p.nanoid).sort()).toEqual(["prof_02", org.profileId as string].sort());
+    expect((await mock.getAccount(org.id))?.profileId).toBe("prof_02");
+    expect((await mock.getAccount("acc_02"))?.profileId).toBeNull();
+  });
+
+  test("対象が無い場合は拒否する", async () => {
+    const mock = createMockEmumetClient();
     expect(() => mock.profileIdentityControl.transferProfile("prof_missing", "acc_02")).toThrow(EmumetNotFoundError);
     expect(() => mock.profileIdentityControl.transferProfile("prof_01", "acc_missing")).toThrow(EmumetNotFoundError);
   });
