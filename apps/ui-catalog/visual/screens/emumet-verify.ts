@@ -221,14 +221,14 @@ async function verifyListSpacing(page: Page, label: string, desktop: boolean) {
   await expect(page.locator('main a[href^="/accounts/acc_"]').first()).toBeVisible();
   const boxes = await page.evaluate(() => {
     const rect = (el: Element) => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom }; };
-    const cards = [...document.querySelectorAll('main a[href^="/accounts/acc_"]')].map(rect);
+    const cards = [...document.querySelectorAll('main a[href^="/accounts/acc_"] > div')].map(rect);
     const plus = document.querySelector('a[href="/accounts/new"]');
     return { cards, plus: plus ? rect(plus) : null };
   });
   expect(boxes.cards.length, `${label}: the three seeded accounts`).toBeGreaterThanOrEqual(3);
   const [first, second] = boxes.cards as [typeof boxes.cards[number], typeof boxes.cards[number]];
   const gap = desktop ? second.left - first.right : second.top - first.bottom;
-  expect(Math.round(gap), `${label}: the visible gap between account cards (agreed mock: 12px desktop / 8px narrow)`).toBe(desktop ? 12 : 8);
+  expect(Math.round(gap), `${label}: the visible gap between the account cards (the bordered boxes, not their links; agreed mock: 12px desktop / 8px narrow)`).toBe(desktop ? 12 : 8);
   const lastRight = Math.max(...boxes.cards.map((card) => card.right));
   expect(Math.round(boxes.plus?.right ?? -1), `${label}: the "+" button ends at the cards' right edge`).toBe(Math.round(lastRight));
 }

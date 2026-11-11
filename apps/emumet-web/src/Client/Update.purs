@@ -247,7 +247,7 @@ mkUpdate nav model = case _ of
 
   UsernameChecked target value verdict ->
     -- A late answer must not change the verdict under an open confirmation or a request in flight.
-    if usernameLocked model target then noMessages model
+    if usernameLocked model target || usernameTaken model target value then noMessages model
     else noMessages $ withVerdict target value verdict model
 
   UsernameRejected target gen owner value verdict ->
@@ -678,6 +678,12 @@ hostLoaded model = case model.instanceHost of
 -- | Add the instance host fetch to the page's initial commands.
 withHost :: Model -> Array (Aff (Maybe Message)) -> Array (Aff (Maybe Message))
 withHost model cmds = if needsHost model then cmds <> [ fetchInstanceHostAff ] else cmds
+
+-- | The server already refused exactly this value as taken; a check answer that was in flight must not undo it.
+usernameTaken :: Model -> UsernameTarget -> String -> Boolean
+usernameTaken model target value = case target of
+  ForNewAccount -> model.newAccountForm.username.value == value && model.newAccountForm.username.verdict == Taken
+  ForExistingProfile -> map (\d -> d.username.value == value && d.username.verdict == Taken) model.setUsernameDialog == Just true
 
 -- | The value is frozen: the confirmation step is showing, or its request is in flight.
 usernameLocked :: Model -> UsernameTarget -> Boolean

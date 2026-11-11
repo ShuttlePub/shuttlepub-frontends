@@ -124,6 +124,10 @@ run = do
     (let m = step typedNewForCheck (UsernameChecked ForNewAccount "alice" Taken) in verdictOfNew m == Taken)
   check "a check answer for an older value is ignored on the input step" true
     (let m = step typedNewForCheck (UsernameChecked ForNewAccount "alic" Taken) in verdictOfNew m == Unverified)
+  check "a late Verified does not undo a taken verdict for the same value" true
+    (let m = step (typedNewForCheck { newAccountForm = emptyNewAccountForm { name = "N", username = { value: "alice", verdict: Taken } } }) (UsernameChecked ForNewAccount "alice" Verified) in verdictOfNew m == Taken)
+  check "a late Verified does not undo a taken verdict in the set dialog" true
+    (let m = step ((setting "acc_1" 1 false) { setUsernameDialog = Just (emptySetUsernameDialog { username = { value: "bob", verdict: Taken } }) }) (UsernameChecked ForExistingProfile "bob" Verified) in verdictOfSet m == Just Taken)
 
   -- back / cancel while a request is in flight are refused; back otherwise returns to the input
   check "Back is refused while the create is in flight" true
