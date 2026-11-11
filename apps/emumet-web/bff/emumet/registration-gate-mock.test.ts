@@ -14,7 +14,7 @@ const HEALTHY = { configured: true, probe: "HEALTHY" } as const;
 const UNHEALTHY = { configured: true, probe: "UNHEALTHY" } as const;
 const NONE = { configured: false, probe: "UNKNOWN" } as const;
 
-const both = (email: RegistrationObservation["email"], bot: RegistrationObservation["bot"]): RegistrationObservation => ({ email, bot });
+const both = (email: RegistrationObservation["email"], bot: RegistrationObservation["bot"]): RegistrationObservation => ({ enforcementVerified: true, email, bot });
 
 function fixed() {
   let tick = 0;

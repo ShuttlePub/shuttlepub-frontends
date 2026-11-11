@@ -41,6 +41,12 @@ function fakeEmumetClient(overrides: BatchOverrides): EmumetClient {
     countUnreadRegistrationGateNotifications: () => notUsed("countUnreadRegistrationGateNotifications"),
     markRegistrationGateNotificationsRead: () => notUsed("markRegistrationGateNotificationsRead"),
     markAllRegistrationGateNotificationsRead: () => notUsed("markAllRegistrationGateNotificationsRead"),
+    getViewer: () => notUsed("getViewer"),
+    listRegistrationProtections: () => notUsed("listRegistrationProtections"),
+    verifyRegistrationProtection: () => notUsed("verifyRegistrationProtection"),
+    getRegistrationWebhookStatus: () => notUsed("getRegistrationWebhookStatus"),
+    sendRegistrationWebhookTest: () => notUsed("sendRegistrationWebhookTest"),
+    retryRegistrationWebhook: () => notUsed("retryRegistrationWebhook"),
     ...overrides,
   };
 }
