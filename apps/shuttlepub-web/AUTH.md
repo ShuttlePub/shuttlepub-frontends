@@ -135,6 +135,9 @@ EMUMET_CORE_DIR=/path/to/Emumet bash scripts/e2e-real.sh
 専用 Compose project で PostgreSQL / Kratos 1.3.1 / Hydra 2.3.0 / 既存 booskiff の test-only provider /
 Emumet / BFF を起動します（Docker と Playwright Chromium が必要）。
 ports 3231/3232/4544 が埋まっていれば中止し、他の stack を止めません。
+別の stack と並べて動かす場合だけ、`SHUTTLEPUB_E2E_WEB_PORT` / `SHUTTLEPUB_E2E_PROVIDER_PORT` /
+`SHUTTLEPUB_E2E_HYDRA_PORT` で host ports を移せます（既定値は上記のまま。issuer・redirect URI・
+Kratos/Hydra の URL と Playwright の origin も同じ値に揃います）。
 終了時は今回の project のみ削除します。Emumet clone や `.env` は書き換えず、
 Docker image に `.env` をコピーしません。
 

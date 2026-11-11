@@ -438,6 +438,68 @@ async function verifySignedOut(browser: Browser, frontendRoot: string) {
   }
 }
 
+/**
+ * Focus around session changes inside the Profile switcher (mock mode, with the BFF's
+ * answers for one request replaced in the browser), at both widths:
+ *  - the menu opened from the "Profile を選ぶ" notice returns focus to it when cancelled,
+ *    and to the header switcher when a chosen Profile resolved the notice;
+ *  - on /login, a session lost while switching leaves focus on the login button.
+ */
+async function verifySessionFocus(browser: Browser, frontendRoot: string, coreURL: string) {
+  const server = await startApp(frontendRoot, "ShuttlePub", coreURL);
+  const gqlError = (code: string) => ({ status: 200, contentType: "application/json",
+    body: JSON.stringify({ data: null, errors: [{ message: code, extensions: { code } }] }) });
+  try {
+    await server.waitUntilReady();
+    for (const viewport of VIEWPORTS) {
+      const { context, page, errors } = await openPage(browser, server, viewport);
+      try {
+        // The selected Profile vanished: only the profileContext read says so.
+        await page.route(`${server.url}/graphql`, async (route) => {
+          const body = route.request().postData() ?? "";
+          if (body.includes("profileContext") && !body.includes("selectProfile")) return route.fulfill(gqlError("PROFILE_UNAVAILABLE"));
+          return route.continue();
+        });
+        await page.goto("/", { waitUntil: "networkidle" });
+        await expect(page.getByTestId("app-shell")).toHaveAttribute("data-hydration", "hydrated");
+        const notice = page.getByTestId("auth-notice");
+        await expect(notice).toHaveAttribute("data-state", "profile-unavailable");
+        const choose = notice.getByRole("button", { name: "Profile を選ぶ" });
+        await choose.click();
+        const menu = page.getByTestId("profile-menu");
+        await expect(menu.getByRole("menuitemradio")).toHaveCount(3);
+        await expect(choose).toHaveAttribute("aria-expanded", "true");
+        await page.keyboard.press("Escape");
+        await expect(menu).toHaveCount(0);
+        await expect(choose).toBeFocused();
+        await choose.click();
+        await menu.getByRole("menuitemradio", { name: /Fixture Dev/ }).click();
+        await expect(notice).toHaveCount(0);
+        await expect(visible(page, /投稿用 Profile を切り替え（現在: Fixture Dev）/)).toBeFocused();
+        await page.unroute(`${server.url}/graphql`);
+
+        // On /login (signed in), the session ends while switching.
+        await page.route(`${server.url}/graphql`, async (route) =>
+          (route.request().postData() ?? "").includes("selectProfile") ? route.fulfill(gqlError("UNAUTHENTICATED")) : route.continue());
+        await page.goto("/login", { waitUntil: "networkidle" });
+        await expect(page.getByTestId("login-state")).toHaveAttribute("data-state", "signed-in");
+        await visible(page, /投稿用 Profile を切り替え/).click();
+        await menu.getByRole("menuitemradio", { name: /Fixture Dev/ }).click();
+        await expect(menu).toHaveCount(0);
+        await expect(page.getByTestId("login-start")).toBeFocused();
+        await expect(page.getByTestId("login-link").filter({ visible: true })).toHaveCount(1);
+        await page.unroute(`${server.url}/graphql`);
+        expect(errors, `session focus ${viewport.name}: browser errors`).toEqual([]);
+        console.info(`OK focus follows the session state in the Profile switcher at ${viewport.name}`);
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await server.stop();
+  }
+}
+
 export async function verifyShuttlePub(frontendRoot: string) {
   if (!isAbsolute(frontendRoot)) throw new Error("FRONTEND_ROOT must be an absolute path");
   if (!(await appExists(frontendRoot, "ShuttlePub"))) throw new Error(`apps/shuttlepub-web is missing in ${frontendRoot}`);
@@ -452,6 +514,7 @@ export async function verifyShuttlePub(frontendRoot: string) {
     await verifyRealFailure(browser, frontendRoot, 501);
     await verifyRealFailure(browser, frontendRoot, 500);
     await verifySignedOut(browser, frontendRoot);
+    await verifySessionFocus(browser, frontendRoot, unusedCore.url);
     expect(unusedCore.unexpectedRequests).toEqual([]);
     console.info("ShuttlePub hydration, shell behaviour and mock/real checks passed");
   } finally {

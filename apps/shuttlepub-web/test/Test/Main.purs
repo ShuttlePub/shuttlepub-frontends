@@ -8,13 +8,17 @@ import App.Model (DetailTab(..), Model, RemoteData(..), emptyCompose, fromEither
 import App.Post (Post, TimelineTab(..), Visibility(..), allTimelineTabs, timelineTabFromValue, timelineTabValue)
 import App.Route (Route(..), routeCodec)
 import App.View (view)
+import App.View.Auth (authActionId, authActionShown)
 import App.View.Common (loginHref)
+import App.View.Shell (profileButtonDesktopId, profileButtonMobileId)
+import Client.Update (visibleOpener)
+import Data.Array (length)
 import Data.Argonaut.Decode (class DecodeJson, decodeJson)
 import Data.Argonaut.Encode (class EncodeJson, encodeJson)
 import Data.Either (Either(..), hush)
 import Data.Foldable (for_)
 import Data.Maybe (Maybe(..))
-import Data.String (Pattern(..), contains)
+import Data.String (Pattern(..), contains, split)
 import Effect (Effect)
 import Effect.Class.Console (log)
 import Effect.Exception (throw)
@@ -34,6 +38,7 @@ main = do
   testSsr
   testLoginHref
   testLoginScreens
+  testLoginFocusTargets
 
 assertEqual :: forall a. Eq a => Show a => String -> a -> a -> Effect Unit
 assertEqual label actual expected =
@@ -258,3 +263,47 @@ testLoginScreens = do
   assertContains "signed-in login screen" signedIn "data-testid=\"login-state\" data-state=\"signed-in\""
   assertNotContains "signed-in login screen" signedIn "data-testid=\"login-start\""
   assertNotContains "signed-in has no notice" signedIn "data-testid=\"auth-notice\""
+
+occurrences :: String -> String -> Int
+occurrences needle haystack = length (split (Pattern needle) haystack) - 1
+
+-- | Review follow-up: the expired reason on /login, no stale reason for a signed-in
+-- | viewer, and exactly one focus target (authActionId) wherever the session state needs one.
+testLoginFocusTargets :: Effect Unit
+testLoginFocusTargets = do
+  expired <- renderPage "/login?error=expired"
+  assertContains "expired reason" expired "data-testid=\"login-error\" data-state=\"expired\""
+  let
+    profile = { id: "p1", handle: "alice", displayName: "Alice" }
+    actionId = "id=\"" <> authActionId <> "\""
+  staleDenied <- renderAfter (Just (Login { error: Just "denied" })) (_ { profileContext = Loaded { activeProfile: Just profile } })
+  assertNotContains "signed-in viewer sees no stale reason" staleDenied "data-testid=\"login-error\""
+  for_
+    [ { label: "signed-out home", route: Just Home, context: Failed (Unauthenticated "U") }
+    , { label: "expired home", route: Just Home, context: Failed (SessionExpired "U") }
+    , { label: "forbidden home", route: Just Home, context: Failed (Forbidden "F") }
+    , { label: "profile-unavailable home", route: Just Home, context: Failed (ProfileUnavailable "P") }
+    , { label: "signed-out /login", route: Just (Login { error: Nothing }), context: Failed (Unauthenticated "U") }
+    , { label: "expired /login", route: Just (Login { error: Nothing }), context: Failed (SessionExpired "U") }
+    , { label: "forbidden /login", route: Just (Login { error: Nothing }), context: Failed (Forbidden "F") }
+    , { label: "loading /login", route: Just (Login { error: Nothing }), context: Loading }
+    ]
+    \c -> do
+      -- apiMode may still be loading when the Profile context fails.
+      html <- FRS.render (view ((initialModel c.route) { isHydrated = true, profileContext = c.context }))
+      assertEqual ("one focus target: " <> c.label) (occurrences actionId html) 1
+      assertTrue ("authActionShown: " <> c.label) (authActionShown ((initialModel c.route) { profileContext = c.context }))
+  signedIn <- renderAfter (Just Home) (_ { profileContext = Loaded { activeProfile: Just profile } })
+  assertEqual "signed-in has no focus target" (occurrences actionId signedIn) 0
+  -- Focus return of the Profile menu opened from the notice, at both widths.
+  for_ [ false, true ] \isMobile -> do
+    let
+      width = if isMobile then "mobile" else "desktop"
+      header = if isMobile then profileButtonMobileId else profileButtonDesktopId
+      vanished = (initialModel (Just Home)) { isMobile = isMobile, profileContext = Failed (ProfileUnavailable "P") }
+      resolved = vanished { profileContext = Loaded { activeProfile: Just profile } }
+      onLogin = (initialModel (Just (Login { error: Nothing }))) { isMobile = isMobile, profileContext = Failed (Unauthenticated "U") }
+    assertEqual ("cancel returns to the notice (" <> width <> ")") (visibleOpener vanished authActionId) authActionId
+    assertEqual ("a chosen Profile returns to the header (" <> width <> ")") (visibleOpener resolved authActionId) header
+    assertEqual ("header opener stays on the header (" <> width <> ")") (visibleOpener vanished profileButtonDesktopId) header
+    assertTrue ("session lost on /login has a target (" <> width <> ")") (authActionShown onLogin)

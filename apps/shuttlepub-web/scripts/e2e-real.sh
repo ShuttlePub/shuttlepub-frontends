@@ -15,8 +15,25 @@ export REAL_E2E_COOKIE_SECRET
 REAL_E2E_SECRET="$(bun -e 'console.log(Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("hex"))')"
 REAL_E2E_COOKIE_SECRET="$(bun -e 'console.log(Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString("base64"))')"
 PROJECT="shuttlepub-web-real-e2e-$$-$(bun -e 'console.log(crypto.randomUUID().slice(0,8))')"
+# Host ports of this stack. The defaults are the documented ones; override them only
+# to run beside another stack that already holds them (all three must be free).
+export SHUTTLEPUB_E2E_WEB_PORT="${SHUTTLEPUB_E2E_WEB_PORT:-3231}"
+export SHUTTLEPUB_E2E_PROVIDER_PORT="${SHUTTLEPUB_E2E_PROVIDER_PORT:-3232}"
+export SHUTTLEPUB_E2E_HYDRA_PORT="${SHUTTLEPUB_E2E_HYDRA_PORT:-4544}"
+PORTS=("$SHUTTLEPUB_E2E_WEB_PORT" "$SHUTTLEPUB_E2E_PROVIDER_PORT" "$SHUTTLEPUB_E2E_HYDRA_PORT")
+for port in "${PORTS[@]}"; do
+  if ! [[ "$port" =~ ^[1-9][0-9]{2,4}$ ]] || (( port > 65535 )) || [[ "$port" == 4445 || "$port" == 4433 || "$port" == 4434 || "$port" == 8080 ]]; then
+    echo "Invalid or reserved E2E port: $port" >&2
+    exit 1
+  fi
+done
+if [[ "$(printf '%s\n' "${PORTS[@]}" | sort -u | wc -l)" -ne 3 ]]; then
+  echo "E2E ports must differ" >&2
+  exit 1
+fi
+export SHUTTLEPUB_E2E_ORIGIN="http://127.0.0.1:$SHUTTLEPUB_E2E_WEB_PORT"
 COMPOSE=(docker compose -f "$APP_DIR/e2e/compose.yml" --project-name "$PROJECT")
-for port in 3231 3232 4544; do
+for port in "${PORTS[@]}"; do
   if (echo >"/dev/tcp/127.0.0.1/$port") 2>/dev/null; then
     echo "Port $port is occupied; refusing to touch another stack." >&2
     exit 1

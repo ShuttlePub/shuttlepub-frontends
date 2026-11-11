@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const origin = "http://127.0.0.1:3231";
+const origin = process.env.SHUTTLEPUB_E2E_ORIGIN ?? "http://127.0.0.1:3231";
 const tokenPattern = /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|"(?:access_token|refresh_token|id_token)"\s*:/;
 
 async function submitCredentials(page: Page, identifier = "testuser@example.com", password = "testuser") {
