@@ -97,10 +97,8 @@ async function prepareScreen(page: Page, item: ScreenCase) {
     } else if (item.id === "account-new-taken") {
       await content.locator('input[type="text"]').first().fill("Release Bot");
       await content.locator("#new-username").fill("alice");
-      await expect(content.getByText("利用できます")).toBeVisible();
-      await content.getByRole("dialog").getByRole("button", { name: "作成" }).click();
-      await content.getByRole("dialog").getByRole("button", { name: "作成" }).click();
       await expect(content.getByText("利用できません")).toBeVisible();
+      await expect(content.getByRole("dialog").getByRole("button", { name: "作成" })).toBeDisabled();
       await expect(content.locator("#new-username")).toHaveValue("alice");
     } else if (item.id === "account-new-confirm") {
       await content.locator('input[type="text"]').first().fill("release-bot");
@@ -125,10 +123,8 @@ async function prepareScreen(page: Page, item: ScreenCase) {
       await expect(content.locator("h1")).toContainText("Bob Builder");
       await content.getByRole("button", { name: "設定する" }).click();
       await content.locator("#set-username").fill("alice");
-      await expect(content.getByText("利用できます")).toBeVisible();
-      await content.getByRole("dialog").getByRole("button", { name: "設定", exact: true }).click();
-      await content.getByRole("dialog").getByRole("button", { name: "設定", exact: true }).click();
       await expect(content.getByText("利用できません")).toBeVisible();
+      await expect(content.getByRole("dialog").getByRole("button", { name: "設定", exact: true })).toBeDisabled();
       await expect(content.locator("#set-username")).toHaveValue("alice");
     } else if (item.id === "account-detail-already-set") {
       await expect(content.locator("h1")).toContainText("Bob Builder");

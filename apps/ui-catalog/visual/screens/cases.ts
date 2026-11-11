@@ -71,8 +71,6 @@ export const MUTATES_SERVER: ReadonlySet<string> = new Set(["account-detail-alre
 
 /** GraphQL error codes a case is meant to provoke (everything else fails the capture). */
 export const EXPECTED_GRAPHQL_CODES: Readonly<Record<string, readonly string[]>> = {
-  "account-new-taken": ["USERNAME_TAKEN"],
-  "account-detail-set-taken": ["USERNAME_TAKEN"],
   "account-detail-already-set": ["USERNAME_ALREADY_SET"],
 };
 
