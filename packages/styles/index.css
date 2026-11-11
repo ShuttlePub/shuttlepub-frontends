@@ -16,6 +16,8 @@
   --color-temp-high: var(--theme-temp-high);
   --color-temp-low: var(--theme-temp-low);
   --color-error: var(--theme-error);
+  --color-success: var(--theme-success);
+  --color-warning: var(--theme-warning);
   --radius-theme: var(--theme-radius);
   --radius-theme-lg: var(--theme-radius-lg);
   --shadow-theme: var(--theme-shadow);

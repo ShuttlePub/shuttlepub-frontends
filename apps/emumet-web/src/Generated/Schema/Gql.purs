@@ -47,6 +47,13 @@ newtype Query = Query
       {} -> Array (AsGql "RegistrationProtectionReadiness" RegistrationProtectionReadiness)
   , registrationWebhook :: {} -> AsGql "RegistrationWebhookStatus" RegistrationWebhookStatus
   , viewer :: {} -> AsGql "Viewer" Viewer
+  , instanceHost ::
+      {}
+      ->
+      -- | acct の @host 部分 (画面の ID 表示用)。BFF の EMUMET_PUBLIC_HOST (Emumet の PUBLIC_BASE_URL の host[:port] と同じ値を明示設定) を返す。
+      -- | mock は設定が無ければ例示ホスト。real で未設定・不正ならエラー (extensions.code = INSTANCE_HOST_NOT_CONFIGURED)。
+      -- | API 接続先 (EMUMET_API_URL) への暗黙のフォールバックはしない
+      AsGql "String" String
   , account ::
       { id :: NotNull (AsGql "ID" GraphQL.Client.ID.ID) }
       -> AsGql "Account" (Data.Maybe.Maybe (AsGql "Account" Account))
@@ -58,7 +65,7 @@ newtype Query = Query
   , checkProfileUsername ::
       { username :: NotNull (AsGql "String" String) }
       ->
-      -- | 入力中の検証用。Emumet は呼ばず規則 (形式・予約語) だけを判定する
+      -- | 入力中の検証用。形式・予約語は BFF で判定し、満たすときだけ Emumet の空き確認 API (認証必須・レート制限あり) を呼ぶ
       AsGql "ProfileUsernameCheck" ProfileUsernameCheck
   }
 
@@ -100,8 +107,8 @@ newtype Account = Account
   , publicKey ::
       {}
       ->
-      -- | Emumet は Account 単位の鍵を返さない (Profile モデル移行で廃止)。実 Emumet 接続時は値を持たず常に空文字。画面側の非表示・nullable 化は画面 PR
-      AsGql "String" String
+      -- | Emumet は Account 単位の鍵を返さない (Profile モデル移行で廃止)。値を持たないときは null (画面は非表示にする)
+      AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
   , profileUsername ::
       {}
       ->
@@ -454,8 +461,8 @@ newtype CreateAccountInput = CreateAccountInput
   { isBot :: AsGql "Boolean" Boolean
   , name :: NotNull (AsGql "String" String)
   , username ::
-      -- | Profile の username (Account 名とは別入力)。新 UI は必ず送る。省略は旧経路との互換のための暂定 (画面実装 PR で String! にする)
-      AsGql "String" String
+      -- | Profile の username (Account 名とは別入力。必須。形式・予約語・重複の違反は extensions.code で区別して返す)
+      NotNull (AsGql "String" String)
   }
 
 derive instance Data.Newtype.Newtype CreateAccountInput _

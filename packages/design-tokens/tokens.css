@@ -15,6 +15,8 @@
   --theme-temp-high: #f38ba8;
   --theme-temp-low: #89b4fa;
   --theme-error: #f38ba8;
+  --theme-success: #a6e3a1;
+  --theme-warning: #f9e2af;
 }
 
 [data-color="tokyo-night"] {
@@ -32,6 +34,8 @@
   --theme-temp-high: #f7768e;
   --theme-temp-low: #7dcfff;
   --theme-error: #f7768e;
+  --theme-success: #9ece6a;
+  --theme-warning: #e0af68;
 }
 
 /* === Shape themes === */

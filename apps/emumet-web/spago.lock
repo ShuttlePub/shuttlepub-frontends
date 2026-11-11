@@ -14,6 +14,7 @@
             "arrays",
             "bifunctors",
             "console",
+            "datetime",
             "effect",
             "either",
             "flame",
@@ -34,7 +35,10 @@
           ]
         },
         "test": {
-          "dependencies": []
+          "dependencies": [
+            "exceptions",
+            "unsafe-coerce"
+          ]
         }
       }
     },
@@ -1537,7 +1541,11 @@
       "type": "local",
       "path": "../../packages/ui",
       "dependencies": [
-        "prelude"
+        "effect",
+        "flame",
+        "maybe",
+        "prelude",
+        "web-events"
       ]
     },
     "st": {

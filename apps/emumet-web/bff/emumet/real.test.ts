@@ -79,7 +79,7 @@ describe("(f) REST contract — method/path/query/body/Authorization", () => {
       id: "acc_01",
       name: "alice",
       isBot: false,
-      publicKey: "",
+      publicKey: null,
       createdAt: "2025-01-15T09:00:00Z",
       moderation: null,
       profileId: "prof_01",

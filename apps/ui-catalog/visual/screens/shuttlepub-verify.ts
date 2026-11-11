@@ -132,6 +132,7 @@ async function verifyCompose(page: Page) {
   await page.getByTestId("compose-submit").click();
   await expect(dialog.getByRole("alert")).toHaveAttribute("data-error", "not_implemented");
   await expect(text).toHaveValue("こんにちは");
+  await expect(text).toBeFocused();
   // Esc closes the form and focus returns to the button that opened it.
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
