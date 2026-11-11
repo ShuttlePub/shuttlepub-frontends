@@ -23,17 +23,19 @@ import { violationsForSchema } from "../openapi/contract.ts";
 import { jsonResponse, stubFetch } from "../test-utils.ts";
 
 const BASE = "http://emumet.test";
+const ACCOUNTS = `${BASE}/api/v1/accounts`;
 const SET_PATH = "/api/v1/profiles/prof_01/username";
 
 function makeClient(): EmumetClient {
   return createRealEmumetClient({ baseUrl: BASE }, "tok");
 }
 
+/** AccountResponse (OpenAPI を満たす最小形。契約に無い public_key は含めない) */
 const wireAccount = {
   id: "acc_01",
   name: "alice",
   is_bot: false,
-  public_key: "ed25519:AAAA",
+  fields: [],
   created_at: "2025-01-15T09:00:00Z",
   moderation: null,
 };
@@ -62,7 +64,7 @@ describe("(a) createAccount / Account の Profile 参照", () => {
     const account = await makeClient().createAccount({ name: "alice", username: "alice" });
     expect(calls).toHaveLength(1);
     expect(calls[0]?.method).toBe("POST");
-    expect(calls[0]?.url).toBe(`${BASE}/accounts`);
+    expect(calls[0]?.url).toBe(ACCOUNTS);
     expect(JSON.parse(calls[0]?.body ?? "null")).toEqual({ name: "alice", is_bot: false, profile_username: "alice" });
     expect(account.profileId).toBe("prof_01");
     expect(account.profileUsername).toBe("alice");
@@ -102,6 +104,20 @@ describe("(a) createAccount / Account の Profile 参照", () => {
     stubFetch(() => jsonResponse(200, [{ ...wire, username: "alice" }, { ...wire, nanoid: "prof_02", account_id: "acc_02" }]));
     const profiles = await makeClient().listProfiles(["acc_01", "acc_02"]);
     expect(profiles.map((p) => p.username)).toEqual(["alice", null]);
+  });
+
+  test("baseUrl は origin: 末尾の / を除いて /api/v1 を連結する (作成・一回限り設定・409 再確認とも同じ設定で二重 prefix にならない)", async () => {
+    const client = createRealEmumetClient({ baseUrl: `${BASE}/` }, "tok");
+    const { calls } = stubFetch((call) =>
+      call.url.endsWith("/username") ? plain(409) : call.method === "GET" ? jsonResponse(200, { items: [{ ...wireAccount, profile_id: "prof_01", profile_username: "alice" }], first: null, last: null }) : jsonResponse(201, wireAccount),
+    );
+    await client.createAccount({ name: "alice", username: "alice" });
+    await rejection(client.setProfileUsername("prof_01", "bob"));
+    expect(calls.map((call) => `${call.method} ${call.url}`)).toEqual([
+      `POST ${ACCOUNTS}`,
+      `POST ${BASE}/api/v1/profiles/prof_01/username`,
+      `GET ${ACCOUNTS}`,
+    ]);
   });
 
   test("作成の 400: 送った username が予約語なら Invalid(RESERVED)、形式違反なら Invalid(FORMAT)", async () => {
@@ -196,6 +212,22 @@ describe("(b) setProfileUsername — 一回限り設定", () => {
     }
   });
 
+  test("409 の分類は「現在の状態」に基づく (原因の証明ではない): 競合で別で設定済みになっていても、自分が送った値と同じ値でも AlreadySet", async () => {
+    const accounts = (username: string) => ({ items: [{ ...wireAccount, profile_id: "prof_01", profile_username: username }], first: null, last: null });
+    // 競合: 自分の要求が負け、別のセッションが先に別の値で設定済み
+    stubFetch((call) => (call.method === "POST" ? plain(409) : jsonResponse(200, accounts("other"))));
+    expect(await rejection(makeClient().setProfileUsername("prof_01", "bob"))).toBeInstanceOf(EmumetUsernameAlreadySetError);
+    // 応答失敗後の再送: 先の成功で既に同じ値が設定済み
+    stubFetch((call) => (call.method === "POST" ? plain(409) : jsonResponse(200, accounts("bob"))));
+    expect(await rejection(makeClient().setProfileUsername("prof_01", "bob"))).toBeInstanceOf(EmumetUsernameAlreadySetError);
+  });
+
+  test("409: 原因を確定できない場合は Conflict のまま (後の状態から Taken を推測しない経路: Profile を特定できない・所有者が変わった)", async () => {
+    // 認可後に所有者が変わった (移管): 自分の Account 一覧にその Profile がもう無い → 重複とも設定済みとも言えない
+    stubFetch((call) => (call.method === "POST" ? plain(409) : jsonResponse(200, { items: [{ ...wireAccount, profile_id: "prof_other", profile_username: null }], first: null, last: null })));
+    expect(await rejection(makeClient().setProfileUsername("prof_01", "bob"))).toBeInstanceOf(EmumetUsernameConflictError);
+  });
+
   test("409: Profile を特定できない・profile_id が来ない・再確認に失敗 → 推測せず Conflict", async () => {
     stubFetch((call) => (call.method === "POST" ? plain(409) : jsonResponse(200, { items: [wireAccount], first: null, last: null })));
     expect(await rejection(makeClient().setProfileUsername("prof_01", "bob"))).toBeInstanceOf(EmumetUsernameConflictError);
@@ -227,6 +259,15 @@ describe("(b) setProfileUsername — 一回限り設定", () => {
 });
 
 describe("(d) 送受信 fixture は固定した OpenAPI 契約に適合する", () => {
+  test("成功応答 fixture: AccountResponse (profile_id / profile_username あり・無し)・AccountsResponse が契約に適合する", () => {
+    expect(violationsForSchema("AccountResponse", wireAccount)).toEqual([]);
+    expect(violationsForSchema("AccountResponse", { ...wireAccount, profile_id: "prof_01", profile_username: null })).toEqual([]);
+    expect(violationsForSchema("AccountsResponse", { items: [wireAccount], first: null, last: null })).toEqual([]);
+    // 契約にある必須 (fields) が無い応答は不適合と判定される (fixture が緩いとこのテスト自体が無意味になるため)
+    const { fields: _fields, ...withoutFields } = wireAccount;
+    expect(violationsForSchema("AccountResponse", withoutFields)).not.toEqual([]);
+  });
+
   test("リクエスト body: CreateAccountRequest (profile_username あり/なし)・SetProfileUsernameRequest", async () => {
     const { calls } = stubFetch((call) => (call.url.endsWith("/username") ? jsonResponse(200, { account_id: "a", id: "p", username: "alice" }) : jsonResponse(201, wireAccount)));
     await makeClient().createAccount({ name: "alice", username: "alice" });

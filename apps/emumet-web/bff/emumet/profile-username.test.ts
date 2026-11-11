@@ -4,6 +4,7 @@
 
 import { describe, expect, test } from "bun:test";
 import openapiDocument from "../../openapi/emumet.json" with { type: "json" };
+import { violationsForSchema } from "../openapi/contract.ts";
 import {
   PROFILE_USERNAME_MAX_LENGTH,
   PROFILE_USERNAME_PATTERN,
@@ -22,6 +23,15 @@ describe("checkProfileUsername", () => {
     for (const value of ["", "Alice", " alice", "alice ", ".alice", "_a", "-a", "a b", "あ", "é", "a".repeat(65), "alice\n", "al@ice"]) {
       expect(checkProfileUsername(value), JSON.stringify(value)).toBe("FORMAT");
     }
+  });
+
+  test("末尾改行は形式違反 (JS の $ は末尾の \\n の前でマッチしない。Emumet は文字ごとに検査し \\n を拒否)。予約語 + 改行も RESERVED ではなく FORMAT", () => {
+    for (const value of ["alice\n", "admin\n", "alice\r\n", "\nalice", "ali\nce", "admin\r"]) {
+      expect(PROFILE_USERNAME_PATTERN.test(value), JSON.stringify(value)).toBe(false);
+      expect(checkProfileUsername(value), JSON.stringify(value)).toBe("FORMAT");
+    }
+    // 契約 (OpenAPI pattern) 側の検証も同じ結果になる
+    expect(violationsForSchema("SetProfileUsernameRequest", { username: "alice\n" })).not.toEqual([]);
   });
 
   test("予約語 17 語はちょうど RESERVED (大文字・前後空白付きは形式違反が先)", () => {

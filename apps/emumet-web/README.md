@@ -71,7 +71,7 @@ bun scripts/sync-graphql.ts  # SDL → PureScript 型生成 (bff/schema.graphql 
 |------|-----------|------|
 | `KRATOS_PUBLIC_URL` | `http://localhost:4433` | Kratos Public API |
 | `HYDRA_PUBLIC_URL` | `http://localhost:4444` | Hydra Public API |
-| `EMUMET_API_URL` | `http://localhost:8080` | Emumet バックエンド |
+| `EMUMET_API_URL` | `http://localhost:8080` | Emumet バックエンドの **origin** (パスを含めない)。API は `{origin}/api/v1/...`、OAuth2 consent は `{origin}/oauth2/consent` |
 
 #### OAuth2 クライアント設定（Real モードのみ）
 

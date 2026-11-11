@@ -34,6 +34,8 @@ export type MockEmumetClientOptions = {
 
 /** テスト・fixture 専用の Profile identity 制御 (本番の API には存在しない操作) */
 export type MockProfileIdentityControl = {
+  /** Profile を持たない Account (組織 Account のように Profile の移管先になりうるもの) を作る */
+  createProfilelessAccount(name: string): Account;
   /**
    * Profile を別の Account へ移管する (Emumet の Profile 移管の再現)。username・nanoid は変わらない。
    * 移管先に Profile があれば拒否する。移管元は Profile を失う
@@ -110,6 +112,19 @@ export function createMockEmumetClient(options: MockEmumetClientOptions = {}): M
     ...registrationGate.client,
     registrationGateControl: registrationGate.control,
     profileIdentityControl: {
+      createProfilelessAccount(name: string): Account {
+        const id = "acc_" + nextId();
+        const account: StoredAccount = {
+          id,
+          name,
+          isBot: false,
+          publicKey: "ed25519:MOCK_" + id,
+          createdAt: new Date().toISOString(),
+          moderation: null,
+        };
+        accounts.push(account);
+        return withIdentity(account);
+      },
       transferProfile(profileId: string, toAccountId: string): void {
         const profile = profiles.find((p) => p.nanoid === profileId);
         if (!profile) throw new EmumetNotFoundError(`profile not found: profileId=${profileId}`);
@@ -153,18 +168,17 @@ export function createMockEmumetClient(options: MockEmumetClientOptions = {}): M
         moderation: null,
       };
       accounts.push(account);
-      if (input.username !== undefined) {
-        usedUsernames.add(input.username);
-        profiles.push({
-          accountId: id,
-          nanoid: "prof_" + nextId(),
-          displayName: null,
-          summary: null,
-          iconUrl: null,
-          bannerUrl: null,
-          username: input.username,
-        });
-      }
+      // 実 API (create_account) は username の有無に関わらず Account と同時に Profile を作り、初期表示名は Account 名にする
+      if (input.username !== undefined) usedUsernames.add(input.username);
+      profiles.push({
+        accountId: id,
+        nanoid: "prof_" + nextId(),
+        displayName: input.name,
+        summary: null,
+        iconUrl: null,
+        bannerUrl: null,
+        username: input.username ?? null,
+      });
       return withIdentity(account);
     },
 

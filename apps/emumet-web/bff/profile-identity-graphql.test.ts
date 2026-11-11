@@ -70,9 +70,9 @@ describe("(a) 読取と未設定の表現", () => {
     ]);
   });
 
-  test("Profile を持たない Account (旧経路の作成) は profileId・profile とも null で、エラーにならない", async () => {
+  test("Profile を持たない Account (組織 Account 等) は profileId・profile とも null で、エラーにならない", async () => {
     const emumet = createMockEmumetClient();
-    const created = await emumet.createAccount({ name: "legacy" });
+    const created = emumet.profileIdentityControl.createProfilelessAccount("org");
     const result = await run("query($id: ID!) { account(id: $id) { profileId profileUsername profile { nanoid } } }", await authenticated(emumet), { id: created.id });
     expect(result.errors).toBeUndefined();
     expect(result.data?.["account"]).toEqual({ profileId: null, profileUsername: null, profile: null });
@@ -88,10 +88,11 @@ describe("(b) createAccount と username", () => {
     expect((result.data?.["createAccount"] as { profileId: string | null }).profileId).not.toBeNull();
   });
 
-  test("username 省略 (旧経路) は従来どおり成功する (画面実装 PR まで schema 上は任意)", async () => {
+  test("username 省略 (旧経路) は従来どおり成功する (画面実装 PR まで schema 上は任意)。Profile は作られ、username は未設定 (profileId あり・profileUsername null)", async () => {
     const result = await run(CREATE, await authenticated(createMockEmumetClient()), { input: { name: "legacy" } });
     expect(result.errors).toBeUndefined();
-    expect(result.data?.["createAccount"]).toMatchObject({ name: "legacy", profileId: null, profileUsername: null });
+    expect(result.data?.["createAccount"]).toMatchObject({ name: "legacy", profileUsername: null });
+    expect((result.data?.["createAccount"] as { profileId: string | null }).profileId).not.toBeNull();
   });
 
   test("username: null は省略と同じ (送らない)", async () => {
@@ -235,6 +236,8 @@ describe("(d) checkProfileUsername — 規則だけの判定", () => {
     expect(await check(" alice")).toBe("FORMAT");
     expect(await check("")).toBe("FORMAT");
     expect(await check("admin")).toBe("RESERVED");
+    expect(await check("alice\n")).toBe("FORMAT");
+    expect(await check("admin\n")).toBe("FORMAT");
     expect(calls).toEqual([]);
   });
 });

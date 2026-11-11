@@ -110,11 +110,19 @@ describe("作成時の username", () => {
     expect(profile?.nanoid).toBe(account.profileId as string);
   });
 
-  test("username 省略の作成 (旧経路) は Profile を作らず、Profile 参照は null", async () => {
+  test("実 API と同じく、username 省略 (旧経路) でも Profile を作り (初期表示名 = Account 名)、username は未設定であり後から一回限り設定できる", async () => {
     const mock = createMockEmumetClient();
     const account = await mock.createAccount({ name: "carol" });
-    expect([account.profileId, account.profileUsername]).toEqual([null, null]);
-    expect(await mock.getProfile(account.id)).toBeNull();
+    expect(account.profileId).not.toBeNull();
+    expect(account.profileUsername).toBeNull();
+    expect(await mock.getProfile(account.id)).toMatchObject({ nanoid: account.profileId, displayName: "carol", username: null });
+    expect((await mock.setProfileUsername(account.profileId as string, "carol")).username).toBe("carol");
+  });
+
+  test("username 付きの作成も初期表示名は Account 名 (username とは独立)", async () => {
+    const mock = createMockEmumetClient();
+    const account = await mock.createAccount({ name: "Carol Display", username: "carol" });
+    expect(await mock.getProfile(account.id)).toMatchObject({ displayName: "Carol Display", username: "carol" });
   });
 
   test("重複・予約語・形式違反は副作用前に拒否され、Account は増えない", async () => {
@@ -124,6 +132,19 @@ describe("作成時の username", () => {
     expect(((await rejection(mock.createAccount({ name: "x", username: "admin" }))) as EmumetUsernameInvalidError).reason).toBe("RESERVED");
     expect(((await rejection(mock.createAccount({ name: "x", username: "Carol" }))) as EmumetUsernameInvalidError).reason).toBe("FORMAT");
     expect((await mock.listAccounts()).items).toHaveLength(before);
+  });
+
+  test("末尾改行付き (alice\\n / admin\\n) は作成・設定とも FORMAT で拒否され、Account は増えない", async () => {
+    const mock = createMockEmumetClient();
+    const before = (await mock.listAccounts()).items.length;
+    for (const username of ["alice\n", "admin\n", "carol\n"]) {
+      const created = await rejection(mock.createAccount({ name: "x", username }));
+      expect((created as EmumetUsernameInvalidError).reason, JSON.stringify(username)).toBe("FORMAT");
+      const set = await rejection(mock.setProfileUsername("prof_02", username));
+      expect((set as EmumetUsernameInvalidError).reason, JSON.stringify(username)).toBe("FORMAT");
+    }
+    expect((await mock.listAccounts()).items).toHaveLength(before);
+    expect((await mock.getProfile("acc_02"))?.username).toBeNull();
   });
 
   test("作成で使った username は、同じ値を後から別 Profile に設定できない (一意)", async () => {
@@ -136,7 +157,7 @@ describe("作成時の username", () => {
 describe("Profile 移管でも username は変わらない", () => {
   test("移管先の Account 名・移管元に依存せず、Profile の username・nanoid が維持される", async () => {
     const mock = createMockEmumetClient();
-    const org = await mock.createAccount({ name: "Org Account" });
+    const org = mock.profileIdentityControl.createProfilelessAccount("Org Account");
     mock.profileIdentityControl.transferProfile("prof_01", org.id);
     const moved = await mock.getProfile(org.id);
     expect(moved).toMatchObject({ nanoid: "prof_01", username: "alice", accountId: org.id });
@@ -148,7 +169,7 @@ describe("Profile 移管でも username は変わらない", () => {
 
   test("移管後も username は変更できず、他の Profile へも移らない (AlreadySet / Taken)", async () => {
     const mock = createMockEmumetClient();
-    const org = await mock.createAccount({ name: "Org Account" });
+    const org = mock.profileIdentityControl.createProfilelessAccount("Org Account");
     mock.profileIdentityControl.transferProfile("prof_01", org.id);
     expect(await rejection(mock.setProfileUsername("prof_01", "renamed"))).toBeInstanceOf(EmumetUsernameAlreadySetError);
     expect(await rejection(mock.setProfileUsername("prof_02", "alice"))).toBeInstanceOf(EmumetUsernameTakenError);

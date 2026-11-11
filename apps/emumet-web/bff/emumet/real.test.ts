@@ -58,11 +58,11 @@ afterEach(() => {
 });
 
 describe("(f) REST contract — method/path/query/body/Authorization", () => {
-  test("listAccounts: GET /accounts with Bearer token, converts snake_case → camelCase incl. moderation", async () => {
+  test("listAccounts: GET /api/v1/accounts with Bearer token, converts snake_case → camelCase incl. moderation", async () => {
     // Given: 3 アカウント (moderation: null / suspended / banned)
     const { calls } = stubFetch((call) => {
       expect(call.method).toBe("GET");
-      expect(call.url).toBe(`${BASE}/accounts`);
+      expect(call.url).toBe(`${BASE}/api/v1/accounts`);
       return jsonResponse(200, { items: [wireAccount1, wireAccountSuspended, wireAccountBanned], first: "acc_01", last: "acc_b" });
     });
     // When
@@ -110,7 +110,7 @@ describe("(f) REST contract — method/path/query/body/Authorization", () => {
     expect(result).toEqual({ items: [], first: null, last: null });
   });
 
-  test("getAccount: GET /accounts?ids=<id> returns first item converted", async () => {
+  test("getAccount: GET /api/v1/accounts?ids=<id> returns first item converted", async () => {
     // Given
     const { calls } = stubFetch((call) => {
       expect(call.method).toBe("GET");
@@ -119,7 +119,7 @@ describe("(f) REST contract — method/path/query/body/Authorization", () => {
     // When
     const result = await makeClient().getAccount("acc_01");
     // Then: ids クエリで 1 件取得
-    expect(calls[0]?.url).toBe(`${BASE}/accounts?ids=acc_01`);
+    expect(calls[0]?.url).toBe(`${BASE}/api/v1/accounts?ids=acc_01`);
     expect(result?.id).toBe("acc_01");
     expect(result?.isBot).toBe(false);
   });
@@ -140,11 +140,11 @@ describe("(f) REST contract — method/path/query/body/Authorization", () => {
     expect(result).toBeNull();
   });
 
-  test("createAccount: POST /accounts with snake_case body, isBot omitted → is_bot false", async () => {
+  test("createAccount: POST /api/v1/accounts with snake_case body, isBot omitted → is_bot false", async () => {
     // Given
     const { calls } = stubFetch((call) => {
       expect(call.method).toBe("POST");
-      expect(call.url).toBe(`${BASE}/accounts`);
+      expect(call.url).toBe(`${BASE}/api/v1/accounts`);
       return jsonResponse(201, wireAccount1);
     });
     // When

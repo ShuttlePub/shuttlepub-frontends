@@ -27,10 +27,18 @@ import {
 } from "./client.ts";
 
 export type RealEmumetConfig = {
+  /**
+   * Emumet の origin (例: http://localhost:8080)。パスは含めない: すべての API path は `/api/v1/...` を
+   * この値に連結する (登録ゲート・OAuth2 consent (`{origin}/oauth2/consent`)・shuttlepub-web も同じ規約)。
+   * 末尾の `/` は無視する。EMUMET_API_URL にそのまま渡す値
+   */
   readonly baseUrl: string;
   /** 登録ゲート API の接続・応答待ち上限 (ms)。省略時は registration-gate-real.ts の既定値 */
   readonly registrationGateTimeoutMs?: number;
 };
+
+/** Account の list / get / create (OpenAPI: `/api/v1/accounts`)。Profile の一回限り設定は `/api/v1/profiles/...` */
+const ACCOUNTS_PATH = "/api/v1/accounts";
 
 // --- ワイヤ型 (snake_case) ---
 
@@ -168,7 +176,7 @@ export function createRealEmumetClient(config: RealEmumetConfig, accessToken: st
   async function request(method: string, path: string, body?: unknown, timeoutMs?: number): Promise<Response> {
     const headers: Record<string, string> = { Authorization: `Bearer ${accessToken}` };
     if (body !== undefined) headers["Content-Type"] = "application/json";
-    return fetch(`${config.baseUrl}${path}`, {
+    return fetch(`${config.baseUrl.replace(/\/+$/, "")}${path}`, {
       method,
       headers,
       body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -229,9 +237,11 @@ export function createRealEmumetClient(config: RealEmumetConfig, accessToken: st
   }
 
   /**
-   * 409 は「設定済み」と「他で使用中」を本文で区別しない (空本文)。自分の Account の profile_username で
-   * 設定済みかを再確認して区別する。確認できない (フィールドが来ない・対象が見つからない・取得失敗) 場合は
-   * 推測せず Conflict として返す。
+   * 409 は「設定済み」と「他で使用中」を本文で区別しない (空本文)。契約は次のとおり:
+   *   - 再確認は 409 後の「現在の状態」であり、409 の原因そのものの証明ではない
+   *   - 現在設定済み (競合で別セッションが先に設定した場合、送信応答失敗後の再送で同じ値が設定済みの場合を含む) → AlreadySet
+   *   - 現在未設定で、自分の Account 一覧にその Profile がある → Taken (文書化された 409 の残りの原因は重複と、認可後の所有者変更だけ。所有者変更は一覧から消えるためここには来ない)
+   *   - 確認できない (フィールドが来ない・対象が見つからない・取得失敗) → 推測せず Conflict
    */
   async function classifyUsernameConflict(profileId: string): Promise<Error> {
     try {
@@ -245,7 +255,7 @@ export function createRealEmumetClient(config: RealEmumetConfig, accessToken: st
   }
 
   async function listAccounts(): Promise<AccountConnection> {
-    const resp = await request("GET", "/accounts");
+    const resp = await request("GET", ACCOUNTS_PATH);
     if (resp.status === 404) {
       // Emumet は 0 件時に 404 "No accounts found" を返す → 空 connection に正規化
       return { items: [], first: null, last: null };
@@ -264,7 +274,7 @@ export function createRealEmumetClient(config: RealEmumetConfig, accessToken: st
     listAccounts,
 
     async getAccount(id: string): Promise<Account | null> {
-      const resp = await request("GET", `/accounts?ids=${encodeURIComponent(id)}`);
+      const resp = await request("GET", `${ACCOUNTS_PATH}?ids=${encodeURIComponent(id)}`);
       if (resp.status === 404) return null;
       const wire = await expectJson<WireAccounts>(resp, [200]);
       const account = wire.items[0];
@@ -274,7 +284,7 @@ export function createRealEmumetClient(config: RealEmumetConfig, accessToken: st
     async createAccount(input: CreateAccountInput): Promise<Account> {
       const body: Record<string, unknown> = { name: input.name, is_bot: input.isBot ?? false };
       if (input.username !== undefined) body.profile_username = input.username;
-      const resp = await request("POST", "/accounts", body);
+      const resp = await request("POST", ACCOUNTS_PATH, body);
       if (input.username !== undefined) {
         // username を送った作成だけ、400/409 を username の拒否として区別する (作成は副作用前に拒否される)
         if (resp.status === 400) {
