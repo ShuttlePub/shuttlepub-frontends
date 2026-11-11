@@ -19,22 +19,24 @@ import {
   ENFORCEMENT_NOTIFICATION_FIXTURES,
   NOTIFICATION_LIST_FIXTURES,
   REGISTRATION_GATE_FIXTURES,
-  WEBHOOK_STATUS_FIXTURES,
+  WEBHOOK_FIXTURES,
   WEBHOOK_TEST_FIXTURES,
   type NotificationListFixtureName,
   type RegistrationGateFixtureName,
-  type WebhookStatusFixtureName,
+  type WebhookFixtureName,
 } from "./registration-gate-fixtures.ts";
 import {
   toNotification,
   toProtectionReadiness,
   toRegistrationGate,
-  toWebhookStatus,
+  toWebhookEndpoints,
+  toWebhookFailedDelivery,
   toWebhookTest,
   type WireProtectionReadiness,
 } from "./registration-gate-real.ts";
 import {
   EmumetRegistrationTargetNotFoundError,
+  EmumetWebhookEndpointRejectedError,
   EmumetWebhookUnavailableError,
   type RegistrationAdminState,
   type RegistrationDecision,
@@ -49,8 +51,11 @@ import {
   type RegistrationProtectionObservation,
   type RegistrationProtectionReadiness,
   type RegistrationProtectionVerification,
-  type RegistrationWebhookDelivery,
-  type RegistrationWebhookStatus,
+  type RegistrationWebhookCategory,
+  type RegistrationWebhookEndpoint,
+  type RegistrationWebhookEndpoints,
+  type RegistrationWebhookFailedDelivery,
+  type WebhookEndpointRejection,
 } from "./registration-gate.ts";
 
 export const MOCK_ADMIN_ID = "auth-account-mock-admin";
@@ -70,8 +75,8 @@ export type MockRegistrationGateOptions = {
   readonly notifications?: NotificationListFixtureName | "enforcement" | "many";
   /** 保護の readiness。省略時は初期状態の observation から導出する (Emumet の to_observation の逆) */
   readonly protections?: readonly WireProtectionReadiness[];
-  /** Webhook 配送状態。省略時は未設定 */
-  readonly webhook?: WebhookStatusFixtureName;
+  /** Webhook 送信先と配送失敗。省略時は送信先なし */
+  readonly webhook?: WebhookFixtureName;
   readonly role?: MockRegistrationGateRole;
   /** 時刻の注入 (テストの決定性用) */
   readonly now?: () => string;
@@ -264,7 +269,7 @@ export type MockRegistrationGateControl = {
    * 未設定と設定エラーはどちらも configured=false になるので、readiness だけが区別を持つ
    */
   setProtections(protections: readonly WireProtectionReadiness[]): void;
-  setWebhook(fixture: WebhookStatusFixtureName): void;
+  setWebhook(fixture: WebhookFixtureName): void;
   setRole(role: MockRegistrationGateRole): void;
   /** 次の 1 回の呼び出しを、この例外で失敗させる (一時障害・401 などの注入) */
   failNext(error: Error): void;
@@ -345,14 +350,9 @@ export function createMockRegistrationGate(options: MockRegistrationGateOptions 
     EMAIL: readinessFromObservation("EMAIL", state.observation.email),
     BOT: readinessFromObservation("BOT", state.observation.bot),
   };
-  let webhook: { status: RegistrationWebhookStatus; deliveries: RegistrationWebhookDelivery[] } = loadWebhook("not_configured");
+  let webhook = loadWebhook("none");
   let events: StoredEvent[] = [];
   let nextEventId = 1001;
-
-  function loadWebhook(name: WebhookStatusFixtureName) {
-    const status = toWebhookStatus(WEBHOOK_STATUS_FIXTURES[name]);
-    return { status, deliveries: [...status.recentDeliveries] };
-  }
 
   function load(next: MockRegistrationGateOptions): void {
     role = next.role ?? "admin";
@@ -374,7 +374,7 @@ export function createMockRegistrationGate(options: MockRegistrationGateOptions 
         throw new Error(`mock registration gate: readiness for ${protection} contradicts fixture ${next.fixture ?? "not_ready"}`);
       }
     }
-    webhook = loadWebhook(next.webhook ?? "not_configured");
+    webhook = loadWebhook(next.webhook ?? "none");
     events = seedEvents(next.notifications ?? "empty");
     nextEventId = Math.max(1000, ...events.map((event) => event.id)) + 1;
   }
@@ -511,21 +511,110 @@ export function createMockRegistrationGate(options: MockRegistrationGateOptions 
     };
   }
 
-  function webhookView(): RegistrationWebhookStatus {
-    const count = (status: RegistrationWebhookDelivery["status"]) =>
-      webhook.deliveries.filter((delivery) => delivery.status === status).length;
+  // ---- Webhook 送信先 (E15x) ----
+
+  type StoredEndpoint = {
+    endpoint: RegistrationWebhookEndpoint;
+    /** 重複判定用の正規化した URL。fixture 由来の送信先は分からない (null) */
+    url: string | null;
+  };
+
+  function loadWebhook(name: WebhookFixtureName) {
+    const fixture = WEBHOOK_FIXTURES[name];
+    const list = toWebhookEndpoints(fixture.list);
     return {
-      ...webhook.status,
-      counts: {
-        pending: count("PENDING"),
-        inFlight: count("IN_FLIGHT"),
-        retrying: count("RETRYING"),
-        delivered: count("DELIVERED"),
-        failed: count("FAILED"),
-      },
-      lastFailureAt: webhook.deliveries.some((delivery) => delivery.status === "FAILED") ? webhook.status.lastFailureAt : null,
-      recentDeliveries: webhook.deliveries,
+      endpoints: list.endpoints.map((endpoint): StoredEndpoint => ({ endpoint, url: null })),
+      failures: fixture.failures.map(toWebhookFailedDelivery),
+      encryptionKeyConfigured: list.encryptionKeyConfigured,
+      maxEndpoints: list.maxEndpoints,
+      nextId: 1 + Math.max(0, ...list.endpoints.map((endpoint) => Number(endpoint.id)).filter(Number.isFinite)),
     };
+  }
+
+  /** 状態チップと failed 件数は配送失敗の一覧から導出する (failed が再試行で解消されれば healthy に戻る) */
+  function endpointView(stored: StoredEndpoint): RegistrationWebhookEndpoint {
+    const failed = webhook.failures.filter((item) => item.endpointId === stored.endpoint.id).length;
+    const permanent = stored.endpoint.failingReasons.filter((reason) => reason !== "failed_deliveries");
+    const failingReasons = [...(failed > 0 ? ["failed_deliveries"] : []), ...permanent];
+    return {
+      ...stored.endpoint,
+      status: failingReasons.length > 0 ? "FAILING" : "HEALTHY",
+      failingReasons,
+      failedCount: failed,
+      counts: { ...stored.endpoint.counts, failed },
+    };
+  }
+
+  function findEndpoint(endpointId: string): StoredEndpoint {
+    const stored = webhook.endpoints.find((item) => item.endpoint.id === endpointId);
+    if (stored === undefined) throw new EmumetRegistrationTargetNotFoundError("no such webhook destination");
+    return stored;
+  }
+
+  function reject(statusCode: number, reason: WebhookEndpointRejection): EmumetWebhookEndpointRejectedError {
+    return new EmumetWebhookEndpointRejectedError(statusCode, reason);
+  }
+
+  function checkCategories(categories: readonly RegistrationWebhookCategory[]): void {
+    if (categories.length === 0) throw reject(400, "no_categories");
+  }
+
+  function checkSecret(secret: string): void {
+    const bytes = new TextEncoder().encode(secret).byteLength;
+    if (bytes === 0) throw reject(400, "secret_required");
+    if (bytes < 16) throw reject(400, "secret_too_short");
+    if (bytes > 256) throw reject(400, "secret_too_long");
+  }
+
+  /** Emumet の登録時検査 (HTTPS のみ・userinfo と fragment は不可・2048 文字以内・内部宛先は不可) の写し */
+  function parseUrl(raw: string): { normalized: string; masked: string } {
+    if (raw.length > 2048) throw reject(400, "url_too_long");
+    let url: URL;
+    try {
+      url = new URL(raw);
+    } catch {
+      throw reject(400, "invalid_url");
+    }
+    if (url.protocol !== "https:") throw reject(400, "unsupported_scheme");
+    if (url.username !== "" || url.password !== "") throw reject(400, "credentials_in_url");
+    if (url.hash !== "" || raw.includes("#")) throw reject(400, "fragment_in_url");
+    if (url.hostname === "") throw reject(400, "missing_host");
+    if (/^(?:localhost|127\.|10\.|192\.168\.|169\.254\.|\[::1\])/.test(url.hostname)) throw reject(400, "forbidden_destination");
+    const tokens = url.pathname.split("/").filter((token) => token !== "");
+    const last = tokens.at(-1) ?? "";
+    const masked =
+      last.length >= 12 ? `${url.host}/••••/${last.slice(-4)}`
+      : tokens.length > 0 || url.search !== "" ? `${url.host}/••••`
+      : url.host;
+    return { normalized: url.toString(), masked };
+  }
+
+  function checkDuplicate(normalized: string, except: string | null): void {
+    if (webhook.endpoints.some((item) => item.url === normalized && item.endpoint.id !== except)) {
+      throw reject(409, "duplicate_url");
+    }
+  }
+
+  function webhookList(): RegistrationWebhookEndpoints {
+    return {
+      endpoints: webhook.endpoints.map(endpointView),
+      hasFailedDeliveries: webhook.failures.length > 0,
+      encryptionKeyConfigured: webhook.encryptionKeyConfigured,
+      maxEndpoints: webhook.maxEndpoints,
+    };
+  }
+
+  /** failed になった時刻の新しい順 (同時刻は送信先 ID・event ID の降順) */
+  function sortedFailures(endpointId: string | undefined): RegistrationWebhookFailedDelivery[] {
+    const descending = (a: string, b: string) => (a === b ? 0 : a < b ? 1 : -1);
+    return webhook.failures
+      .filter((item) => endpointId === undefined || item.endpointId === endpointId)
+      .sort((a, b) => descending(a.failedAt, b.failedAt) || descending(a.endpointId, b.endpointId) || Number(b.eventId) - Number(a.eventId));
+  }
+
+  /** cursor は「この失敗より古いもの」を指す不透明な文字列 (mock では failedAt|endpointId|eventId) */
+  function failureCursor(item: RegistrationWebhookFailedDelivery): string {
+    return btoa(`${item.failedAt}|${item.endpointId}|${item.eventId}`);
   }
 
   const client: RegistrationGateClient = {
@@ -544,27 +633,111 @@ export function createMockRegistrationGate(options: MockRegistrationGateOptions 
     async verifyRegistrationProtection(protection) {
       return verify(protection);
     },
-    async getRegistrationWebhookStatus() {
+    async listRegistrationWebhookEndpoints() {
       guard();
-      return webhookView();
+      return webhookList();
     },
-    async sendRegistrationWebhookTest() {
+    async createRegistrationWebhookEndpoint(input) {
       guard();
-      if (webhook.status.configuration !== "CONFIGURED") throw new EmumetWebhookUnavailableError();
-      const failing = webhook.deliveries.some((delivery) => delivery.status === "FAILED" || delivery.status === "RETRYING");
-      return { ...toWebhookTest(failing ? WEBHOOK_TEST_FIXTURES.failure : WEBHOOK_TEST_FIXTURES.success), attemptedAt: now() };
+      checkCategories(input.categories);
+      const url = parseUrl(input.url);
+      checkSecret(input.secret);
+      if (!webhook.encryptionKeyConfigured) throw reject(409, "encryption_key_not_configured");
+      if (webhook.endpoints.length >= webhook.maxEndpoints) throw reject(409, "endpoint_limit_reached");
+      checkDuplicate(url.normalized, null);
+      const at = now();
+      const endpoint: RegistrationWebhookEndpoint = {
+        id: String(webhook.nextId++),
+        source: "API",
+        maskedUrl: url.masked,
+        categories: [...new Set(input.categories)],
+        status: "HEALTHY",
+        failingReasons: [],
+        configIssue: null,
+        failedCount: 0,
+        counts: { pending: 0, inFlight: 0, retrying: 0, delivered: 0, failed: 0 },
+        secretConfigured: true,
+        editable: true,
+        revision: 1,
+        lastSuccessAt: null,
+        lastFailureAt: null,
+        createdAt: at,
+      };
+      const stored = { endpoint, url: url.normalized };
+      webhook.endpoints.push(stored);
+      return endpointView(stored);
     },
-    async retryRegistrationWebhook(eventId) {
+    async updateRegistrationWebhookEndpoint(endpointId, input) {
       guard();
-      const targets = webhook.deliveries.filter(
-        (delivery) => delivery.status === "FAILED" && (eventId === undefined || delivery.eventId === eventId),
-      );
-      if (eventId !== undefined && targets.length === 0) {
-        throw new EmumetRegistrationTargetNotFoundError("no failed webhook delivery with that event ID");
+      const stored = findEndpoint(endpointId);
+      if (!stored.endpoint.editable) throw reject(409, "environment_endpoint_read_only");
+      if (stored.endpoint.revision !== input.revision) throw status(409);
+      if (input.url === undefined && input.secret === undefined && input.categories === undefined) {
+        throw reject(400, "nothing_to_update");
       }
-      webhook.deliveries = webhook.deliveries.map((delivery) =>
-        targets.includes(delivery) ? { ...delivery, status: "PENDING", failureReason: null } : delivery,
+      if (input.categories !== undefined) checkCategories(input.categories);
+      const url = input.url === undefined ? undefined : parseUrl(input.url);
+      if (input.secret !== undefined) {
+        checkSecret(input.secret);
+        if (!webhook.encryptionKeyConfigured) throw reject(409, "encryption_key_not_configured");
+      }
+      if (url !== undefined) checkDuplicate(url.normalized, endpointId);
+      stored.endpoint = {
+        ...stored.endpoint,
+        ...(url === undefined ? {} : { maskedUrl: url.masked }),
+        ...(input.categories === undefined ? {} : { categories: [...new Set(input.categories)] }),
+        // secret の再入力で復号不可は解消する
+        ...(input.secret === undefined ? {} : { secretConfigured: true, failingReasons: stored.endpoint.failingReasons.filter((reason) => reason !== "secret_undecryptable") }),
+        revision: input.revision + 1,
+      };
+      if (url !== undefined) stored.url = url.normalized;
+      return endpointView(stored);
+    },
+    async deleteRegistrationWebhookEndpoint(endpointId, revision) {
+      guard();
+      const stored = findEndpoint(endpointId);
+      if (!stored.endpoint.editable) throw reject(409, "environment_endpoint_read_only");
+      if (stored.endpoint.revision !== revision) throw status(409);
+      // 未完了の配送と配送履歴も消える (それ以降この送信先へは何も届かない)
+      webhook.endpoints = webhook.endpoints.filter((item) => item !== stored);
+      webhook.failures = webhook.failures.filter((item) => item.endpointId !== endpointId);
+    },
+    async sendRegistrationWebhookTest(endpointId) {
+      guard();
+      const view = endpointView(findEndpoint(endpointId));
+      if (view.failingReasons.includes("config_invalid")) throw new EmumetWebhookUnavailableError();
+      const fixture = view.status === "FAILING" ? WEBHOOK_TEST_FIXTURES.failure : WEBHOOK_TEST_FIXTURES.success;
+      return { ...toWebhookTest(fixture), attemptedAt: now() };
+    },
+    async listRegistrationWebhookFailures(query) {
+      guard();
+      const limit = query?.limit ?? DEFAULT_PAGE_LIMIT;
+      if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE_LIMIT) throw status(400);
+      if (query?.endpointId !== undefined) findEndpoint(query.endpointId);
+      const all = sortedFailures(query?.endpointId);
+      let start = 0;
+      if (query?.before !== undefined) {
+        const index = all.findIndex((item) => failureCursor(item) === query.before);
+        if (index === -1) throw status(400);
+        start = index + 1;
+      }
+      const items = all.slice(start, start + limit);
+      const last = items.at(-1);
+      return { items, nextCursor: start + limit < all.length && last !== undefined ? failureCursor(last) : null };
+    },
+    async retryRegistrationWebhook(target) {
+      guard();
+      if (target !== undefined) findEndpoint(target.endpointId);
+      const targets = webhook.failures.filter(
+        (item) =>
+          target === undefined ||
+          (item.endpointId === target.endpointId && (target.eventId === undefined || item.eventId === target.eventId)),
       );
+      if (target?.eventId !== undefined && targets.length === 0) {
+        throw new EmumetRegistrationTargetNotFoundError("no failed webhook delivery for that destination / event ID");
+      }
+      // 再キューした配送は mock では成功したものとして配送失敗の一覧から外す
+      webhook.failures = webhook.failures.filter((item) => !targets.includes(item));
       return targets.length;
     },
     async getRegistrationGate() {

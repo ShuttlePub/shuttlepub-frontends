@@ -3,9 +3,9 @@
 //  - 管理画面の状態 (status) と最低条件 (minimumMet) の導出 (1 関数に閉じ込めた判定の固定)
 //  - E15d: 適用証明 (enforcement) の喪失・復旧の REST 変換と stateful mock の状態遷移
 //  - E15c: 保護の readiness 一覧・入力なしの再検証
-//  - E15w: Webhook 配送状態・テスト送信・再試行 (宛先は host のみ。secret・URL 全体は扱わない)
+//  - E15x: Webhook 送信先の登録・更新・削除・テスト送信・配送失敗の再試行 (URL は部分マスク形だけ。secret は返さない)
 //  - GET /api/v1/me (管理画面の導線のヒント。権限判断の正本ではない)
-//  - GraphQL のエラー分類 (FORBIDDEN / WEBHOOK_NOT_CONFIGURED / NOT_FOUND / TEMPORARILY_UNAVAILABLE)
+//  - GraphQL のエラー分類 (FORBIDDEN / REVISION_CONFLICT / WEBHOOK_ENDPOINT_REJECTED / WEBHOOK_NOT_CONFIGURED / NOT_FOUND / TEMPORARILY_UNAVAILABLE)
 // ============================================================
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -26,7 +26,7 @@ import {
   REGISTRATION_GATE_FIXTURE_NAMES,
   VERIFY_PROTECTION_FIXTURES,
   WEBHOOK_RETRY_FIXTURES,
-  WEBHOOK_STATUS_FIXTURES,
+  WEBHOOK_FIXTURES,
   WEBHOOK_TEST_FIXTURES,
 } from "./emumet/registration-gate-fixtures.ts";
 import { createMockRegistrationGate, registrationGateFromFixture } from "./emumet/registration-gate-mock.ts";
@@ -35,6 +35,7 @@ import {
   EmumetInvalidResponseError,
   EmumetRegistrationTargetNotFoundError,
   EmumetUnavailableError,
+  EmumetWebhookEndpointRejectedError,
   EmumetWebhookUnavailableError,
   type RegistrationObservation,
 } from "./emumet/registration-gate.ts";
@@ -109,9 +110,13 @@ describe("追加 fixture は固定した OpenAPI 契約に適合する", () => {
     for (const body of Object.values(VERIFY_PROTECTION_FIXTURES)) check(`${GATE}/protections/{protection}/verify`, "post", body);
   });
 
-  test("Webhook 状態・テスト送信・再試行", () => {
-    for (const body of Object.values(WEBHOOK_STATUS_FIXTURES)) check(`${GATE}/webhook`, "get", body);
-    for (const body of Object.values(WEBHOOK_TEST_FIXTURES)) check(`${GATE}/webhook/test`, "post", body);
+  test("Webhook 送信先の一覧・配送失敗・テスト送信・再試行", () => {
+    for (const fixture of Object.values(WEBHOOK_FIXTURES)) {
+      check(`${GATE}/webhook/endpoints`, "get", fixture.list);
+      check(`${GATE}/webhook/failures`, "get", { items: fixture.failures, next_cursor: null });
+      for (const endpoint of fixture.list.endpoints) check(`${GATE}/webhook/endpoints/{endpoint_id}`, "get", endpoint);
+    }
+    for (const body of Object.values(WEBHOOK_TEST_FIXTURES)) check(`${GATE}/webhook/endpoints/{endpoint_id}/test`, "post", body);
     for (const body of Object.values(WEBHOOK_RETRY_FIXTURES)) check(`${GATE}/webhook/retry`, "post", body);
   });
 
@@ -120,13 +125,14 @@ describe("追加 fixture は固定した OpenAPI 契約に適合する", () => {
     check(`${GATE}/notifications`, "get", ENFORCEMENT_NOTIFICATION_FIXTURES);
   });
 
-  test("Webhook fixture は未設定・設定不備・正常・再試行中・失敗を網羅し、宛先は host のみ", () => {
-    const configurations = Object.values(WEBHOOK_STATUS_FIXTURES).map((body) => body.configuration);
-    expect(new Set(configurations)).toEqual(new Set(["not_configured", "misconfigured", "configured"]));
-    const statuses = Object.values(WEBHOOK_STATUS_FIXTURES).flatMap((body) => body.recent_deliveries.map((delivery) => delivery.status));
-    for (const status of ["delivered", "retrying", "failed"]) expect(statuses).toContain(status);
-    for (const body of Object.values(WEBHOOK_STATUS_FIXTURES)) {
-      expect(JSON.stringify(body)).not.toMatch(/https?:|secret_value|\/\//);
+  test("Webhook fixture は送信先なし・正常・配送失敗・複数・復号不可・環境変数 (正常/設定不備)・多数の失敗を網羅し、URL は部分マスク形だけ", () => {
+    const endpoints = Object.values(WEBHOOK_FIXTURES).flatMap((fixture) => fixture.list.endpoints);
+    expect(new Set(endpoints.map((endpoint) => endpoint.source))).toEqual(new Set(["api", "environment"]));
+    expect(new Set(endpoints.flatMap((endpoint) => endpoint.failing_reasons))).toEqual(new Set(["failed_deliveries", "secret_undecryptable", "config_invalid"]));
+    expect(WEBHOOK_FIXTURES.many_failures.failures.length).toBeGreaterThan(50);
+    expect(WEBHOOK_FIXTURES.no_key.list.encryption_key_configured).toBe(false);
+    for (const fixture of Object.values(WEBHOOK_FIXTURES)) {
+      expect(JSON.stringify(fixture)).not.toMatch(/https?:|secret_value|\/\//);
     }
   });
 });
@@ -168,40 +174,84 @@ describe("REST 変換 (real)", () => {
     expect(JSON.stringify(list)).not.toContain("fp-");
   });
 
-  test("Webhook: 状態の変換・テスト送信・event_id 指定の再試行", async () => {
+  test("Webhook: 一覧・配送失敗の変換と、作成・更新・削除・テスト送信・再試行の path・method・本文", async () => {
     const { calls } = stubFetch((call) => {
-      if (call.url.endsWith("/test")) return jsonResponse(200, WEBHOOK_TEST_FIXTURES.failure);
-      if (call.url.endsWith("/retry")) return jsonResponse(200, WEBHOOK_RETRY_FIXTURES.one);
-      return jsonResponse(200, WEBHOOK_STATUS_FIXTURES.failed);
+      const path = call.url.replace(BASE, "");
+      if (path.startsWith(`${GATE}/webhook/failures`)) return jsonResponse(200, { items: WEBHOOK_FIXTURES.failed.failures, next_cursor: "c2" });
+      if (path.endsWith("/test")) return jsonResponse(200, WEBHOOK_TEST_FIXTURES.failure);
+      if (path.endsWith("/retry")) return jsonResponse(200, WEBHOOK_RETRY_FIXTURES.one);
+      if (path.endsWith("/delete")) return new Response(null, { status: 204 });
+      if (call.method === "POST") return jsonResponse(201, WEBHOOK_FIXTURES.healthy.list.endpoints[0]);
+      if (call.method === "PUT") return jsonResponse(200, WEBHOOK_FIXTURES.healthy.list.endpoints[0]);
+      return jsonResponse(200, WEBHOOK_FIXTURES.multiple.list);
     });
-    const status = await client().getRegistrationWebhookStatus();
-    expect(status.configuration).toBe("CONFIGURED");
-    expect(status.destinationHost).toBe("hooks.example.net");
-    expect(status.counts.failed).toBe(2);
-    expect(status.recentDeliveries[0]).toMatchObject({ eventId: "13", eventType: "OUTAGE_STARTED", status: "FAILED", failureReason: "retries_exhausted" });
-    expect(await client().sendRegistrationWebhookTest()).toEqual({ delivered: false, result: "http_server_error", httpStatus: 503, attemptedAt: "2026-11-10T03:50:00Z" });
-    expect(await client().retryRegistrationWebhook("13")).toBe(1);
+    const list = await client().listRegistrationWebhookEndpoints();
+    expect(list.hasFailedDeliveries).toBe(true);
+    expect(list.endpoints.map((endpoint) => [endpoint.id, endpoint.maskedUrl, endpoint.status, endpoint.categories, endpoint.editable])).toEqual([
+      ["1", "hooks.example.net/••••/a8f2", "HEALTHY", ["OUTAGE", "RECOVERY", "AUTO_STOP", "OVERRIDE"], true],
+      ["2", "ops.example.org/••••/9c1e", "FAILING", ["OUTAGE", "AUTO_STOP"], true],
+    ]);
+    const page = await client().listRegistrationWebhookFailures({ endpointId: "1", limit: 50, before: "c1" });
+    expect(page.nextCursor).toBe("c2");
+    expect(page.items[0]).toMatchObject({ endpointId: "1", eventId: "13", eventType: "OUTAGE_STARTED", category: "OUTAGE" });
+    await client().createRegistrationWebhookEndpoint({ url: "https://hooks.example.net/x", secret: "0123456789abcdef", categories: ["OUTAGE", "AUTO_STOP"] });
+    await client().updateRegistrationWebhookEndpoint("1", { revision: 1, categories: ["RECOVERY"] });
+    await client().updateRegistrationWebhookEndpoint("1", { revision: 2, secret: "fedcba9876543210" });
+    await client().deleteRegistrationWebhookEndpoint("1", 3);
+    expect(await client().sendRegistrationWebhookTest("2")).toEqual({ delivered: false, result: "http_server_error", httpStatus: 503, attemptedAt: "2026-11-10T03:50:00Z" });
+    expect(await client().retryRegistrationWebhook({ endpointId: "2", eventId: "13" })).toBe(1);
     expect(calls.map((call) => [call.method, call.url.replace(BASE, ""), call.body === undefined ? undefined : JSON.parse(call.body)])).toEqual([
-      ["GET", `${GATE}/webhook`, undefined],
-      ["POST", `${GATE}/webhook/test`, undefined],
-      ["POST", `${GATE}/webhook/retry`, { event_id: "13" }],
+      ["GET", `${GATE}/webhook/endpoints`, undefined],
+      ["GET", `${GATE}/webhook/failures?endpoint_id=1&limit=50&before=c1`, undefined],
+      ["POST", `${GATE}/webhook/endpoints`, { url: "https://hooks.example.net/x", secret: "0123456789abcdef", categories: ["outage", "auto_stop"] }],
+      // 省略した項目 (URL・secret) は送らない = 変更しない
+      ["PUT", `${GATE}/webhook/endpoints/1`, { revision: 1, categories: ["recovery"] }],
+      ["PUT", `${GATE}/webhook/endpoints/1`, { revision: 2, secret: "fedcba9876543210" }],
+      ["POST", `${GATE}/webhook/endpoints/1/delete`, { revision: 3 }],
+      ["POST", `${GATE}/webhook/endpoints/2/test`, undefined],
+      ["POST", `${GATE}/webhook/retry`, { endpoint_id: "2", event_id: "13" }],
     ]);
   });
 
-  test("Webhook: テスト送信の 409 は未設定エラー、再試行の 404 は対象なし (revision 競合とは別)", async () => {
+  test("Webhook: 409 の空本文は revision 競合、固定コードは拒否 (理由つき)、テスト送信の 409 は未設定、404 は対象なし", async () => {
     stubFetch(() => new Response("", { status: 409 }));
-    await expect(client().sendRegistrationWebhookTest()).rejects.toBeInstanceOf(EmumetWebhookUnavailableError);
+    await expect(client().updateRegistrationWebhookEndpoint("1", { revision: 1, url: "https://a.example/x" })).rejects.toMatchObject({ status: 409 });
+    await expect(client().updateRegistrationWebhookEndpoint("1", { revision: 1, url: "https://a.example/x" })).rejects.toBeInstanceOf(EmumetApiError);
+    await expect(client().sendRegistrationWebhookTest("environment")).rejects.toBeInstanceOf(EmumetWebhookUnavailableError);
+    stubFetch(() => new Response("encryption_key_not_configured", { status: 409 }));
+    await expect(client().createRegistrationWebhookEndpoint({ url: "https://a.example/x", secret: "0123456789abcdef", categories: ["OUTAGE"] })).rejects.toMatchObject({
+      status: 409,
+      reason: "encryption_key_not_configured",
+    });
+    stubFetch(() => new Response("secret_too_short", { status: 400 }));
+    await expect(client().createRegistrationWebhookEndpoint({ url: "https://a.example/x", secret: "short", categories: ["OUTAGE"] })).rejects.toBeInstanceOf(
+      EmumetWebhookEndpointRejectedError,
+    );
+    // 語彙外の 409 は競合として扱わない (理由なしの拒否)。語彙外の 400 は BAD_REQUEST のまま
+    stubFetch(() => new Response("something_new", { status: 409 }));
+    await expect(client().deleteRegistrationWebhookEndpoint("1", 1)).rejects.toMatchObject({ status: 409, reason: null });
+    stubFetch(() => new Response("something_new", { status: 400 }));
+    await expect(client().deleteRegistrationWebhookEndpoint("1", 1)).rejects.toMatchObject({ status: 400 });
+    await expect(client().deleteRegistrationWebhookEndpoint("1", 1)).rejects.not.toBeInstanceOf(EmumetWebhookEndpointRejectedError);
     stubFetch(() => new Response("", { status: 404 }));
-    await expect(client().retryRegistrationWebhook("99")).rejects.toBeInstanceOf(EmumetRegistrationTargetNotFoundError);
+    await expect(client().retryRegistrationWebhook({ endpointId: "1", eventId: "99" })).rejects.toBeInstanceOf(EmumetRegistrationTargetNotFoundError);
+    await expect(client().updateRegistrationWebhookEndpoint("9", { revision: 1, categories: ["OUTAGE"] })).rejects.toBeInstanceOf(EmumetRegistrationTargetNotFoundError);
     stubFetch(() => new Response("", { status: 403 }));
-    await expect(client().getRegistrationWebhookStatus()).rejects.toMatchObject({ status: 403 });
+    await expect(client().listRegistrationWebhookEndpoints()).rejects.toMatchObject({ status: 403 });
   });
 
-  test("Webhook: host 以外 (path・userinfo) を含む宛先は契約違反として受け入れない", async () => {
-    for (const host of ["hooks.example.net/secret-path", "user:pw@hooks.example.net", "hooks.example.net:8443"]) {
-      stubFetch(() => jsonResponse(200, { ...WEBHOOK_STATUS_FIXTURES.healthy, destination_host: host }));
-      await expect(client().getRegistrationWebhookStatus()).rejects.toBeInstanceOf(EmumetInvalidResponseError);
+  test("Webhook: 部分マスクでない URL・source と editable/revision の食い違い・作成の 200 は契約違反として受け入れない", async () => {
+    const endpoint = WEBHOOK_FIXTURES.healthy.list.endpoints[0]!;
+    for (const masked of ["https://hooks.example.net/••••/a8f2", "hooks.example.net/secret-path", "user:pw@hooks.example.net", "hooks.example.net/••••/a8f2?x=1"]) {
+      stubFetch(() => jsonResponse(200, { ...WEBHOOK_FIXTURES.healthy.list, endpoints: [{ ...endpoint, masked_url: masked }] }));
+      await expect(client().listRegistrationWebhookEndpoints(), masked).rejects.toBeInstanceOf(EmumetInvalidResponseError);
     }
+    stubFetch(() => jsonResponse(200, { ...WEBHOOK_FIXTURES.healthy.list, endpoints: [{ ...endpoint, editable: false }] }));
+    await expect(client().listRegistrationWebhookEndpoints()).rejects.toBeInstanceOf(EmumetInvalidResponseError);
+    stubFetch(() => jsonResponse(200, endpoint));
+    await expect(client().createRegistrationWebhookEndpoint({ url: "https://a.example/x", secret: "0123456789abcdef", categories: ["OUTAGE"] })).rejects.toBeInstanceOf(
+      EmumetInvalidResponseError,
+    );
   });
 
   test("me: 管理者ロールを変換し、未知のロールは捨てる。503 は一時障害", async () => {
@@ -283,17 +333,56 @@ describe("stateful mock: 保護・Webhook・呼び出し者", () => {
     expect(bot.outcome).toBe("CONFIGURATION_INVALID");
   });
 
-  test("Webhook: 未設定のテスト送信は未設定エラー、失敗の再試行で件数が変わる、対象なしは NotFound", async () => {
-    const { client, control } = createMockRegistrationGate({ webhook: "not_configured" });
-    await expect(client.sendRegistrationWebhookTest()).rejects.toBeInstanceOf(EmumetWebhookUnavailableError);
-    control.setWebhook("failed");
-    expect((await client.getRegistrationWebhookStatus()).counts.failed).toBe(2);
-    expect((await client.sendRegistrationWebhookTest()).delivered).toBe(false);
-    expect(await client.retryRegistrationWebhook("13")).toBe(1);
-    const after = await client.getRegistrationWebhookStatus();
-    expect(after.counts.failed).toBe(1);
-    expect(after.counts.pending).toBe(1);
-    await expect(client.retryRegistrationWebhook("13")).rejects.toBeInstanceOf(EmumetRegistrationTargetNotFoundError);
+  test("Webhook: 作成は部分マスクで返り secret は返らない、URL 検査・鍵なし・重複・上限・revision 競合・環境変数は読み取り専用", async () => {
+    const { client, control } = createMockRegistrationGate({ webhook: "none", now: () => "2026-11-10T04:00:00Z" });
+    const reason = (promise: Promise<unknown>) => promise.then(() => "ok", (error: unknown) => (error instanceof EmumetWebhookEndpointRejectedError ? error.reason : error instanceof EmumetApiError ? error.status : String(error)));
+    const secret = "0123456789abcdef";
+    const created = await client.createRegistrationWebhookEndpoint({ url: "https://hooks.example.net/services/T0000/abcdefghijkla8f2", secret, categories: ["OUTAGE"] });
+    expect(created).toMatchObject({ maskedUrl: "hooks.example.net/••••/a8f2", status: "HEALTHY", revision: 1, editable: true, secretConfigured: true });
+    expect(JSON.stringify(await client.listRegistrationWebhookEndpoints())).not.toContain(secret);
+    expect(await reason(client.createRegistrationWebhookEndpoint({ url: "https://hooks.example.net/services/T0000/abcdefghijkla8f2", secret, categories: ["OUTAGE"] }))).toBe("duplicate_url");
+    expect(await reason(client.createRegistrationWebhookEndpoint({ url: "http://hooks.example.net/x", secret, categories: ["OUTAGE"] }))).toBe("unsupported_scheme");
+    expect(await reason(client.createRegistrationWebhookEndpoint({ url: "not a url", secret, categories: ["OUTAGE"] }))).toBe("invalid_url");
+    expect(await reason(client.createRegistrationWebhookEndpoint({ url: "https://a.example/x", secret: "short", categories: ["OUTAGE"] }))).toBe("secret_too_short");
+    expect(await reason(client.createRegistrationWebhookEndpoint({ url: "https://a.example/x", secret, categories: [] }))).toBe("no_categories");
+    expect(await reason(client.updateRegistrationWebhookEndpoint(created.id, { revision: 9, categories: ["RECOVERY"] }))).toBe(409);
+    expect(await reason(client.updateRegistrationWebhookEndpoint(created.id, { revision: 1 }))).toBe("nothing_to_update");
+    const updated = await client.updateRegistrationWebhookEndpoint(created.id, { revision: 1, categories: ["RECOVERY", "OVERRIDE"] });
+    expect(updated).toMatchObject({ revision: 2, categories: ["RECOVERY", "OVERRIDE"], maskedUrl: "hooks.example.net/••••/a8f2" });
+    expect(await reason(client.deleteRegistrationWebhookEndpoint(created.id, 1))).toBe(409);
+    await client.deleteRegistrationWebhookEndpoint(created.id, 2);
+    expect((await client.listRegistrationWebhookEndpoints()).endpoints).toEqual([]);
+    control.setWebhook("no_key");
+    expect(await reason(client.createRegistrationWebhookEndpoint({ url: "https://a.example/x", secret, categories: ["OUTAGE"] }))).toBe("encryption_key_not_configured");
+    control.setWebhook("environment_misconfigured");
+    expect(await reason(client.updateRegistrationWebhookEndpoint("environment", { revision: 1, categories: ["OUTAGE"] }))).toBe("environment_endpoint_read_only");
+    await expect(client.sendRegistrationWebhookTest("environment")).rejects.toBeInstanceOf(EmumetWebhookUnavailableError);
+    control.setWebhook("secret_undecryptable");
+    const fixed = await client.updateRegistrationWebhookEndpoint("1", { revision: 1, secret });
+    expect(fixed.status).toBe("HEALTHY");
+  });
+
+  test("Webhook: 配送失敗は 1 件ずつ再試行でき、解消すると正常に戻る。古い失敗にも cursor で到達できる。対象なしは NotFound", async () => {
+    const { client, control } = createMockRegistrationGate({ webhook: "failed" });
+    expect((await client.sendRegistrationWebhookTest("1")).delivered).toBe(false);
+    expect(await client.retryRegistrationWebhook({ endpointId: "1", eventId: "13" })).toBe(1);
+    let list = await client.listRegistrationWebhookEndpoints();
+    expect([list.hasFailedDeliveries, list.endpoints[0]?.status, list.endpoints[0]?.failedCount]).toEqual([true, "FAILING", 1]);
+    await expect(client.retryRegistrationWebhook({ endpointId: "1", eventId: "13" })).rejects.toBeInstanceOf(EmumetRegistrationTargetNotFoundError);
+    expect(await client.retryRegistrationWebhook({ endpointId: "1", eventId: "12" })).toBe(1);
+    list = await client.listRegistrationWebhookEndpoints();
+    expect([list.hasFailedDeliveries, list.endpoints[0]?.status]).toEqual([false, "HEALTHY"]);
+    expect((await client.listRegistrationWebhookFailures()).items).toEqual([]);
+    control.setWebhook("many_failures");
+    const first = await client.listRegistrationWebhookFailures();
+    expect(first.items).toHaveLength(50);
+    expect(first.nextCursor).not.toBeNull();
+    const second = await client.listRegistrationWebhookFailures({ before: first.nextCursor! });
+    expect(second.items).toHaveLength(10);
+    expect(second.nextCursor).toBeNull();
+    const oldest = second.items.at(-1)!;
+    expect(await client.retryRegistrationWebhook({ endpointId: oldest.endpointId, eventId: oldest.eventId })).toBe(1);
+    await expect(client.listRegistrationWebhookFailures({ before: "broken" })).rejects.toMatchObject({ status: 400 });
   });
 
   test("非管理者: 呼び出し者は取得できるが管理 API はすべて 403", async () => {
@@ -302,8 +391,10 @@ describe("stateful mock: 保護・Webhook・呼び出し者", () => {
     for (const call of [
       () => client.listRegistrationProtections(),
       () => client.verifyRegistrationProtection("EMAIL"),
-      () => client.getRegistrationWebhookStatus(),
-      () => client.sendRegistrationWebhookTest(),
+      () => client.listRegistrationWebhookEndpoints(),
+      () => client.listRegistrationWebhookFailures(),
+      () => client.createRegistrationWebhookEndpoint({ url: "https://a.example/x", secret: "0123456789abcdef", categories: ["OUTAGE"] }),
+      () => client.sendRegistrationWebhookTest("1"),
       () => client.retryRegistrationWebhook(),
     ]) {
       await expect(call()).rejects.toMatchObject({ status: 403 });
@@ -325,6 +416,11 @@ describe("stateful mock: 保護・Webhook・呼び出し者", () => {
       "enforcement-lost": "AUTO_STOPPED",
       "webhook-unset": "OPEN",
       "webhook-misconfigured": "OPEN",
+      "webhook-no-key": "OPEN",
+      "webhook-multiple": "OPEN",
+      "webhook-secret-undecryptable": "OPEN",
+      "webhook-environment": "OPEN",
+      "webhook-many-failures": "OPEN",
       "notifications-many": "OPEN",
       member: "OPEN",
     };
@@ -368,9 +464,11 @@ describe("GraphQL: 追加フィールドとエラー分類", () => {
     expect((await run("{ viewer { isAdmin } }", mock)).data).toEqual({ viewer: { isAdmin: false } });
     for (const source of [
       "{ registrationProtections { status } }",
-      "{ registrationWebhook { configuration } }",
+      "{ registrationWebhookEndpoints { hasFailedDeliveries } }",
+      "{ registrationWebhookFailures { nextCursor } }",
       "mutation { verifyRegistrationProtection(protection: EMAIL) { outcome } }",
-      "mutation { sendRegistrationWebhookTest { delivered } }",
+      'mutation { createRegistrationWebhookEndpoint(input: { url: "https://a.example/x", secret: "0123456789abcdef", categories: [OUTAGE] }) { id } }',
+      'mutation { sendRegistrationWebhookTest(endpointId: "1") { delivered } }',
       "mutation { retryRegistrationWebhook }",
     ]) {
       const result = await run(source, mock);
@@ -379,26 +477,49 @@ describe("GraphQL: 追加フィールドとエラー分類", () => {
     }
   });
 
-  test("Webhook 未設定のテスト送信は WEBHOOK_NOT_CONFIGURED、再試行の対象なしは NOT_FOUND、一時障害は retryable", async () => {
-    const mock = createMockEmumetClient({ registrationGate: { webhook: "misconfigured" } });
-    expect(code(await run("mutation { sendRegistrationWebhookTest { delivered } }", mock))).toBe("WEBHOOK_NOT_CONFIGURED");
-    expect(code(await run('mutation { retryRegistrationWebhook(eventId: "404") }', mock))).toBe("NOT_FOUND");
+  test("Webhook: 環境変数の送信先のテスト送信は WEBHOOK_NOT_CONFIGURED、再試行の対象なしは NOT_FOUND、eventId だけは BAD_REQUEST、一時障害は retryable", async () => {
+    const mock = createMockEmumetClient({ registrationGate: { webhook: "environment_misconfigured" } });
+    expect(code(await run('mutation { sendRegistrationWebhookTest(endpointId: "environment") { delivered } }', mock))).toBe("WEBHOOK_NOT_CONFIGURED");
+    expect(code(await run('mutation { retryRegistrationWebhook(endpointId: "environment", eventId: "404") }', mock))).toBe("NOT_FOUND");
+    expect(code(await run('mutation { retryRegistrationWebhook(eventId: "13") }', mock))).toBe("BAD_REQUEST");
     mock.registrationGateControl.failNext(new EmumetUnavailableError("down"));
-    const temporary = await run("{ registrationWebhook { configuration } }", mock);
+    const temporary = await run("{ registrationWebhookEndpoints { hasFailedDeliveries } }", mock);
     expect(code(temporary)).toBe("TEMPORARILY_UNAVAILABLE");
     expect(temporary.errors?.[0]?.extensions?.["retryable"]).toBe(true);
     mock.registrationGateControl.failNext(new EmumetApiError(401, ""));
     expect(code(await run("{ viewer { isAdmin } }", mock))).toBe("UNAUTHENTICATED");
   });
 
-  test("Webhook の応答に secret・URL 全体は現れない", async () => {
+  test("Webhook: 拒否は WEBHOOK_ENDPOINT_REJECTED + reason、revision 競合は REVISION_CONFLICT (混同しない)", async () => {
+    const mock = createMockEmumetClient({ registrationGate: { webhook: "no_key" } });
+    const rejected = await run(
+      'mutation { createRegistrationWebhookEndpoint(input: { url: "https://a.example/x", secret: "0123456789abcdef", categories: [OUTAGE] }) { id } }',
+      mock,
+    );
+    expect(code(rejected)).toBe("WEBHOOK_ENDPOINT_REJECTED");
+    expect(rejected.errors?.[0]?.extensions?.["reason"]).toBe("encryption_key_not_configured");
+    expect(JSON.stringify(rejected.errors)).not.toContain("0123456789abcdef");
+    mock.registrationGateControl.setWebhook("healthy");
+    const conflict = await run('mutation { updateRegistrationWebhookEndpoint(endpointId: "1", input: { revision: 7, categories: [OUTAGE] }) { revision } }', mock);
+    expect(code(conflict)).toBe("REVISION_CONFLICT");
+    const updated = await run('mutation { updateRegistrationWebhookEndpoint(endpointId: "1", input: { revision: 1, categories: [OUTAGE, OVERRIDE] }) { revision categories } }', mock);
+    expect(updated.data).toEqual({ updateRegistrationWebhookEndpoint: { revision: 2, categories: ["OUTAGE", "OVERRIDE"] } });
+    expect((await run('mutation { deleteRegistrationWebhookEndpoint(endpointId: "1", revision: 2) }', mock)).data).toEqual({ deleteRegistrationWebhookEndpoint: true });
+  });
+
+  test("Webhook の応答に secret・URL 全体は現れない (登録した URL も部分マスクでだけ返る)", async () => {
     const mock = createMockEmumetClient({ registrationGate: { webhook: "failed" } });
+    const created = await run(
+      'mutation { createRegistrationWebhookEndpoint(input: { url: "https://hooks.example.org/services/abcdefghijk0042", secret: "0123456789abcdef", categories: [OUTAGE] }) { maskedUrl secretConfigured } }',
+      mock,
+    );
+    expect(created.data).toEqual({ createRegistrationWebhookEndpoint: { maskedUrl: "hooks.example.org/••••/0042", secretConfigured: true } });
     const result = await run(
-      "{ registrationWebhook { configuration issue destinationHost counts { failed } recentDeliveries { eventId eventType status lastResult failureReason } } }",
+      "{ registrationWebhookEndpoints { hasFailedDeliveries endpoints { id maskedUrl status failingReasons configIssue secretConfigured editable revision categories } } registrationWebhookFailures { items { endpointId eventId eventType category failedAt result } nextCursor } }",
       mock,
     );
     expect(result.errors).toBeUndefined();
-    expect(JSON.stringify(result.data)).not.toMatch(/https?:|\/\/|secret/i);
+    expect(JSON.stringify(result.data)).not.toMatch(/https?:|\/\/|0123456789abcdef|services/i);
   });
 });
 

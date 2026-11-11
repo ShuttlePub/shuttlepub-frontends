@@ -1,4 +1,5 @@
--- | 登録ゲート管理画面 (ui-spec「モック A v5」)。画面には状態と操作だけを置き、仕組みの説明は (?) からヘルプへ回す。
+-- | 登録ゲート管理画面 (ui-spec「モック A v5」)。画面には状態と操作だけを置き、仕組みの説明は書かない
+-- | (ui-spec の (?) は、ヘルプの置き場所が決まるまで出さない)。
 module App.View.Admin
   ( registrationPage
   , webhookPage
@@ -12,12 +13,12 @@ import Prelude
 import App.Admin.Text (Tone)
 import App.Admin.Text as Text
 import App.Admin.Time (eventKey, formatEventTime, trapFocus)
-import App.Admin.Types (AdminModal(..), AdminModel, AdminMsg(..), Delivery, Gate, GateCommand(..), Loadable(..), Notification, Protection, Webhook)
+import App.Admin.Types (AdminModal(..), AdminModel, AdminMsg(..), Endpoint, Failure, Gate, GateCommand(..), Loadable(..), Notification, Protection, Webhook, allCategories, isEditing, webhookFormSavable)
 import App.Message (Message(..))
 import App.Model (Model)
 import App.Route (Route(..), routeCodec)
 import Data.Array (elem, null)
-import Data.Maybe (Maybe(..), fromMaybe, maybe)
+import Data.Maybe (Maybe(..), maybe)
 import Effect (Effect)
 import Flame (Html)
 import Flame.Types (NodeData)
@@ -26,7 +27,7 @@ import Flame.Html.Element as HE
 import Generated.Schema.Gql.Enum.RegistrationGateStatus (RegistrationGateStatus(..))
 import Generated.Schema.Gql.Enum.RegistrationProtection (RegistrationProtection(..))
 import Generated.Schema.Gql.Enum.RegistrationProtectionStatus (RegistrationProtectionStatus(..))
-import Generated.Schema.Gql.Enum.RegistrationWebhookConfiguration (RegistrationWebhookConfiguration(..))
+import Generated.Schema.Gql.Enum.RegistrationWebhookEndpointStatus (RegistrationWebhookEndpointStatus(..))
 import Routing.Duplex (print)
 import ShuttlePub.UI.NotFound as NotFound
 import ShuttlePub.UI.Theme as T
@@ -139,7 +140,7 @@ header model route =
       )
       children
   failingMark = case model.webhook of
-    Loaded webhook | webhook.failedCount > 0 ->
+    Loaded webhook | webhook.hasFailedDeliveries ->
       [ HE.span [ HA.class' (Text.toneClass Text.Warning), attr "aria-label" Text.webhookFailingMark, HA.title Text.webhookFailingMark ] [ HE.text "●" ] ]
     _ -> []
 
@@ -205,6 +206,7 @@ modal model = case model.modal of
           , testButton "revoke-confirm" (btnNormal <> " " <> primary) model.pending (admin ConfirmRevoke) [ HE.text Text.buttonConfirmRevoke ]
           ]
       ]
+    WebhookModal -> webhookModalBody model
 
 toast :: AdminModel -> Html Message
 toast model = case model.toast of
@@ -310,7 +312,7 @@ protectionKey = case _ of
   BOT -> "bot"
 
 -- ---------------------------------------------------------------------------
--- 「Webhook」タブ (ui-spec A-6。登録・編集のモーダルは保留 question-433de6d6)
+-- 「Webhook」タブ (ui-spec A-6)。URL は部分マスク形だけを出し、シークレットは表示しない
 -- ---------------------------------------------------------------------------
 
 webhookPage :: Model -> Html Message
@@ -318,60 +320,144 @@ webhookPage model =
   page model AdminWebhook case model.admin.webhook of
     Loaded webhook ->
       [ HE.section [ attr "data-testid" "webhook-destinations" ]
-          [ sectionHeading [ HE.text Text.webhookDestinations ]
+          [ sectionHeading
+              [ HE.text Text.webhookDestinations
+              , HE.span [ HA.class' "flex-1" ] []
+              , HE.button
+                  [ HA.type' "button"
+                  , HA.id "webhook-add"
+                  , attr "data-testid" "webhook-add"
+                  , attr "aria-label" Text.webhookAdd
+                  , HA.title Text.webhookAdd
+                  , HA.class' ("w-8 h-8 inline-flex items-center justify-center text-lg leading-none text-accent border border-border bg-transparent hover:bg-bg-primary " <> T.roundedTheme)
+                  , HA.onClick (admin (OpenWebhookModal Nothing "webhook-add"))
+                  ]
+                  [ HE.text "+" ]
+              ]
           , destinations model.admin webhook
           ]
       ]
-        <> failedSection model.admin webhook
+        <> failedSection model.admin
     _ -> []
 
 destinations :: AdminModel -> Webhook -> Html Message
-destinations model webhook = case webhook.configuration of
-  NOT_CONFIGURED ->
+destinations model webhook =
+  if null webhook.endpoints then
     HE.div [ HA.class' (T.surface <> " p-8 text-center") ] [ HE.span [ HA.class' ("text-sm " <> T.textMuted) ] [ HE.text Text.none ] ]
-  MISCONFIGURED ->
-    listSurface
-      [ HE.div [ HA.class' rowClass ]
-          ( [ host
-            , smallChip Text.Danger Text.webhookMisconfigured
-            ]
-              <> maybe [] (\text -> [ HE.span [ HA.class' ("text-xs " <> T.textError) ] [ HE.text text ] ]) (webhook.issue >>= Text.webhookIssue)
-          )
-      ]
-  CONFIGURED ->
-    listSurface
-      [ HE.div [ HA.class' rowClass ]
-          [ host
-          , if webhook.failedCount > 0 then smallChip Text.Warning Text.webhookFailing else smallChip Text.Success Text.webhookHealthy
-          , button (btnSmall <> " " <> outline) model.testing (admin TestWebhook)
-              ((if model.testing then [ spinner ] else []) <> [ HE.text Text.buttonTest ])
-          ]
-      ]
+  else listSurface (map row webhook.endpoints)
   where
-  -- 宛先は host だけ (URL 全体・シークレットは BFF も扱わない)
-  host = HE.span [ HA.class' ("basis-full sm:basis-auto flex-1 min-w-0 truncate font-mono font-medium " <> T.textPrimary) ] [ HE.text (fromMaybe "—" webhook.destinationHost) ]
+  row :: Endpoint -> Html Message
+  row e =
+    let
+      testing = elem e.id model.testing
+      editId = "webhook-edit-" <> e.id
+    in
+      HE.div [ HA.class' rowClass, attr "data-testid" ("webhook-endpoint-" <> e.id) ]
+        ( [ HE.span [ HA.class' ("basis-full sm:basis-auto flex-1 min-w-0 truncate font-mono font-medium " <> T.textPrimary) ] [ HE.text e.maskedUrl ]
+          , if e.status == FAILING then smallChip Text.Warning Text.webhookFailing else smallChip Text.Success Text.webhookHealthy
+          ]
+            <> maybe [] (\text -> [ HE.span [ HA.class' ("text-xs " <> Text.toneClass Text.Warning) ] [ HE.text text ] ]) (Text.endpointReason { failingReasons: e.failingReasons, configIssue: e.configIssue })
+            <>
+              [ button (btnSmall <> " " <> outline) testing (admin (TestWebhook e.id))
+                  ((if testing then [ spinner ] else []) <> [ HE.text Text.buttonTest ])
+              ]
+            -- 環境変数の送信先は編集・削除できない
+            <> (if e.editable then [ testButton editId (btnSmall <> " " <> outline) false (admin (OpenWebhookModal (Just e.id) editId)) [ HE.text Text.buttonEdit ] ] else [])
+        )
 
-failedSection :: AdminModel -> Webhook -> Array (Html Message)
-failedSection model webhook =
-  if webhook.failedCount == 0 || null webhook.deliveries then []
+-- | 失敗があるときだけ出す。古い失敗へは［さらに読み込む］で到達し、1 件ずつ再試行する
+failedSection :: AdminModel -> Array (Html Message)
+failedSection model =
+  if null model.failures then []
   else
     [ HE.section [ attr "data-testid" "webhook-failed" ]
         [ sectionHeading [ HE.text Text.webhookFailedHeading ]
-        , listSurface (map row webhook.deliveries)
+        , listSurface (map row model.failures <> loadMore)
         ]
     ]
   where
-  row :: Delivery -> Html Message
-  row d =
+  row :: Failure -> Html Message
+  row f =
     let
-      retrying = elem d.eventId model.retrying
+      retrying = elem { endpointId: f.endpointId, eventId: f.eventId } model.retrying
     in
       HE.div [ HA.class' rowClass ]
-        [ timeText (fromMaybe d.createdAt d.lastAttemptAt)
-        , HE.span [ HA.class' ("flex-1 min-w-0 font-medium " <> T.textPrimary) ] [ HE.text (Text.eventTitle d.eventType Nothing) ]
-        , button (btnSmall <> " " <> outline) retrying (admin (RetryDelivery d.eventId))
+        [ timeText f.failedAt
+        , HE.span [ HA.class' ("flex-1 min-w-0 font-medium " <> T.textPrimary) ] [ HE.text (Text.eventTitle f.eventType Nothing) ]
+        , button (btnSmall <> " " <> outline) retrying (admin (RetryDelivery f.endpointId f.eventId))
             ((if retrying then [ spinner ] else []) <> [ HE.text Text.buttonRetry ])
         ]
+  loadMore = case model.failuresCursor of
+    Just _ ->
+      [ HE.div [ HA.class' "p-2 text-center" ]
+          [ testButton "webhook-failures-more" (btnSmall <> " " <> outline) model.loadingMoreFailures (admin LoadMoreFailures)
+              ((if model.loadingMoreFailures then [ spinner ] else []) <> [ HE.text Text.buttonLoadMore ])
+          ]
+      ]
+    Nothing -> []
+
+-- | 送信先の登録・編集モーダルの中身。URL・シークレットは空で開き、入力したときだけ置き換える
+webhookModalBody :: AdminModel -> Array (Html Message)
+webhookModalBody model =
+  [ HE.h2 [ HA.id "admin-modal-title", HA.class' ("mb-2 text-lg font-semibold " <> T.textHeading) ] [ HE.text Text.webhookModalTitle ]
+  , HE.div [ HA.class' "space-y-3" ]
+      [ field "webhook-url" Text.labelUrl
+          [ HE.input
+              [ HA.id "webhook-url"
+              , HA.type' "url"
+              , HA.class' inputClass
+              , HA.value form.url
+              , HA.placeholder (if editing then form.maskedUrl else "")
+              , HA.onInput (admin <<< SetWebhookUrl)
+              , attr "autocomplete" "off"
+              , attr "spellcheck" "false"
+              ]
+          ]
+      , field "webhook-secret" Text.labelSecret
+          [ HE.input
+              [ HA.id "webhook-secret"
+              , HA.type' "password"
+              , HA.class' inputClass
+              , HA.value form.secret
+              , HA.placeholder (if editing && form.secretConfigured then "••••••••" else "")
+              , HA.onInput (admin <<< SetWebhookSecret)
+              , attr "autocomplete" "new-password"
+              ]
+          ]
+      , HE.fieldset_
+          ( [ HE.legend [ HA.class' ("mb-1.5 text-sm font-medium " <> T.textPrimary) ] [ HE.text Text.labelCategories ] ]
+              <> map category allCategories
+          )
+      ]
+  , case form.error of
+      Just err ->
+        HE.p [ attr "role" "alert", attr "data-testid" "webhook-modal-error", HA.class' ("mt-3 text-sm " <> T.textError) ] [ HE.text (Text.errorLine err) ]
+      Nothing -> HE.div [ HA.class' "hidden" ] []
+  , HE.div [ HA.class' "mt-4 flex justify-end gap-2 [&>button]:flex-1 sm:[&>button]:flex-none" ]
+      ( (if editing then [ testButton "webhook-delete" (btnNormal <> " " <> dangerGhost <> " sm:mr-auto") model.pending (admin DeleteWebhook) [ HE.text Text.buttonDelete ] ] else [])
+          <>
+            [ button (btnNormal <> " " <> outline) false (admin CloseModal) [ HE.text Text.buttonCancel ]
+            , testButton "webhook-save" (btnNormal <> " " <> primary) (model.pending || not (webhookFormSavable form)) (admin SaveWebhook)
+                ((if model.pending then [ spinner ] else []) <> [ HE.text Text.buttonSave ])
+            ]
+      )
+  ]
+  where
+  form = model.webhookForm
+  editing = isEditing form
+  inputClass = "w-full px-3 py-2 text-sm border border-border outline-none focus:ring-2 focus:ring-accent/50 " <> T.bgSurface <> " " <> T.roundedTheme <> " " <> T.textPrimary
+  field id label children =
+    HE.div_ ([ HE.label [ HA.for id, HA.class' ("block mb-1.5 text-sm font-medium " <> T.textPrimary) ] [ HE.text label ] ] <> children)
+  category c =
+    HE.label [ HA.class' ("flex items-center gap-2.5 py-0.5 text-sm cursor-pointer " <> T.textSecondary) ]
+      [ HE.input
+          [ HA.type' "checkbox"
+          , HA.class' "w-4 h-4 accent-accent shrink-0"
+          , HA.checked (elem c form.categories)
+          , HA.onCheck (admin <<< SetWebhookCategory c)
+          ]
+      , HE.text (Text.categoryLabel c)
+      ]
 
 -- ---------------------------------------------------------------------------
 -- 強制開放中の警告帯 (ui-spec A-4)。管理画面の枠 (nav の直下) に常に出し、閉じられない

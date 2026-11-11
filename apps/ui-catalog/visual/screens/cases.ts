@@ -85,6 +85,12 @@ const routes = [
     ["admin-webhook-failed", "override"],
     ["admin-webhook-unset", "webhook-unset"],
     ["admin-webhook-misconfigured", "webhook-misconfigured"],
+    ["admin-webhook-multiple", "webhook-multiple"],
+    ["admin-webhook-environment", "webhook-environment"],
+    ["admin-webhook-secret-undecryptable", "webhook-secret-undecryptable"],
+    ["admin-webhook-many-failures", "webhook-many-failures"],
+    ["admin-webhook-add", "webhook-unset"],
+    ["admin-webhook-edit", "open"],
   ] as const).map(([id, scenario]) => ({ app: "Emumet", id, path: "/admin/webhook", authenticated: true, data: "populated", scenario }) as const),
   // ShuttlePub SNS shell (host intents/shuttlepub/features/quick-reaction-ui/ui-spec.md v6):
   // home timeline, post detail, compose modal, visibility menu, Profile switcher, settings.

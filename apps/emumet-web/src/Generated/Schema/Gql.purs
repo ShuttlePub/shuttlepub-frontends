@@ -19,8 +19,9 @@ import Generated.Schema.Gql.Enum.RegistrationProtection (RegistrationProtection)
 import Generated.Schema.Gql.Enum.RegistrationProtectionStatus (RegistrationProtectionStatus)
 import Generated.Schema.Gql.Enum.RegistrationProtectionVerifyDisposition (RegistrationProtectionVerifyDisposition)
 import Generated.Schema.Gql.Enum.RegistrationProtectionVerifyOutcome (RegistrationProtectionVerifyOutcome)
-import Generated.Schema.Gql.Enum.RegistrationWebhookConfiguration (RegistrationWebhookConfiguration)
-import Generated.Schema.Gql.Enum.RegistrationWebhookDeliveryStatus (RegistrationWebhookDeliveryStatus)
+import Generated.Schema.Gql.Enum.RegistrationWebhookCategory (RegistrationWebhookCategory)
+import Generated.Schema.Gql.Enum.RegistrationWebhookEndpointSource (RegistrationWebhookEndpointSource)
+import Generated.Schema.Gql.Enum.RegistrationWebhookEndpointStatus (RegistrationWebhookEndpointStatus)
 import GraphQL.Client.Args (NotNull)
 import GraphQL.Client.AsGql (AsGql)
 import GraphQL.Client.ID as GraphQL.Client.ID
@@ -45,7 +46,8 @@ newtype Query = Query
   , registrationGateUnreadCount :: {} -> AsGql "Int" Int
   , registrationProtections ::
       {} -> Array (AsGql "RegistrationProtectionReadiness" RegistrationProtectionReadiness)
-  , registrationWebhook :: {} -> AsGql "RegistrationWebhookStatus" RegistrationWebhookStatus
+  , registrationWebhookEndpoints ::
+      {} -> AsGql "RegistrationWebhookEndpoints" RegistrationWebhookEndpoints
   , viewer :: {} -> AsGql "Viewer" Viewer
   , instanceHost ::
       {}
@@ -54,6 +56,14 @@ newtype Query = Query
       -- | mock は設定が無ければ例示ホスト。real で未設定・不正ならエラー (extensions.code = INSTANCE_HOST_NOT_CONFIGURED)。
       -- | API 接続先 (EMUMET_API_URL) への暗黙のフォールバックはしない
       AsGql "String" String
+  , registrationWebhookFailures ::
+      { before :: AsGql "String" String
+      , endpointId :: AsGql "ID" GraphQL.Client.ID.ID
+      , limit :: AsGql "Int" Int
+      }
+      ->
+      -- | failed 配送の 1 ページ (新しい順。limit 1〜100、既定 50)。before は前のページの nextCursor
+      AsGql "RegistrationWebhookFailedDeliveryPage" RegistrationWebhookFailedDeliveryPage
   , account ::
       { id :: NotNull (AsGql "ID" GraphQL.Client.ID.ID) }
       -> AsGql "Account" (Data.Maybe.Maybe (AsGql "Account" Account))
@@ -76,6 +86,22 @@ newtype RegistrationProtectionObservation = RegistrationProtectionObservation
   }
 
 derive instance Data.Newtype.Newtype RegistrationProtectionObservation _
+newtype RegistrationWebhookEndpoints = RegistrationWebhookEndpoints
+  { endpoints :: {} -> Array (AsGql "RegistrationWebhookEndpoint" RegistrationWebhookEndpoint)
+  , maxEndpoints :: {} -> AsGql "Int" Int
+  , encryptionKeyConfigured ::
+      {}
+      ->
+      -- | false なら作成・secret 更新は WEBHOOK_ENDPOINT_REJECTED (reason encryption_key_not_configured)
+      AsGql "Boolean" Boolean
+  , hasFailedDeliveries ::
+      {}
+      ->
+      -- | どこかの送信先に未解決の failed 配送がある (タブの印)
+      AsGql "Boolean" Boolean
+  }
+
+derive instance Data.Newtype.Newtype RegistrationWebhookEndpoints _
 newtype RegistrationGateNotification = RegistrationGateNotification
   { createdAt :: {} -> AsGql "String" String
   , id :: {} -> AsGql "ID" GraphQL.Client.ID.ID
@@ -207,6 +233,20 @@ newtype RegistrationObservation = RegistrationObservation
   }
 
 derive instance Data.Newtype.Newtype RegistrationObservation _
+newtype RegistrationWebhookFailedDeliveryPage = RegistrationWebhookFailedDeliveryPage
+  { items ::
+      {}
+      ->
+      -- | failed になった時刻の新しい順
+      Array (AsGql "RegistrationWebhookFailedDelivery" RegistrationWebhookFailedDelivery)
+  , nextCursor ::
+      {}
+      ->
+      -- | 次ページがあるときだけ (before に渡す)
+      AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  }
+
+derive instance Data.Newtype.Newtype RegistrationWebhookFailedDeliveryPage _
 newtype RegistrationWebhookTestResult = RegistrationWebhookTestResult
   { attemptedAt :: {} -> AsGql "String" String
   , httpStatus :: {} -> AsGql "Int" (Data.Maybe.Maybe (AsGql "Int" Int))
@@ -218,7 +258,7 @@ newtype RegistrationWebhookTestResult = RegistrationWebhookTestResult
   , result ::
       {}
       ->
-      -- | 結果の分類 (配送記録の lastResult と同じ語彙)
+      -- | 結果の分類 (delivered / timeout / connect_failed / ...)
       AsGql "String" String
   }
 
@@ -272,11 +312,6 @@ newtype RegistrationGate = RegistrationGate
 derive instance Data.Newtype.Newtype RegistrationGate _
 newtype Mutation = Mutation
   { markAllRegistrationGateNotificationsRead :: {} -> AsGql "Int" Int
-  , sendRegistrationWebhookTest ::
-      {}
-      ->
-      -- | テスト送信 (1 回のみ・記録しない)。未設定・設定不備なら WEBHOOK_NOT_CONFIGURED
-      AsGql "RegistrationWebhookTestResult" RegistrationWebhookTestResult
   , updateProfile ::
       { accountId :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
       , input :: NotNull (AsGql "UpdateProfileInput" UpdateProfileInput)
@@ -305,10 +340,31 @@ newtype Mutation = Mutation
       -- | 実 Emumet 接続時は未対応 (UNSUPPORTED): fields の項目 ID・revision が Emumet に無く安全に書けない (後続課題)
       AsGql "Metadata" Metadata
   , retryRegistrationWebhook ::
-      { eventId :: AsGql "ID" GraphQL.Client.ID.ID }
+      { endpointId :: AsGql "ID" GraphQL.Client.ID.ID, eventId :: AsGql "ID" GraphQL.Client.ID.ID }
       ->
-      -- | eventId の failed 配送を再キューする (省略で failed 全件)。戻り値は再キュー件数。対象が無ければ NOT_FOUND
+      -- | endpointId + eventId でその 1 件、endpointId だけでその送信先の failed すべて、両方省略で全件を再キューする。戻り値は再キュー件数。対象が無ければ NOT_FOUND
       AsGql "Int" Int
+  , sendRegistrationWebhookTest ::
+      { endpointId :: NotNull (AsGql "ID" GraphQL.Client.ID.ID) }
+      ->
+      -- | テスト送信 (1 回のみ・記録しない)。環境変数の送信先が未設定・設定不備なら WEBHOOK_NOT_CONFIGURED
+      AsGql "RegistrationWebhookTestResult" RegistrationWebhookTestResult
+  , updateRegistrationWebhookEndpoint ::
+      { endpointId :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
+      , input ::
+          NotNull
+            (AsGql "UpdateRegistrationWebhookEndpointInput" UpdateRegistrationWebhookEndpointInput)
+      }
+      ->
+      -- | revision 不一致は REVISION_CONFLICT、拒否は WEBHOOK_ENDPOINT_REJECTED、無い送信先は NOT_FOUND
+      AsGql "RegistrationWebhookEndpoint" RegistrationWebhookEndpoint
+  , deleteRegistrationWebhookEndpoint ::
+      { endpointId :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
+      , revision :: NotNull (AsGql "Int" Int)
+      }
+      ->
+      -- | revision 不一致は REVISION_CONFLICT、環境変数の送信先は WEBHOOK_ENDPOINT_REJECTED
+      AsGql "Boolean" Boolean
   , markRegistrationGateNotificationsRead ::
       { eventIds :: NotNull (Array (NotNull (AsGql "ID" GraphQL.Client.ID.ID))) }
       ->
@@ -316,6 +372,14 @@ newtype Mutation = Mutation
       AsGql "Int" Int
   , createAccount ::
       { input :: NotNull (AsGql "CreateAccountInput" CreateAccountInput) } -> AsGql "Account" Account
+  , createRegistrationWebhookEndpoint ::
+      { input ::
+          NotNull
+            (AsGql "CreateRegistrationWebhookEndpointInput" CreateRegistrationWebhookEndpointInput)
+      }
+      ->
+      -- | 拒否は WEBHOOK_ENDPOINT_REJECTED (extensions.reason)
+      AsGql "RegistrationWebhookEndpoint" RegistrationWebhookEndpoint
   , setProfileUsername ::
       { profileId :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
       , username :: NotNull (AsGql "String" String)
@@ -356,47 +420,75 @@ newtype Metadata = Metadata
   }
 
 derive instance Data.Newtype.Newtype Metadata _
--- | Webhook の配送状態 (E15w)。endpoint と secret はサーバー設定のみで、宛先は host だけを返す
-newtype RegistrationWebhookStatus = RegistrationWebhookStatus
-  { configuration :: {} -> AsGql "RegistrationWebhookConfiguration" RegistrationWebhookConfiguration
+-- | Webhook の送信先 (E15x)。URL は部分マスク形だけで、全 URL・secret は含まない
+newtype RegistrationWebhookEndpoint = RegistrationWebhookEndpoint
+  { categories :: {} -> Array (AsGql "RegistrationWebhookCategory" RegistrationWebhookCategory)
   , counts :: {} -> AsGql "RegistrationWebhookCounts" RegistrationWebhookCounts
+  , createdAt :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
   , lastFailureAt :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
   , lastSuccessAt :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
-  , issue ::
+  , source :: {} -> AsGql "RegistrationWebhookEndpointSource" RegistrationWebhookEndpointSource
+  , status :: {} -> AsGql "RegistrationWebhookEndpointStatus" RegistrationWebhookEndpointStatus
+  , id ::
       {}
       ->
-      -- | MISCONFIGURED のときの不備の分類 (固定語彙)
+      -- | 10 進文字列。環境変数の送信先は environment
+      AsGql "ID" GraphQL.Client.ID.ID
+  , failingReasons ::
+      {}
+      ->
+      -- | FAILING の理由 (failed_deliveries / secret_undecryptable / config_invalid)
+      Array (AsGql "String" String)
+  , editable ::
+      {}
+      ->
+      -- | false = 編集・削除できない (環境変数の送信先)
+      AsGql "Boolean" Boolean
+  , secretConfigured ::
+      {}
+      ->
+      -- | secret が設定済みか (値は返さない)
+      AsGql "Boolean" Boolean
+  , maskedUrl ::
+      {}
+      ->
+      -- | 一覧用の部分マスク URL (例 hooks.example.net/••••/a8f2)
+      AsGql "String" String
+  , failedCount ::
+      {}
+      ->
+      -- | 未解決の failed 配送の件数
+      AsGql "Int" Int
+  , revision ::
+      {}
+      ->
+      -- | 楽観ロック用。環境変数の送信先は null
+      AsGql "Int" (Data.Maybe.Maybe (AsGql "Int" Int))
+  , configIssue ::
+      {}
+      ->
+      -- | 環境変数の送信先の設定不備の分類 (固定語彙)
       AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
-  , destinationHost ::
-      {}
-      ->
-      -- | 宛先の host 部分のみ (userinfo・port・path・query・secret は出さない)
-      AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
-  , recentDeliveries ::
-      {}
-      ->
-      -- | 新しい順の直近の配送記録
-      Array (AsGql "RegistrationWebhookDelivery" RegistrationWebhookDelivery)
   }
 
-derive instance Data.Newtype.Newtype RegistrationWebhookStatus _
--- | Webhook の配送記録 (本文・宛先 URL・secret は含まない)
-newtype RegistrationWebhookDelivery = RegistrationWebhookDelivery
+derive instance Data.Newtype.Newtype RegistrationWebhookEndpoint _
+-- | failed になった配送 (成功した配送は含まない)
+newtype RegistrationWebhookFailedDelivery = RegistrationWebhookFailedDelivery
   { attemptCount :: {} -> AsGql "Int" Int
-  , createdAt :: {} -> AsGql "String" String
-  , deliveredAt :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , category :: {} -> AsGql "RegistrationWebhookCategory" RegistrationWebhookCategory
+  , endpointId :: {} -> AsGql "ID" GraphQL.Client.ID.ID
   , eventType :: {} -> AsGql "RegistrationGateEventKind" RegistrationGateEventKind
-  , lastAttemptAt :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
-  , status :: {} -> AsGql "RegistrationWebhookDeliveryStatus" RegistrationWebhookDeliveryStatus
+  , failedAt :: {} -> AsGql "String" String
+  , httpStatus :: {} -> AsGql "Int" (Data.Maybe.Maybe (AsGql "Int" Int))
   , failureReason ::
       {}
       ->
-      -- | failed のときの理由 (permanent_error / retries_exhausted)
+      -- | permanent_error / retries_exhausted
       AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
-  , lastResult ::
+  , result ::
       {}
       ->
-      -- | 固定語彙の結果分類 (timeout / http_server_error など)
+      -- | 最後の試行結果の分類 (固定語彙)
       AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
   , eventId ::
       {}
@@ -405,7 +497,7 @@ newtype RegistrationWebhookDelivery = RegistrationWebhookDelivery
       AsGql "ID" GraphQL.Client.ID.ID
   }
 
-derive instance Data.Newtype.Newtype RegistrationWebhookDelivery _
+derive instance Data.Newtype.Newtype RegistrationWebhookFailedDelivery _
 -- | override の状態。decision とは独立で、管理者閉鎖中でも active のまま保持される
 newtype RegistrationOverride = RegistrationOverride
   { activatedAt :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
@@ -466,3 +558,25 @@ newtype CreateAccountInput = CreateAccountInput
   }
 
 derive instance Data.Newtype.Newtype CreateAccountInput _
+newtype CreateRegistrationWebhookEndpointInput = CreateRegistrationWebhookEndpointInput
+  { categories ::
+      -- | 1 つ以上
+      NotNull (Array (NotNull (AsGql "RegistrationWebhookCategory" RegistrationWebhookCategory)))
+  , url ::
+      -- | HTTPS のみ。応答には返らない
+      NotNull (AsGql "String" String)
+  , secret ::
+      -- | 書き込み専用 (16〜256 バイト)。応答・ログに出さない
+      NotNull (AsGql "String" String)
+  }
+
+derive instance Data.Newtype.Newtype CreateRegistrationWebhookEndpointInput _
+-- | 省略した項目は変更しない (URL・secret は応答に返らないので、入力したときだけ送る)
+newtype UpdateRegistrationWebhookEndpointInput = UpdateRegistrationWebhookEndpointInput
+  { categories :: Array (NotNull (AsGql "RegistrationWebhookCategory" RegistrationWebhookCategory))
+  , revision :: NotNull (AsGql "Int" Int)
+  , secret :: AsGql "String" String
+  , url :: AsGql "String" String
+  }
+
+derive instance Data.Newtype.Newtype UpdateRegistrationWebhookEndpointInput _

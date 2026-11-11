@@ -7,14 +7,15 @@ import Data.Argonaut.Decode.Generic (genericDecodeJson)
 import Data.Argonaut.Encode (class EncodeJson)
 import Data.Argonaut.Encode.Generic (genericEncodeJson)
 import Data.Generic.Rep (class Generic)
-import Data.Maybe (Maybe(..))
+import Data.Array (null, sort)
+import Data.Maybe (Maybe(..), isJust)
 import Generated.Schema.Gql.Enum.RegistrationGateEventKind (RegistrationGateEventKind)
 import Generated.Schema.Gql.Enum.RegistrationGateStatus (RegistrationGateStatus)
 import Generated.Schema.Gql.Enum.RegistrationProbeStatus (RegistrationProbeStatus)
 import Generated.Schema.Gql.Enum.RegistrationProtection (RegistrationProtection)
 import Generated.Schema.Gql.Enum.RegistrationProtectionStatus (RegistrationProtectionStatus)
-import Generated.Schema.Gql.Enum.RegistrationWebhookConfiguration (RegistrationWebhookConfiguration)
-import Generated.Schema.Gql.Enum.RegistrationWebhookDeliveryStatus (RegistrationWebhookDeliveryStatus)
+import Generated.Schema.Gql.Enum.RegistrationWebhookCategory (RegistrationWebhookCategory(..))
+import Generated.Schema.Gql.Enum.RegistrationWebhookEndpointStatus (RegistrationWebhookEndpointStatus)
 
 -- | 一般登録の状態。status / minimumMet の判定は BFF (registration-gate-status.ts) が行い、画面は表示するだけ
 type Gate =
@@ -48,21 +49,59 @@ type Notification =
   , bot :: ProtectionObservation
   }
 
-type Delivery =
-  { eventId :: String
-  , eventType :: RegistrationGateEventKind
-  , status :: RegistrationWebhookDeliveryStatus
-  , createdAt :: String
-  , lastAttemptAt :: Maybe String
+-- | Webhook の送信先。URL は部分マスク形 (maskedUrl) だけ。シークレットは BFF も返さない
+type Endpoint =
+  { id :: String
+  , maskedUrl :: String
+  , categories :: Array RegistrationWebhookCategory
+  , status :: RegistrationWebhookEndpointStatus
+  , failingReasons :: Array String
+  , configIssue :: Maybe String
+  , secretConfigured :: Boolean
+  , editable :: Boolean
+  , revision :: Maybe Int
   }
 
--- | Webhook の配送状態。宛先は host のみ (URL 全体・シークレットは BFF も扱わない)
 type Webhook =
-  { configuration :: RegistrationWebhookConfiguration
-  , issue :: Maybe String
-  , destinationHost :: Maybe String
-  , failedCount :: Int
-  , deliveries :: Array Delivery
+  { endpoints :: Array Endpoint
+  , hasFailedDeliveries :: Boolean
+  }
+
+-- | 配送失敗 (failed になった配送)。成功した配送の履歴は扱わない
+type Failure =
+  { endpointId :: String
+  , eventId :: String
+  , eventType :: RegistrationGateEventKind
+  , failedAt :: String
+  }
+
+type FailurePage = { items :: Array Failure, nextCursor :: Maybe String }
+
+-- | 送信先の登録・編集モーダルの入力。URL・シークレットは空で開き、入力したときだけ送る (空 = 変更しない)
+type WebhookForm =
+  { endpointId :: Maybe String
+  , revision :: Maybe Int
+  , maskedUrl :: String
+  , secretConfigured :: Boolean
+  , url :: String
+  , secret :: String
+  , categories :: Array RegistrationWebhookCategory
+  , original :: Array RegistrationWebhookCategory
+  -- モーダルの中に出す失敗の 1 行 (入力を直せば保存し直せるもの)
+  , error :: Maybe GateError
+  }
+
+emptyWebhookForm :: WebhookForm
+emptyWebhookForm =
+  { endpointId: Nothing
+  , revision: Nothing
+  , maskedUrl: ""
+  , secretConfigured: false
+  , url: ""
+  , secret: ""
+  , categories: []
+  , original: []
+  , error: Nothing
   }
 
 -- | 操作・取得の失敗。状態 (Gate) とは別の型で、競合・前提条件・一時障害・権限なしを混同しない
@@ -74,6 +113,8 @@ data GateError
   | TemporarilyUnavailable
   | NotFound
   | WebhookNotConfigured
+  -- | 送信先の登録・更新・削除の拒否 (API の固定コード。語彙外は Nothing)。revision 競合とは別
+  | WebhookRejected (Maybe String)
   | Unexpected
 
 derive instance Generic GateError _
@@ -88,6 +129,7 @@ instance DecodeJson GateError where
 data AdminModal
   = OverrideModal
   | RevokeModal
+  | WebhookModal
 
 derive instance Generic AdminModal _
 derive instance Eq AdminModal
@@ -118,6 +160,11 @@ type AdminModel =
   , gate :: Loadable Gate
   , protections :: Loadable (Array Protection)
   , webhook :: Loadable Webhook
+  , failures :: Array Failure
+  -- 配送失敗の次のページの before (最後のページでは Nothing)
+  , failuresCursor :: Maybe String
+  , loadingMoreFailures :: Boolean
+  , webhookForm :: WebhookForm
   , notifications :: Array Notification
   -- 次のページの before (最後のページでは Nothing)
   , notificationsCursor :: Maybe String
@@ -130,8 +177,10 @@ type AdminModel =
   , overrideAck :: Boolean
   , pending :: Boolean
   , verifying :: Array RegistrationProtection
-  , testing :: Boolean
-  , retrying :: Array String
+  -- テスト送信中の送信先 ID
+  , testing :: Array String
+  -- 再試行中の配送 (送信先 ID と event ID)
+  , retrying :: Array { endpointId :: String, eventId :: String }
   -- 直近の操作・取得の失敗 (管理画面の上部に 1 行で出す)。成功した操作・再取得で消える
   , error :: Maybe GateError
   , toast :: Maybe Toast
@@ -146,6 +195,10 @@ emptyAdminModel =
   , gate: NotLoaded
   , protections: NotLoaded
   , webhook: NotLoaded
+  , failures: []
+  , failuresCursor: Nothing
+  , loadingMoreFailures: false
+  , webhookForm: emptyWebhookForm
   , notifications: []
   , notificationsCursor: Nothing
   , loadingMore: false
@@ -156,7 +209,7 @@ emptyAdminModel =
   , overrideAck: false
   , pending: false
   , verifying: []
-  , testing: false
+  , testing: []
   , retrying: []
   , error: Nothing
   , toast: Nothing
@@ -218,11 +271,44 @@ data AdminMsg
   | Verify RegistrationProtection
   | Verified RegistrationProtection Protection
   | VerifyFailed RegistrationProtection GateError
-  | TestWebhook
-  | WebhookTested Boolean
-  | WebhookTestFailed GateError
-  | RetryDelivery String
-  | DeliveryRetried String
-  | DeliveryRetryFailed String GateError
+  | FailuresLoaded FailurePage
+  | LoadMoreFailures
+  | MoreFailuresLoaded FailurePage
+  | FailuresFailed GateError
+  -- 送信先の登録 (Nothing) / 編集 (送信先 ID)。2 つ目はモーダルを開いたボタンの id
+  | OpenWebhookModal (Maybe String) String
+  | SetWebhookUrl String
+  | SetWebhookSecret String
+  | SetWebhookCategory RegistrationWebhookCategory Boolean
+  | SaveWebhook
+  | DeleteWebhook
+  | WebhookSaved String
+  | WebhookSaveFailed GateError
+  | TestWebhook String
+  | WebhookTested String Boolean
+  | WebhookTestFailed String GateError
+  | RetryDelivery String String
+  | DeliveryRetried String String
+  | DeliveryRetryFailed String String GateError
   | DismissToast Int
   | KeyPressed String
+
+-- | 送る通知の並び (モーダルのチェックボックスの順)
+allCategories :: Array RegistrationWebhookCategory
+allCategories = [ OUTAGE, RECOVERY, AUTO_STOP, OVERRIDE ]
+
+isEditing :: WebhookForm -> Boolean
+isEditing form = isJust form.endpointId
+
+-- | 送る通知が変わったか (順序は問わない)
+categoriesChanged :: WebhookForm -> Boolean
+categoriesChanged form = sort form.categories /= sort form.original
+
+-- | ［保存］を押せるか。登録は URL・シークレット・送る通知が全部要る。編集は送る通知を 1 つ以上残したうえで、
+-- | どれかを変えたとき (URL・シークレットは入力したときだけ置き換える)
+webhookFormSavable :: WebhookForm -> Boolean
+webhookFormSavable form =
+  not (null form.categories)
+    &&
+      if isEditing form then form.url /= "" || form.secret /= "" || categoriesChanged form
+      else form.url /= "" && form.secret /= ""

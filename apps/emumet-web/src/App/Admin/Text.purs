@@ -2,18 +2,22 @@
 -- | ui-spec の (?) (ヘルプへの導線) は、ヘルプの置き場所が決まるまで出さない (リード回答 question-9f866320)。
 -- | ui-spec に無かった文言 (通知タイトル・失敗の 1 行表示・「保護が未適用」・短い理由・時刻表記・［さらに読み込む］) は
 -- | リード承認済み (question-f24eeb05)。引き算の方針なので、これより長い説明文は足さない。
+-- | Webhook の登録・編集で足した拒否の 1 行 (「シークレットが長い」「登録済みの URL」「これ以上登録できません」「暗号鍵が未設定」)
+-- | は仮置きで、リード確認待ち。「保存しました」「削除しました」「Webhook を追加」はモック A v5 の文言。
 module App.Admin.Text where
 
 import Prelude
 
 import App.Admin.Types (GateError(..), ProtectionObservation)
-import Data.Array (filter, intercalate, null)
+import Data.Array (elem, filter, intercalate, null)
 import Data.Maybe (Maybe(..))
 import Generated.Schema.Gql.Enum.RegistrationGateEventKind (RegistrationGateEventKind(..))
 import Generated.Schema.Gql.Enum.RegistrationGateStatus (RegistrationGateStatus(..))
 import Generated.Schema.Gql.Enum.RegistrationProbeStatus (RegistrationProbeStatus(..))
 import Generated.Schema.Gql.Enum.RegistrationProtection (RegistrationProtection(..))
 import Generated.Schema.Gql.Enum.RegistrationProtectionStatus (RegistrationProtectionStatus(..))
+import Generated.Schema.Gql.Enum.RegistrationWebhookCategory (RegistrationWebhookCategory)
+import Generated.Schema.Gql.Enum.RegistrationWebhookCategory as Category
 
 -- | 状態チップ・通知の色
 data Tone = Success | Warning | Danger | Muted | Info
@@ -249,7 +253,7 @@ eventTone = case _ of
   OVERRIDE_REVOKED -> Info
 
 -- ---------------------------------------------------------------------------
--- Webhook (ui-spec A-6。登録・編集のモーダルは API が無いため保留 question-433de6d6)
+-- Webhook (ui-spec A-6)
 -- ---------------------------------------------------------------------------
 
 webhookDestinations :: String
@@ -264,8 +268,35 @@ webhookHealthy = "正常"
 webhookFailing :: String
 webhookFailing = "配送失敗"
 
-webhookMisconfigured :: String
-webhookMisconfigured = "設定エラー"
+webhookAdd :: String
+webhookAdd = "Webhook を追加"
+
+webhookModalTitle :: String
+webhookModalTitle = "Webhook"
+
+labelUrl :: String
+labelUrl = "URL"
+
+labelSecret :: String
+labelSecret = "シークレット"
+
+labelCategories :: String
+labelCategories = "送る通知"
+
+-- | 送る通知の名前 (保護が応答しなくなったことは「障害」で届く)
+categoryLabel :: RegistrationWebhookCategory -> String
+categoryLabel = case _ of
+  Category.OUTAGE -> "障害"
+  Category.RECOVERY -> "復旧"
+  Category.AUTO_STOP -> "自動停止"
+  Category.OVERRIDE -> "強制開放"
+
+-- | 送信先が配送失敗になっている恒久的な理由の短い表示 (未解決の failed 配送だけのときは出さない)
+endpointReason :: { failingReasons :: Array String, configIssue :: Maybe String } -> Maybe String
+endpointReason e =
+  if elem "secret_undecryptable" e.failingReasons then Just "シークレットを読めない"
+  else if elem "config_invalid" e.failingReasons then e.configIssue >>= webhookIssue
+  else Nothing
 
 webhookIssue :: String -> Maybe String
 webhookIssue = case _ of
@@ -281,8 +312,36 @@ webhookIssue = case _ of
   "ambiguous_secret_source" -> Just "シークレットの指定が重複"
   _ -> Nothing
 
+-- | 送信先の登録・更新・削除の拒否の 1 行表示 (API の固定コード)。語彙外・入力では直せないものは「この状態では操作できません」
+webhookRejection :: Maybe String -> String
+webhookRejection = case _ of
+  Just "invalid_url" -> "URL が不正"
+  Just "unsupported_scheme" -> "URL が不正"
+  Just "credentials_in_url" -> "URL が不正"
+  Just "fragment_in_url" -> "URL が不正"
+  Just "missing_host" -> "URL が不正"
+  Just "url_too_long" -> "URL が不正"
+  Just "forbidden_destination" -> "宛先が許可されていない"
+  Just "host_unresolvable" -> "接続失敗"
+  Just "secret_required" -> "シークレットが無い"
+  Just "secret_too_short" -> "シークレットが短い"
+  Just "secret_too_long" -> "シークレットが長い"
+  Just "duplicate_url" -> "登録済みの URL"
+  Just "endpoint_limit_reached" -> "これ以上登録できません"
+  Just "encryption_key_not_configured" -> "暗号鍵が未設定"
+  _ -> "この状態では操作できません"
+
 buttonTest :: String
 buttonTest = "テスト"
+
+buttonEdit :: String
+buttonEdit = "編集"
+
+buttonSave :: String
+buttonSave = "保存"
+
+buttonDelete :: String
+buttonDelete = "削除"
 
 buttonRetry :: String
 buttonRetry = "再試行"
@@ -309,6 +368,12 @@ toastTestFailed = "テスト送信に失敗しました"
 toastRetried :: String
 toastRetried = "再送しました"
 
+toastSaved :: String
+toastSaved = "保存しました"
+
+toastDeleted :: String
+toastDeleted = "削除しました"
+
 -- | 失敗の 1 行表示。競合・前提条件・一時障害・権限なしを別の文言にする
 errorLine :: GateError -> String
 errorLine = case _ of
@@ -316,6 +381,7 @@ errorLine = case _ of
   PreconditionFailed -> "この状態では操作できません"
   NotFound -> "この状態では操作できません"
   WebhookNotConfigured -> "この状態では操作できません"
+  WebhookRejected reason -> webhookRejection reason
   TemporarilyUnavailable -> "接続できません"
   Unexpected -> "接続できません"
   Forbidden -> "権限がありません"

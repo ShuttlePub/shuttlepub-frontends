@@ -5,6 +5,7 @@ module App.Api.RegistrationGate
   , fetchGate
   , fetchProtections
   , fetchWebhook
+  , fetchFailures
   , fetchNotifications
   , openGate
   , closeGate
@@ -15,14 +16,17 @@ module App.Api.RegistrationGate
   , verifyProtection
   , testWebhook
   , retryDelivery
+  , createEndpoint
+  , updateEndpoint
+  , deleteEndpoint
   ) where
 
 import Prelude
 
-import App.Admin.Types (Delivery, Gate, GateError(..), Notification, NotificationPage, Protection, Webhook)
+import App.Admin.Types (Failure, FailurePage, Gate, GateError(..), Notification, NotificationPage, Protection, Webhook)
 import Data.Argonaut.Core (Json)
 import Data.Argonaut.Decode (class DecodeJson, decodeJson, (.:))
-import Data.Array (head, mapMaybe, null)
+import Data.Array (head, null)
 import Data.Either (Either(..), hush)
 import Data.Maybe (Maybe(..))
 import Data.Newtype (unwrap)
@@ -34,8 +38,8 @@ import Generated.Schema.Gql.Enum.RegistrationGateStatus (RegistrationGateStatus)
 import Generated.Schema.Gql.Enum.RegistrationProtection (RegistrationProtection)
 import Generated.Schema.Gql.Enum.RegistrationProtectionStatus (RegistrationProtectionStatus)
 import Generated.Schema.Gql.Enum.RegistrationProbeStatus (RegistrationProbeStatus)
-import Generated.Schema.Gql.Enum.RegistrationWebhookConfiguration (RegistrationWebhookConfiguration)
-import Generated.Schema.Gql.Enum.RegistrationWebhookDeliveryStatus (RegistrationWebhookDeliveryStatus(..))
+import Generated.Schema.Gql.Enum.RegistrationWebhookCategory (RegistrationWebhookCategory)
+import Generated.Schema.Gql.Enum.RegistrationWebhookEndpointStatus (RegistrationWebhookEndpointStatus)
 import GraphQL.Client.Args (Args(..))
 import GraphQL.Client.BaseClients.Affjax.Web (AffjaxWebClient(..))
 import GraphQL.Client.ID (ID(..))
@@ -54,8 +58,9 @@ mutationClient = Client (AffjaxWebClient "/graphql" [])
 -- 応答の分類
 -- ---------------------------------------------------------------------------
 
-errorFromCode :: Maybe String -> GateError
-errorFromCode = case _ of
+errorFromCode :: Maybe String -> Maybe String -> GateError
+errorFromCode code reason = case code of
+  Just "WEBHOOK_ENDPOINT_REJECTED" -> WebhookRejected reason
   Just "UNAUTHENTICATED" -> Unauthenticated
   Just "FORBIDDEN" -> Forbidden
   Just "REVISION_CONFLICT" -> RevisionConflict
@@ -65,12 +70,15 @@ errorFromCode = case _ of
   Just "WEBHOOK_NOT_CONFIGURED" -> WebhookNotConfigured
   _ -> Unexpected
 
-firstErrorCode :: Array Json -> Maybe String
-firstErrorCode errs = do
-  err <- head errs
-  obj <- hush (decodeJson err)
-  extensions <- hush (obj .: "extensions")
-  hush (extensions .: "code")
+-- | 最初のエラーの extensions.code と extensions.reason (送信先の拒否理由。他のエラーには無い)
+firstErrorCode :: Array Json -> { code :: Maybe String, reason :: Maybe String }
+firstErrorCode errs = { code: field "code", reason: field "reason" }
+  where
+  field name = do
+    err <- head errs
+    obj <- hush (decodeJson err)
+    extensions <- hush (obj .: "extensions")
+    hush (extensions .: name)
 
 -- | GraphQL 応答を、errors があればその分類、無ければ data の decode 結果にする
 classify :: forall schema query res a. DecodeJson a => Either Error (GqlResJson schema query res) -> Either GateError a
@@ -80,7 +88,11 @@ classify = case _ of
   Right (GqlResJson json) -> case hush (decodeJson json) of
     Nothing -> Left Unexpected
     Just obj -> case hush (obj .: "errors") :: Maybe (Array Json) of
-      Just errs | not (null errs) -> Left (errorFromCode (firstErrorCode errs))
+      Just errs | not (null errs) ->
+        let
+          first = firstErrorCode errs
+        in
+          Left (errorFromCode first.code first.reason)
       _ -> case hush (obj .: "data") >>= (hush <<< decodeJson) of
         Just a -> Right a
         Nothing -> Left Unexpected
@@ -148,36 +160,30 @@ toNotification raw =
   , bot: raw.observation.bot
   }
 
-type RawDelivery =
-  { eventId :: ID
-  , eventType :: RegistrationGateEventKind
-  , status :: RegistrationWebhookDeliveryStatus
-  , createdAt :: String
-  , lastAttemptAt :: Maybe String
+type RawEndpoint =
+  { id :: ID
+  , maskedUrl :: String
+  , categories :: Array RegistrationWebhookCategory
+  , status :: RegistrationWebhookEndpointStatus
+  , failingReasons :: Array String
+  , configIssue :: Maybe String
+  , secretConfigured :: Boolean
+  , editable :: Boolean
+  , revision :: Maybe Int
   }
 
-type RawWebhook =
-  { configuration :: RegistrationWebhookConfiguration
-  , issue :: Maybe String
-  , destinationHost :: Maybe String
-  , counts :: { failed :: Int }
-  , recentDeliveries :: Array RawDelivery
-  }
+type RawWebhook = { endpoints :: Array RawEndpoint, hasFailedDeliveries :: Boolean }
 
 toWebhook :: RawWebhook -> Webhook
 toWebhook raw =
-  { configuration: raw.configuration
-  , issue: raw.issue
-  , destinationHost: raw.destinationHost
-  , failedCount: raw.counts.failed
-  -- 表示するのは失敗した配送だけ (成功した配送の履歴は出さない)
-  , deliveries: mapMaybe failed raw.recentDeliveries
+  { endpoints: map (\e -> e { id = unwrap e.id }) raw.endpoints
+  , hasFailedDeliveries: raw.hasFailedDeliveries
   }
-  where
-  failed :: RawDelivery -> Maybe Delivery
-  failed d =
-    if d.status == FAILED then Just { eventId: unwrap d.eventId, eventType: d.eventType, status: d.status, createdAt: d.createdAt, lastAttemptAt: d.lastAttemptAt }
-    else Nothing
+
+type RawFailure = { endpointId :: ID, eventId :: ID, eventType :: RegistrationGateEventKind, failedAt :: String }
+
+toFailure :: RawFailure -> Failure
+toFailure raw = { endpointId: unwrap raw.endpointId, eventId: unwrap raw.eventId, eventType: raw.eventType, failedAt: raw.failedAt }
 
 -- ---------------------------------------------------------------------------
 -- Query
@@ -200,16 +206,32 @@ fetchProtections = do
 
 fetchWebhook :: Aff (Either GateError Webhook)
 fetchWebhook = do
-  result <- try $ queryJson identity queryClient "RegistrationWebhook"
-    { registrationWebhook:
-        { configuration: unit
-        , issue: unit
-        , destinationHost: unit
-        , counts: { failed: unit }
-        , recentDeliveries: { eventId: unit, eventType: unit, status: unit, createdAt: unit, lastAttemptAt: unit }
+  result <- try $ queryJson identity queryClient "RegistrationWebhookEndpoints"
+    { registrationWebhookEndpoints:
+        { hasFailedDeliveries: unit
+        , endpoints: { id: unit, maskedUrl: unit, categories: unit, status: unit, failingReasons: unit, configIssue: unit, secretConfigured: unit, editable: unit, revision: unit }
         }
     }
-  pure $ map (\(r :: { registrationWebhook :: RawWebhook }) -> toWebhook r.registrationWebhook) (classify result)
+  pure $ map (\(r :: { registrationWebhookEndpoints :: RawWebhook }) -> toWebhook r.registrationWebhookEndpoints) (classify result)
+
+failureSelection =
+  { nextCursor: unit
+  , items: { endpointId: unit, eventId: unit, eventType: unit, failedAt: unit }
+  }
+
+type RawFailurePage = { registrationWebhookFailures :: { nextCursor :: Maybe String, items :: Array RawFailure } }
+
+-- | 配送失敗の 1 ページ (新しい順、50 件)。before は前のページの nextCursor
+fetchFailures :: Maybe String -> Aff (Either GateError FailurePage)
+fetchFailures before = do
+  (result :: Either GateError RawFailurePage) <- case before of
+    Nothing -> classify <$> try (queryJson identity queryClient "RegistrationWebhookFailures" { registrationWebhookFailures: { limit: 50 } `Args` failureSelection })
+    Just cursor -> classify <$> try (queryJson identity queryClient "RegistrationWebhookFailuresBefore" { registrationWebhookFailures: { limit: 50, before: cursor } `Args` failureSelection })
+  pure $ map
+    ( \(r :: RawFailurePage) ->
+        { items: map toFailure r.registrationWebhookFailures.items, nextCursor: r.registrationWebhookFailures.nextCursor }
+    )
+    result
 
 notificationSelection =
   { unreadCount: unit
@@ -288,17 +310,40 @@ verifyProtection protection = do
   pure $ map (\(r :: { verifyRegistrationProtection :: { readiness :: RawProtection } }) -> r.verifyRegistrationProtection.readiness) (classify result)
 
 -- | 戻り値は受信側が 2xx を返したか
-testWebhook :: Aff (Either GateError Boolean)
-testWebhook = do
+testWebhook :: String -> Aff (Either GateError Boolean)
+testWebhook endpointId = do
   result <- try $ mutationJson identity mutationClient "SendRegistrationWebhookTest"
-    { sendRegistrationWebhookTest: { delivered: unit } }
+    { sendRegistrationWebhookTest: { endpointId: ID endpointId } `Args` { delivered: unit } }
   pure $ map (\(r :: { sendRegistrationWebhookTest :: { delivered :: Boolean } }) -> r.sendRegistrationWebhookTest.delivered) (classify result)
 
-retryDelivery :: String -> Aff (Either GateError Int)
-retryDelivery eventId = do
+-- | 配送失敗を 1 件だけ再キューする (送信先 ID と event ID の組)
+retryDelivery :: String -> String -> Aff (Either GateError Int)
+retryDelivery endpointId eventId = do
   result <- try $ mutationJson identity mutationClient "RetryRegistrationWebhook"
-    { retryRegistrationWebhook: { eventId: ID eventId } `Args` unit }
+    { retryRegistrationWebhook: { endpointId: ID endpointId, eventId: ID eventId } `Args` unit }
   pure $ case classify result of
     Right (r :: { retryRegistrationWebhook :: Int }) | r.retryRegistrationWebhook > 0 -> Right r.retryRegistrationWebhook
     Right _ -> Left NotFound
     Left err -> Left err
+
+createEndpoint :: { url :: String, secret :: String, categories :: Array RegistrationWebhookCategory } -> Aff (Either GateError Unit)
+createEndpoint input = do
+  result <- try $ mutationJson identity mutationClient "CreateRegistrationWebhookEndpoint"
+    { createRegistrationWebhookEndpoint: { input } `Args` { id: unit } }
+  pure $ map (\(_ :: { createRegistrationWebhookEndpoint :: { id :: ID } }) -> unit) (classify result)
+
+-- | Nothing の項目は送らない (= 変更しない)。URL・シークレットは入力したときだけ渡す
+updateEndpoint
+  :: String
+  -> { revision :: Int, url :: Maybe String, secret :: Maybe String, categories :: Maybe (Array RegistrationWebhookCategory) }
+  -> Aff (Either GateError Unit)
+updateEndpoint endpointId input = do
+  result <- try $ mutationJson identity mutationClient "UpdateRegistrationWebhookEndpoint"
+    { updateRegistrationWebhookEndpoint: { endpointId: ID endpointId, input } `Args` { id: unit } }
+  pure $ map (\(_ :: { updateRegistrationWebhookEndpoint :: { id :: ID } }) -> unit) (classify result)
+
+deleteEndpoint :: String -> Int -> Aff (Either GateError Unit)
+deleteEndpoint endpointId revision = do
+  result <- try $ mutationJson identity mutationClient "DeleteRegistrationWebhookEndpoint"
+    { deleteRegistrationWebhookEndpoint: { endpointId: ID endpointId, revision } `Args` unit }
+  pure $ map (\(_ :: { deleteRegistrationWebhookEndpoint :: Boolean }) -> unit) (classify result)
