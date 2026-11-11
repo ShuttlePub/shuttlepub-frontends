@@ -605,16 +605,37 @@ export function createMockRegistrationGate(options: MockRegistrationGateOptions 
   }
 
   /** failed になった時刻の新しい順 (同時刻は送信先 ID・event ID の降順) */
-  function sortedFailures(endpointId: string | undefined): RegistrationWebhookFailedDelivery[] {
-    const descending = (a: string, b: string) => (a === b ? 0 : a < b ? 1 : -1);
-    return webhook.failures
-      .filter((item) => endpointId === undefined || item.endpointId === endpointId)
-      .sort((a, b) => descending(a.failedAt, b.failedAt) || descending(a.endpointId, b.endpointId) || Number(b.eventId) - Number(a.eventId));
+  type FailureKey = Pick<RegistrationWebhookFailedDelivery, "failedAt" | "endpointId" | "eventId">;
+
+  /** 並び順 (新しい順)。負なら a が b より前 (新しい) */
+  function compareFailures(a: FailureKey, b: FailureKey): number {
+    const descending = (x: string, y: string) => (x === y ? 0 : x < y ? 1 : -1);
+    return descending(a.failedAt, b.failedAt) || descending(a.endpointId, b.endpointId) || Number(b.eventId) - Number(a.eventId);
   }
 
-  /** cursor は「この失敗より古いもの」を指す不透明な文字列 (mock では failedAt|endpointId|eventId) */
-  function failureCursor(item: RegistrationWebhookFailedDelivery): string {
+  function sortedFailures(endpointId: string | undefined): RegistrationWebhookFailedDelivery[] {
+    return webhook.failures.filter((item) => endpointId === undefined || item.endpointId === endpointId).sort(compareFailures);
+  }
+
+  /**
+   * cursor は「この失敗より古いもの」を指す不透明な文字列 (mock では failedAt|endpointId|eventId)。
+   * Emumet と同じく境界の値として比べるので、境界の行が再試行で消えても続きを読める
+   */
+  function failureCursor(item: FailureKey): string {
     return btoa(`${item.failedAt}|${item.endpointId}|${item.eventId}`);
+  }
+
+  function decodeFailureCursor(cursor: string): FailureKey | null {
+    let text: string;
+    try {
+      text = atob(cursor);
+    } catch {
+      return null;
+    }
+    const [failedAt, endpointId, eventId, ...rest] = text.split("|");
+    if (failedAt === undefined || endpointId === undefined || eventId === undefined || rest.length > 0) return null;
+    if (Number.isNaN(Date.parse(failedAt)) || !/^\d+$/.test(eventId)) return null;
+    return { failedAt, endpointId, eventId };
   }
 
   const client: RegistrationGateClient = {
@@ -715,15 +736,15 @@ export function createMockRegistrationGate(options: MockRegistrationGateOptions 
       if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE_LIMIT) throw status(400);
       if (query?.endpointId !== undefined) findEndpoint(query.endpointId);
       const all = sortedFailures(query?.endpointId);
-      let start = 0;
+      let older = all;
       if (query?.before !== undefined) {
-        const index = all.findIndex((item) => failureCursor(item) === query.before);
-        if (index === -1) throw status(400);
-        start = index + 1;
+        const boundary = decodeFailureCursor(query.before);
+        if (boundary === null) throw status(400);
+        older = all.filter((item) => compareFailures(item, boundary) > 0);
       }
-      const items = all.slice(start, start + limit);
+      const items = older.slice(0, limit);
       const last = items.at(-1);
-      return { items, nextCursor: start + limit < all.length && last !== undefined ? failureCursor(last) : null };
+      return { items, nextCursor: older.length > limit && last !== undefined ? failureCursor(last) : null };
     },
     async retryRegistrationWebhook(target) {
       guard();

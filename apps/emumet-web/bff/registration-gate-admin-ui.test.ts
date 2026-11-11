@@ -385,6 +385,21 @@ describe("stateful mock: 保護・Webhook・呼び出し者", () => {
     await expect(client.listRegistrationWebhookFailures({ before: "broken" })).rejects.toMatchObject({ status: 400 });
   });
 
+  test("Webhook: 先頭ページの失敗をすべて再試行しても、その cursor で残りの古い失敗を読める (cursor は境界の値で比べる)", async () => {
+    const { client } = createMockRegistrationGate({ webhook: "many_failures" });
+    const first = await client.listRegistrationWebhookFailures();
+    expect(first.items).toHaveLength(50);
+    for (const item of first.items) {
+      expect(await client.retryRegistrationWebhook({ endpointId: item.endpointId, eventId: item.eventId })).toBe(1);
+    }
+    const rest = await client.listRegistrationWebhookFailures({ before: first.nextCursor! });
+    expect(rest.items).toHaveLength(10);
+    expect(rest.nextCursor).toBeNull();
+    expect(rest.items.every((item) => !first.items.some((done) => done.eventId === item.eventId))).toBe(true);
+    // 先頭から読み直すと、残っているのはその 10 件だけ
+    expect((await client.listRegistrationWebhookFailures()).items.map((item) => item.eventId)).toEqual(rest.items.map((item) => item.eventId));
+  });
+
   test("非管理者: 呼び出し者は取得できるが管理 API はすべて 403", async () => {
     const { client } = createMockRegistrationGate({ role: "non-admin" });
     expect(await client.getViewer()).toMatchObject({ instanceRoles: [] });

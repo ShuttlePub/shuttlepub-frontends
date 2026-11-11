@@ -2,7 +2,7 @@ module Test.Main where
 
 import Prelude
 
-import App.Admin.Types (AdminMsg(AdminForbidden, CommandDone, GateLoaded, MoreNotificationsLoaded, NotificationsLoaded, ViewerLoaded, ViewerUnavailable), Gate, GateCommand(..), Loadable(..), acceptGate, emptyAdminModel)
+import App.Admin.Types (AdminMsg(AdminForbidden, CommandDone, DeliveryRetried, FailuresLoaded, GateLoaded, MoreFailuresLoaded, MoreNotificationsLoaded, NotificationsLoaded, ViewerLoaded, ViewerUnavailable), Gate, GateCommand(..), Loadable(..), acceptGate, emptyAdminModel)
 import App.Model (Model, RemoteData(NotAsked), emptyNewAccountForm, pageForMaybeRoute)
 import App.Route (Route(..))
 import App.Username (Local(..), Reason(..), Status(..), Verdict(..), isAvailable, shouldAskServer, status, validate)
@@ -21,6 +21,7 @@ import Flame.Renderer.String as FRS
 import Generated.Schema.Gql.Enum.RegistrationGateEventKind (RegistrationGateEventKind(..))
 import Generated.Schema.Gql.Enum.RegistrationGateStatus (RegistrationGateStatus(..))
 import Generated.Schema.Gql.Enum.RegistrationProbeStatus (RegistrationProbeStatus(..))
+import Generated.Schema.Gql.Enum.RegistrationWebhookEndpointStatus as EndpointStatus
 import Server (renderPage)
 import Test.UpdateSpec as UpdateSpec
 import Test.Util (check)
@@ -154,6 +155,28 @@ adminTests = do
     secondPage = fst (updateAdmin firstPage (MoreNotificationsLoaded { items: [ note "2", note "1" ], unread: 3, nextCursor: Nothing }))
   assert "next page is appended without duplicates" (map _.id secondPage.admin.notifications == [ "3", "2", "1" ])
   assert "last page clears the cursor" (secondPage.admin.notificationsCursor == Nothing)
+
+  -- 配送失敗: 読み込んだ失敗をすべて再試行しても、次のページがある間は［さらに読み込む］を残す (古い失敗へ到達できる)
+  let
+    failure eventId = { endpointId: "1", eventId, eventType: OUTAGE_STARTED, failedAt: "2026-11-10T03:00:00Z" }
+    endpoint = { id: "1", maskedUrl: "hooks.example.net/••••/a8f2", categories: [], status: EndpointStatus.FAILING, failingReasons: [ "failed_deliveries" ], configIssue: Nothing, secretConfigured: true, editable: true, revision: Just 1 }
+    onWebhook = adminModel
+      { route = Just AdminWebhook
+      , page = pageForMaybeRoute (Just AdminWebhook)
+      , admin = adminModel.admin { webhook = Loaded { endpoints: [ endpoint ], hasFailedDeliveries: true } }
+      }
+    firstFailures = fst (updateAdmin onWebhook (FailuresLoaded { items: [ failure "13", failure "12" ], nextCursor: Just "c1" }))
+    allRetried = fst (updateAdmin (fst (updateAdmin firstFailures (DeliveryRetried "1" "13"))) (DeliveryRetried "1" "12"))
+  assert "retried deliveries leave the list" (allRetried.admin.failures == [])
+  assert "retrying every loaded failure keeps the next-page cursor" (allRetried.admin.failuresCursor == Just "c1")
+  retriedHtml <- FRS.render (view allRetried)
+  assert "the load-more control stays after retrying every loaded failure" (contains (Pattern "data-testid=\"webhook-failures-more\"") retriedHtml)
+  let nextFailures = fst (updateAdmin allRetried (MoreFailuresLoaded { items: [ failure "11" ], nextCursor: Nothing }))
+  assert "the next page brings the older failures" (map _.eventId nextFailures.admin.failures == [ "11" ])
+  lastHtml <- FRS.render (view nextFailures)
+  assert "the last page removes the load-more control" (not (contains (Pattern "data-testid=\"webhook-failures-more\"") lastHtml))
+  noFailureHtml <- FRS.render (view (fst (updateAdmin nextFailures (DeliveryRetried "1" "11"))))
+  assert "no failures and no next page hides the section" (not (contains (Pattern "data-testid=\"webhook-failed\"") noFailureHtml))
 
   -- SSR: 管理画面の初期状態を渡すと、警告帯と状態チップが SSR の HTML に含まれ、そのまま hydration できる
   let ssrState = """{"username":"admin","isAdmin":true,"forbidden":false,"gate":{"revision":14,"status":"OVERRIDE","minimumMet":false,"adminOpen":true,"overrideActive":true,"enforcementVerified":true}}"""

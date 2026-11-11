@@ -18,7 +18,7 @@ import App.Message (Message(..))
 import App.Model (Model)
 import App.Route (Route(..), routeCodec)
 import Data.Array (elem, null)
-import Data.Maybe (Maybe(..), maybe)
+import Data.Maybe (Maybe(..), isNothing, maybe)
 import Effect (Effect)
 import Flame (Html)
 import Flame.Types (NodeData)
@@ -370,10 +370,11 @@ destinations model webhook =
             <> (if e.editable then [ testButton editId (btnSmall <> " " <> outline) false (admin (OpenWebhookModal (Just e.id) editId)) [ HE.text Text.buttonEdit ] ] else [])
         )
 
--- | 失敗があるときだけ出す。古い失敗へは［さらに読み込む］で到達し、1 件ずつ再試行する
+-- | 失敗があるときだけ出す。古い失敗へは［さらに読み込む］で到達し、1 件ずつ再試行する。
+-- | 読み込んだ失敗をすべて再試行しても、次のページがある間は［さらに読み込む］を残す
 failedSection :: AdminModel -> Array (Html Message)
 failedSection model =
-  if null model.failures then []
+  if null model.failures && isNothing model.failuresCursor then []
   else
     [ HE.section [ attr "data-testid" "webhook-failed" ]
         [ sectionHeading [ HE.text Text.webhookFailedHeading ]
