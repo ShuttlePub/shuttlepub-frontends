@@ -41,6 +41,8 @@ export const REGISTRATION_GATE_SCENARIOS = {
   "webhook-unset": { fixture: "accepting_protected", webhook: "not_configured" },
   /** Webhook: 設定エラー */
   "webhook-misconfigured": { fixture: "accepting_protected", webhook: "misconfigured" },
+  /** 通知が 1 ページ (50 件) に収まらない (ベルの「さらに読み込む」) */
+  "notifications-many": { fixture: "accepting_protected", notifications: "many" },
   /** 非管理者 (管理画面の導線を出さない。管理 API は 403) */
   member: { fixture: "accepting_protected", role: "non-admin" },
 } as const satisfies Record<string, MockRegistrationGateOptions>;

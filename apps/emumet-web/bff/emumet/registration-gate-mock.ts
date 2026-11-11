@@ -67,7 +67,7 @@ export type MockRegistrationGateOptions = {
   /** 初期状態。省略時は準備未完了 (not_ready) */
   readonly fixture?: RegistrationGateFixtureName;
   /** 初期通知。省略時は通知なし */
-  readonly notifications?: NotificationListFixtureName | "enforcement";
+  readonly notifications?: NotificationListFixtureName | "enforcement" | "many";
   /** 保護の readiness。省略時は初期状態の observation から導出する (Emumet の to_observation の逆) */
   readonly protections?: readonly WireProtectionReadiness[];
   /** Webhook 配送状態。省略時は未設定 */
@@ -314,9 +314,13 @@ function observationFromReadiness(readiness: RegistrationProtectionReadiness): R
   }
 }
 
-function seedEvents(name: NotificationListFixtureName | "enforcement"): StoredEvent[] {
-  const fixture = name === "enforcement" ? ENFORCEMENT_NOTIFICATION_FIXTURES : NOTIFICATION_LIST_FIXTURES[name];
-  return fixture.notifications
+function seedEvents(name: NotificationListFixtureName | "enforcement" | "many"): StoredEvent[] {
+  // many: 1 ページ (50 件) に収まらない通知 (多数の 1 ページ目と最終ページを合わせた 62 件)
+  const wires =
+    name === "enforcement" ? ENFORCEMENT_NOTIFICATION_FIXTURES.notifications
+    : name === "many" ? [...NOTIFICATION_LIST_FIXTURES.many_first_page.notifications, ...NOTIFICATION_LIST_FIXTURES.many_last_page.notifications]
+    : NOTIFICATION_LIST_FIXTURES[name].notifications;
+  return wires
     .map((wire) => {
       const notification = toNotification(wire);
       return {

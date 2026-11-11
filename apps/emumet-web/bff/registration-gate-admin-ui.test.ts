@@ -39,6 +39,7 @@ import {
   type RegistrationObservation,
 } from "./emumet/registration-gate.ts";
 import { registrationGateStatus, registrationMinimumMet } from "./registration-gate-status.ts";
+import { isAdminPath, loadAdminSsrState } from "./admin-ssr.ts";
 import { jsonResponse, stubFetch } from "./test-utils.ts";
 
 const GATE = "/api/v1/admin/registration-gate";
@@ -324,6 +325,7 @@ describe("stateful mock: 保護・Webhook・呼び出し者", () => {
       "enforcement-lost": "AUTO_STOPPED",
       "webhook-unset": "OPEN",
       "webhook-misconfigured": "OPEN",
+      "notifications-many": "OPEN",
       member: "OPEN",
     };
     expect(Object.keys(expected).sort()).toEqual(Object.keys(REGISTRATION_GATE_SCENARIOS).sort());
@@ -397,5 +399,65 @@ describe("GraphQL: 追加フィールドとエラー分類", () => {
     );
     expect(result.errors).toBeUndefined();
     expect(JSON.stringify(result.data)).not.toMatch(/https?:|\/\/|secret/i);
+  });
+});
+
+describe("管理画面の SSR 初期状態 (bff/admin-ssr.ts)", () => {
+  test("管理者: 呼び出し者と状態チップ・警告帯に要る値だけを渡す (secret・観測の詳細は渡さない)", async () => {
+    const mock = createMockRegistrationGate({ fixture: "override_unprotected" });
+    const state = await loadAdminSsrState(mock.client, "admin@example.com");
+    expect(state).toEqual({
+      username: "admin@example.com",
+      isAdmin: true,
+      forbidden: false,
+      gate: { revision: 14, status: "OVERRIDE", minimumMet: false, adminOpen: true, overrideActive: true, enforcementVerified: true },
+    });
+  });
+
+  test("非管理者は isAdmin=false (404 を描画)、管理 API の 403 は forbidden=true", async () => {
+    expect(await loadAdminSsrState(createMockRegistrationGate({ role: "non-admin" }).client, "m")).toEqual({ username: "m", isAdmin: false, forbidden: false, gate: null });
+    const forbidden = createMockRegistrationGate();
+    // viewer は管理者だが、状態の取得が 403 になるケース
+    const viewerAdminGate403 = {
+      ...forbidden.client,
+      getViewer: async () => ({ accountId: "1", instanceRoles: ["ADMIN" as const] }),
+      getRegistrationGate: async () => {
+        throw new EmumetApiError(403, "");
+      },
+    };
+    expect(await loadAdminSsrState(viewerAdminGate403, "x")).toEqual({ username: "x", isAdmin: false, forbidden: true, gate: null });
+  });
+
+  test("未認証・呼び出し者が取れないときは null (クライアントで取得)、状態の一時障害は枠だけ描画", async () => {
+    const mock = createMockRegistrationGate();
+    mock.control.failNext(new EmumetApiError(401, ""));
+    expect(await loadAdminSsrState(mock.client, "x")).toBeNull();
+    const unavailable = {
+      ...mock.client,
+      getRegistrationGate: async () => {
+        throw new EmumetUnavailableError("down");
+      },
+    };
+    expect(await loadAdminSsrState(unavailable, "x")).toEqual({ username: "x", isAdmin: true, forbidden: false, gate: null });
+  });
+
+  test("管理画面の SSR 対象は /admin/registration と /admin/webhook だけ", () => {
+    expect(isAdminPath("/admin/registration")).toBe(true);
+    expect(isAdminPath("/admin/webhook")).toBe(true);
+    expect(isAdminPath("/")).toBe(false);
+    expect(isAdminPath("/admin/other")).toBe(false);
+  });
+});
+
+describe("通知の次ページ (stateful mock の notifications=many)", () => {
+  test("1 ページ目 50 件と nextCursor、2 ページ目で残り 12 件に到達できる", async () => {
+    const { client } = createMockRegistrationGate({ notifications: "many" });
+    const first = await client.listRegistrationGateNotifications({ limit: 50 });
+    expect(first.notifications).toHaveLength(50);
+    expect(first.nextCursor).not.toBeNull();
+    const second = await client.listRegistrationGateNotifications({ limit: 50, before: first.nextCursor ?? "" });
+    expect(second.notifications).toHaveLength(12);
+    expect(second.nextCursor).toBeNull();
+    expect(new Set([...first.notifications, ...second.notifications].map((item) => item.id)).size).toBe(62);
   });
 });

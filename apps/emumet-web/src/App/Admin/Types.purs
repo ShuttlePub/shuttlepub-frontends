@@ -119,9 +119,14 @@ type AdminModel =
   , protections :: Loadable (Array Protection)
   , webhook :: Loadable Webhook
   , notifications :: Array Notification
+  -- 次のページの before (最後のページでは Nothing)
+  , notificationsCursor :: Maybe String
+  , loadingMore :: Boolean
   , unread :: Int
   , bellOpen :: Boolean
   , modal :: Maybe AdminModal
+  -- モーダルを開いたボタンの id (閉じたらそこへフォーカスを戻す)
+  , modalOrigin :: Maybe String
   , overrideAck :: Boolean
   , pending :: Boolean
   , verifying :: Array RegistrationProtection
@@ -131,6 +136,8 @@ type AdminModel =
   , error :: Maybe GateError
   , toast :: Maybe Toast
   , toastSeq :: Int
+  -- 管理 API が FORBIDDEN を返した。管理者のヒント (viewer) より優先し、管理画面と導線を出さない
+  , forbidden :: Boolean
   }
 
 emptyAdminModel :: AdminModel
@@ -140,9 +147,12 @@ emptyAdminModel =
   , protections: NotLoaded
   , webhook: NotLoaded
   , notifications: []
+  , notificationsCursor: Nothing
+  , loadingMore: false
   , unread: 0
   , bellOpen: false
   , modal: Nothing
+  , modalOrigin: Nothing
   , overrideAck: false
   , pending: false
   , verifying: []
@@ -151,7 +161,17 @@ emptyAdminModel =
   , error: Nothing
   , toast: Nothing
   , toastSeq: 0
+  , forbidden: false
   }
+
+-- | 取得した状態を反映する。現在値より古い revision の応答 (操作の前に出した GET が後から届いたもの) は捨て、
+-- | 操作で進んだ状態を巻き戻さない
+acceptGate :: Loadable Gate -> Gate -> Loadable Gate
+acceptGate current incoming = case current of
+  Loaded known | known.revision > incoming.revision -> current
+  _ -> Loaded incoming
+
+type NotificationPage = { items :: Array Notification, unread :: Int, nextCursor :: Maybe String }
 
 data GateCommand
   = OpenGate
@@ -171,7 +191,9 @@ data AdminMsg
   | ProtectionsLoadFailed GateError
   | WebhookLoaded Webhook
   | WebhookLoadFailed GateError
-  | NotificationsLoaded { items :: Array Notification, unread :: Int }
+  | NotificationsLoaded NotificationPage
+  | LoadMoreNotifications
+  | MoreNotificationsLoaded NotificationPage
   | NotificationsFailed GateError
   | ToggleBell
   | CloseBell
@@ -182,9 +204,13 @@ data AdminMsg
   | RunCommand GateCommand
   | CommandDone GateCommand Gate
   | CommandFailed GateError
-  | RequestRevoke
+  -- 条件未達の解除で、閉じる操作は成功したが解除に失敗した (閉じた後の状態は保つ)
+  | CommandPartial Gate GateError
+  -- 管理 API の FORBIDDEN: 管理画面の状態を捨て、導線を消して /admin/* を 404 にする
+  | AdminForbidden
+  | RequestRevoke String
   | ConfirmRevoke
-  | OpenOverrideModal
+  | OpenOverrideModal String
   | SetOverrideAck Boolean
   | ConfirmOverride
   | CloseModal

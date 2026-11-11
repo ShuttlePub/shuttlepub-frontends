@@ -106,6 +106,7 @@ const ADMIN_GATE_STATUS: Record<string, string> = {
   "admin-override-confirm": "NOT_OPENED",
   "admin-revoke-confirm": "OVERRIDE",
   "admin-notifications": "OPEN",
+  "admin-notifications-more": "OPEN",
 };
 
 /** Cases whose scenario keeps the override value, so the warning strip must be shown on every admin page. */
@@ -157,6 +158,9 @@ async function prepareAdminScreen(page: Page, item: ScreenCase): Promise<string>
   await expectStrip();
 
   if (item.id === "admin-registration-override") {
+    // The warning is part of the SSR HTML itself (not only added after the client fetch).
+    const ssr = await page.context().request.get(page.url());
+    expect(await ssr.text()).toContain('data-testid="override-strip"');
     // Reload: SSR + resume again, the warning comes back with the state.
     await page.reload({ waitUntil: "networkidle" });
     await registrationReady();
@@ -190,6 +194,14 @@ async function prepareAdminScreen(page: Page, item: ScreenCase): Promise<string>
     const panel = page.getByTestId("notification-panel");
     await expect(panel).toBeVisible();
     await expect(panel.locator("button")).toHaveCount(7);
+  } else if (item.id === "admin-notifications-more") {
+    // Notifications beyond the first page (50) are reachable; the load-more control disappears on the last page.
+    await page.locator("#notification-bell").click();
+    const panel = page.getByTestId("notification-panel");
+    await expect(panel.locator("button")).toHaveCount(52);
+    await panel.getByTestId("notifications-more").click();
+    await expect(panel.locator("button")).toHaveCount(63);
+    await expect(panel.getByTestId("notifications-more")).toHaveCount(0);
   }
   return item.path;
 }

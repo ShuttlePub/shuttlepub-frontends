@@ -203,6 +203,10 @@ notificationsTitle = "通知"
 buttonMarkAllRead :: String
 buttonMarkAllRead = "すべて既読にする"
 
+-- | 通知の次のページを読む (51 件目以降)
+buttonLoadMore :: String
+buttonLoadMore = "さらに読み込む"
+
 unreadMark :: String
 unreadMark = "未読"
 

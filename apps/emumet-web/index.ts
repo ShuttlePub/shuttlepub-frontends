@@ -31,6 +31,7 @@ import { createYogaHandler } from "./bff/server.ts";
 import { createMockEmumetClient } from "./bff/emumet/mock.ts";
 import { REGISTRATION_GATE_SCENARIOS, isRegistrationGateScenario } from "./bff/emumet/registration-gate-scenarios.ts";
 import { createRealEmumetClient } from "./bff/emumet/real.ts";
+import { isAdminPath, loadAdminSsrState } from "./bff/admin-ssr.ts";
 
 // ============================================================
 // Configuration
@@ -511,8 +512,30 @@ async function handleRealAuth(req: Request, pathname: string): Promise<Response 
 // SSR
 // ============================================================
 
-async function serveSSR(url: URL): Promise<Response> {
-  const html = renderPage(url.pathname + url.search)();
+// 管理画面だけは、強制開放中の警告帯を SSR 直後から出すため、呼び出し者と登録ゲートの状態を初期 Model に渡す
+// (bff/admin-ssr.ts)。取得できないときは空文字を渡し、従来どおりクライアントで取得させる
+async function adminSsrState(req: Request, url: URL): Promise<string> {
+  if (!isAdminPath(url.pathname)) return "";
+  let username: string;
+  let accessToken: string;
+  if (USE_MOCK) {
+    const session = getMockSession(req);
+    if (!session) return "";
+    username = session.username;
+    accessToken = session.token;
+  } else {
+    const session = await getRealSession(req);
+    if (!session || session.expiresAt <= Math.floor(Date.now() / 1000)) return "";
+    username = session.email || session.sub || "unknown";
+    accessToken = session.accessToken;
+  }
+  const client = sharedMockEmumetClient ?? createRealEmumetClient({ baseUrl: EMUMET_API_URL }, accessToken);
+  const state = await loadAdminSsrState(client, username);
+  return state === null ? "" : JSON.stringify(state);
+}
+
+async function serveSSR(req: Request, url: URL): Promise<Response> {
+  const html = renderPage(url.pathname + url.search)(await adminSsrState(req, url))();
   return new Response(html, {
     headers: { "Content-Type": "text/html; charset=utf-8" },
   });
@@ -597,7 +620,7 @@ Bun.serve({
       return consentHandler(req);
     }
 
-    return serveSSR(url);
+    return serveSSR(req, url);
   },
 });
 

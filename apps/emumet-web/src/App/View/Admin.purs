@@ -11,7 +11,7 @@ import Prelude
 
 import App.Admin.Text (Tone)
 import App.Admin.Text as Text
-import App.Admin.Time (formatEventTime)
+import App.Admin.Time (eventKey, formatEventTime, trapFocus)
 import App.Admin.Types (AdminModal(..), AdminModel, AdminMsg(..), Delivery, Gate, GateCommand(..), Loadable(..), Notification, Protection, Webhook)
 import App.Message (Message(..))
 import App.Model (Model)
@@ -70,7 +70,7 @@ button classes disabled message children =
 -- | visual / E2E が文言に依存せず操作できるよう data-testid を付けたボタン
 testButton :: String -> String -> Boolean -> Message -> Array (Html Message) -> Html Message
 testButton testId classes disabled message children =
-  HE.button [ HA.type' "button", attr "data-testid" testId, HA.class' classes, HA.disabled disabled, HA.onClick message ] children
+  HE.button [ HA.type' "button", HA.id testId, attr "data-testid" testId, HA.class' classes, HA.disabled disabled, HA.onClick message ] children
 
 spinner :: Html Message
 spinner = HE.span [ HA.class' "inline-block w-3 h-3 border-2 border-current border-r-transparent rounded-full animate-spin", attr "aria-hidden" "true" ] []
@@ -175,6 +175,11 @@ modal model = case model.modal of
           [ attr "role" "dialog"
           , attr "aria-modal" "true"
           , attr "aria-labelledby" "admin-modal-title"
+          -- Tab / Shift+Tab をモーダルの中で循環させる (背面の画面へフォーカスを逃がさない)。
+          -- Flame は要素のハンドラで処理したイベントを document へ伝えないので、Esc もここで閉じる
+          , HA.createRawEvent "keydown" \event -> do
+              trapFocus event
+              pure (if eventKey event == "Escape" then Just (admin CloseModal) else Nothing)
           , HA.class' (T.surface <> " relative w-full max-w-lg p-4 sm:p-5")
           ]
           (body which)
@@ -262,7 +267,7 @@ gatePanel model gate =
     )
       <> [ testButton "gate-open" (btnSmall <> " " <> primary) (pending || enforcementMissing || minimumMissing) (admin (RunCommand OpenGate)) [ HE.text label ] ]
       <>
-        ( if minimumMissing || enforcementMissing then [ testButton "gate-override" (btnSmall <> " " <> dangerGhost) (pending || enforcementMissing) (admin OpenOverrideModal) [ HE.text Text.buttonOverride ] ]
+        ( if minimumMissing || enforcementMissing then [ testButton "gate-override" (btnSmall <> " " <> dangerGhost) (pending || enforcementMissing) (admin (OpenOverrideModal "gate-override")) [ HE.text Text.buttonOverride ] ]
           else []
         )
   stop = [ testButton "gate-stop" (btnSmall <> " " <> outline) pending (admin (RunCommand CloseGate)) [ HE.text Text.buttonStop ] ]
@@ -273,7 +278,7 @@ gatePanel model gate =
     OPEN -> stop
     -- 一時停止中は復旧すると自動で再開するので［再開］は出さない
     TEMPORARILY_SUSPENDED -> stop
-    OVERRIDE -> [ testButton "gate-revoke" (btnSmall <> " " <> outline) pending (admin RequestRevoke) [ HE.text Text.buttonRevokeOverride ] ]
+    OVERRIDE -> [ testButton "gate-revoke" (btnSmall <> " " <> outline) pending (admin (RequestRevoke "gate-revoke")) [ HE.text Text.buttonRevokeOverride ] ]
 
 protectionsSection :: AdminModel -> Html Message
 protectionsSection model = case model.protections of
@@ -393,7 +398,7 @@ overrideStrip model = case model.admin.gate of
       ]
       [ HE.div [ HA.class' "max-w-4xl mx-auto px-3 sm:px-4 py-1.5 flex items-center gap-3 text-sm" ]
           [ HE.b [ HA.class' ("flex-1 " <> T.textError) ] [ HE.text Text.overrideStrip ]
-          , testButton "override-strip-revoke" (btnSmall <> " " <> dangerGhost) model.admin.pending (admin RequestRevoke) [ HE.text Text.buttonStripRevoke ]
+          , testButton "override-strip-revoke" (btnSmall <> " " <> dangerGhost) model.admin.pending (admin (RequestRevoke "override-strip-revoke")) [ HE.text Text.buttonStripRevoke ]
           ]
       ]
   _ -> HE.div [ HA.class' "hidden" ] []
@@ -430,6 +435,15 @@ bellItem model =
         <> (if model.bellOpen then [ panel ] else [])
     )
   where
+  -- 51 件目以降 (次のページがあるときだけ)
+  loadMore = case model.notificationsCursor of
+    Just _ ->
+      [ HE.div [ HA.class' "p-2 text-center" ]
+          [ testButton "notifications-more" (btnSmall <> " " <> outline) model.loadingMore (admin LoadMoreNotifications)
+              ((if model.loadingMore then [ spinner ] else []) <> [ HE.text Text.buttonLoadMore ])
+          ]
+      ]
+    Nothing -> []
   panel =
     HE.div
       [ attr "role" "dialog"
@@ -444,7 +458,7 @@ bellItem model =
         ]
           <>
             if null model.notifications then [ HE.div [ HA.class' ("p-6 text-center text-sm " <> T.textMuted) ] [ HE.text Text.none ] ]
-            else map notificationRow model.notifications
+            else map notificationRow model.notifications <> loadMore
       )
 
 notificationRow :: Notification -> Html Message

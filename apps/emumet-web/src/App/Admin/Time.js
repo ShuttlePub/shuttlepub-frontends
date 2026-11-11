@@ -14,3 +14,25 @@ export const focusByIdImpl = (id) => () => {
   const element = document.getElementById(id);
   if (element) element.focus();
 };
+
+// モーダルの中で Tab / Shift+Tab を循環させる (最後の要素の次は最初へ、最初の前は最後へ)
+export const trapFocusImpl = (event) => () => {
+  if (event.key !== "Tab") return;
+  // Flame はイベントを root に委譲するので、currentTarget ではなく target から dialog を辿る
+  const dialog = event.target instanceof Element ? event.target.closest("[role=\"dialog\"]") : null;
+  if (!dialog) return;
+  const focusable = Array.from(dialog.querySelectorAll("button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])"))
+    .filter((element) => !element.disabled && element.offsetParent !== null);
+  if (focusable.length === 0) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
+};
+
+export const eventKeyImpl = (event) => (typeof event.key === "string" ? event.key : "");

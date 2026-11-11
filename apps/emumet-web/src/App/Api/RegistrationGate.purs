@@ -19,7 +19,7 @@ module App.Api.RegistrationGate
 
 import Prelude
 
-import App.Admin.Types (Delivery, Gate, GateError(..), Notification, Protection, Webhook)
+import App.Admin.Types (Delivery, Gate, GateError(..), Notification, NotificationPage, Protection, Webhook)
 import Data.Argonaut.Core (Json)
 import Data.Argonaut.Decode (class DecodeJson, decodeJson, (.:))
 import Data.Array (head, mapMaybe, null)
@@ -211,26 +211,34 @@ fetchWebhook = do
     }
   pure $ map (\(r :: { registrationWebhook :: RawWebhook }) -> toWebhook r.registrationWebhook) (classify result)
 
-fetchNotifications :: Aff (Either GateError { items :: Array Notification, unread :: Int })
-fetchNotifications = do
-  result <- try $ queryJson identity queryClient "RegistrationGateNotifications"
-    { registrationGateNotifications:
-        { limit: 50 } `Args`
-          { unreadCount: unit
-          , notifications:
-              { id: unit
-              , kind: unit
-              , read: unit
-              , createdAt: unit
-              , observation: { email: { configured: unit, probe: unit }, bot: { configured: unit, probe: unit } }
-              }
-          }
-    }
+notificationSelection =
+  { unreadCount: unit
+  , nextCursor: unit
+  , notifications:
+      { id: unit
+      , kind: unit
+      , read: unit
+      , createdAt: unit
+      , observation: { email: { configured: unit, probe: unit }, bot: { configured: unit, probe: unit } }
+      }
+  }
+
+type RawNotificationPage = { registrationGateNotifications :: { unreadCount :: Int, nextCursor :: Maybe String, notifications :: Array RawNotification } }
+
+-- | 通知の 1 ページ (新しい順、50 件)。before は前のページの nextCursor
+fetchNotifications :: Maybe String -> Aff (Either GateError NotificationPage)
+fetchNotifications before = do
+  (result :: Either GateError RawNotificationPage) <- case before of
+    Nothing -> classify <$> try (queryJson identity queryClient "RegistrationGateNotifications" { registrationGateNotifications: { limit: 50 } `Args` notificationSelection })
+    Just cursor -> classify <$> try (queryJson identity queryClient "RegistrationGateNotificationsBefore" { registrationGateNotifications: { limit: 50, before: cursor } `Args` notificationSelection })
   pure $ map
-    ( \(r :: { registrationGateNotifications :: { unreadCount :: Int, notifications :: Array RawNotification } }) ->
-        { items: map toNotification r.registrationGateNotifications.notifications, unread: r.registrationGateNotifications.unreadCount }
+    ( \(r :: RawNotificationPage) ->
+        { items: map toNotification r.registrationGateNotifications.notifications
+        , unread: r.registrationGateNotifications.unreadCount
+        , nextCursor: r.registrationGateNotifications.nextCursor
+        }
     )
-    (classify result)
+    result
 
 -- ---------------------------------------------------------------------------
 -- Mutation

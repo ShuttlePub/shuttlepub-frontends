@@ -38,6 +38,7 @@ const routes = [
     ["admin-override-confirm", "not-opened"],
     ["admin-revoke-confirm", "override"],
     ["admin-notifications", "open-degraded"],
+    ["admin-notifications-more", "notifications-many"],
     ["admin-not-found-for-member", "member"],
   ] as const).map(([id, scenario]) => ({ app: "Emumet", id, path: "/admin/registration", authenticated: true, data: "populated", scenario }) as const),
   ...([

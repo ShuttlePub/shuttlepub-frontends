@@ -9,14 +9,14 @@ import Prelude
 
 import App.Admin.Text as Text
 import App.Admin.Time (focusById)
-import App.Admin.Types (AdminModel, AdminMsg(..), Gate, GateCommand(..), GateError(..), Loadable(..), AdminModal(..))
+import App.Admin.Types (AdminModal(..), AdminModel, AdminMsg(..), Gate, GateCommand(..), GateError(..), Loadable(..), acceptGate, emptyAdminModel)
 import App.Api.RegistrationGate as Api
 import App.Message (Message(..))
 import App.Model (Model)
 import App.Route (Route, isAdminRoute)
 import Data.Array (cons, delete, elem, filter)
 import Data.Either (Either(..))
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe(..), maybe)
 import Data.Time.Duration (Milliseconds(..))
 import Data.Tuple (Tuple(..))
 import Effect.Aff (Aff, delay)
@@ -29,9 +29,15 @@ deliver :: forall a. Aff (Either GateError a) -> (a -> AdminMsg) -> (GateError -
 deliver call ok ng = do
   result <- call
   pure $ Just $ case result of
-    Left Unauthenticated -> SessionExpired
-    Left err -> Admin (ng err)
+    Left err -> failure ng err
     Right value -> Admin (ok value)
+
+-- | 未認証は再ログイン、権限なしは管理画面の失効 (共通処理)、それ以外は呼び出し元のエラー表示
+failure :: (GateError -> AdminMsg) -> GateError -> Message
+failure ng = case _ of
+  Unauthenticated -> SessionExpired
+  Forbidden -> Admin AdminForbidden
+  err -> Admin (ng err)
 
 fetchViewerAff :: Aff (Maybe Message)
 fetchViewerAff = do
@@ -51,7 +57,7 @@ fetchWebhookAff :: Aff (Maybe Message)
 fetchWebhookAff = deliver Api.fetchWebhook WebhookLoaded WebhookLoadFailed
 
 fetchNotificationsAff :: Aff (Maybe Message)
-fetchNotificationsAff = deliver Api.fetchNotifications NotificationsLoaded NotificationsFailed
+fetchNotificationsAff = deliver (Api.fetchNotifications Nothing) NotificationsLoaded NotificationsFailed
 
 refreshEffects :: Effects
 refreshEffects = [ fetchGateAff, fetchProtectionsAff, fetchWebhookAff, fetchNotificationsAff ]
@@ -115,9 +121,11 @@ updateAdmin model msg =
     case msg of
       ViewerLoaded isAdmin ->
         let
-          m = setAdmin model (admin { isAdmin = Just isAdmin })
+          -- 管理 API が FORBIDDEN を返した後は、viewer のヒントが管理者でも管理画面を出さない
+          granted = isAdmin && not admin.forbidden
+          m = setAdmin model (admin { isAdmin = Just granted })
         in
-          if isAdmin then Tuple m ([ fetchNotificationsAff ] <> enterRouteEffects m)
+          if granted then Tuple m ([ fetchNotificationsAff ] <> enterRouteEffects m)
           else noFx m
 
       ViewerFailed ->
@@ -128,7 +136,7 @@ updateAdmin model msg =
         Tuple (setAdmin model (admin { error = Nothing })) refreshEffects
 
       GateLoaded gate ->
-        noFx $ setAdmin model (admin { gate = Loaded gate })
+        noFx $ setAdmin model (admin { gate = acceptGate admin.gate gate })
 
       GateLoadFailed err ->
         noFx $ setAdmin model (admin { gate = keepLoaded admin.gate err, error = Just err })
@@ -146,10 +154,25 @@ updateAdmin model msg =
         noFx $ setAdmin model (admin { webhook = keepLoaded admin.webhook err, error = Just err })
 
       NotificationsLoaded page ->
-        noFx $ setAdmin model (admin { notifications = page.items, unread = page.unread })
+        noFx $ setAdmin model (admin { notifications = page.items, notificationsCursor = page.nextCursor, unread = page.unread })
+
+      LoadMoreNotifications ->
+        case admin.notificationsCursor of
+          Just cursor | not admin.loadingMore ->
+            Tuple (setAdmin model (admin { loadingMore = true }))
+              [ deliver (Api.fetchNotifications (Just cursor)) MoreNotificationsLoaded NotificationsFailed ]
+          _ -> noFx model
+
+      MoreNotificationsLoaded page ->
+        let
+          known = map _.id admin.notifications
+          fresh = filter (\n -> not (elem n.id known)) page.items
+        in
+          noFx $ setAdmin model
+            (admin { notifications = admin.notifications <> fresh, notificationsCursor = page.nextCursor, unread = page.unread, loadingMore = false })
 
       NotificationsFailed err ->
-        noFx $ setAdmin model (admin { error = Just err })
+        noFx $ setAdmin model (admin { error = Just err, loadingMore = false })
 
       ToggleBell ->
         if admin.bellOpen then noFx $ setAdmin model (admin { bellOpen = false })
@@ -192,7 +215,7 @@ updateAdmin model msg =
 
       CommandDone command gate ->
         let
-          base = admin { gate = Loaded gate, pending = false, modal = Nothing, overrideAck = false, error = Nothing }
+          base = admin { gate = acceptGate admin.gate gate, pending = false, modal = Nothing, overrideAck = false, error = Nothing }
           Tuple withToast toastFx = case commandToast command of
             Just text -> showToast text base
             Nothing -> Tuple base []
@@ -203,29 +226,42 @@ updateAdmin model msg =
         Tuple (setAdmin model (admin { pending = false, modal = Nothing, overrideAck = false, error = Just err }))
           (if refetchOnError err then [ fetchGateAff, fetchProtectionsAff ] else [])
 
-      RequestRevoke ->
+      CommandPartial gate err ->
+        Tuple (setAdmin model (admin { gate = acceptGate admin.gate gate, pending = false, modal = Nothing, error = Just err }))
+          (if refetchOnError err then [ fetchGateAff ] else [])
+
+      AdminForbidden ->
+        -- 権限が無いと分かった時点で、管理画面の状態 (警告帯・通知を含む) を捨てて導線を消す。/admin/* は 404 になる
+        noFx $ setAdmin model (emptyAdminModel { isAdmin = Just false, forbidden = true, toastSeq = admin.toastSeq })
+
+      RequestRevoke origin ->
         withGate model \gate ->
           if gate.minimumMet then updateAdmin model (RunCommand RevokeOverride)
-          else Tuple (setAdmin model (admin { modal = Just RevokeModal })) [ focusLater "revoke-cancel" ]
+          else Tuple (setAdmin model (admin { modal = Just RevokeModal, modalOrigin = Just origin })) [ focusLater "revoke-cancel" ]
 
       ConfirmRevoke ->
         withGate model \gate ->
           let
             -- 条件を満たさない解除は「停止中 (管理者による停止)」にする (親判断 question-c33d7e52 (d)):
             -- 先に閉じてから解除するので、解除の間に無保護で開放のまま残らない
+            -- 閉じる操作だけ成功して解除に失敗したときは、閉じた後の状態を保つ (CommandPartial)
+            closeThenRevoke = do
+              closed <- Api.closeGate gate.revision
+              case closed of
+                Left err -> pure (Just (failure CommandFailed err))
+                Right g -> do
+                  revoked <- Api.revokeOverride g.revision
+                  pure $ Just $ case revoked of
+                    Right done -> Admin (CommandDone RevokeOverride done)
+                    Left err -> failure (CommandPartial g) err
             call =
-              if gate.adminOpen then do
-                closed <- Api.closeGate gate.revision
-                case closed of
-                  Right g -> Api.revokeOverride g.revision
-                  Left err -> pure (Left err)
-              else Api.revokeOverride gate.revision
+              if gate.adminOpen then closeThenRevoke
+              else deliver (Api.revokeOverride gate.revision) (CommandDone RevokeOverride) CommandFailed
           in
-            Tuple (setAdmin model (admin { pending = true, modal = Nothing, error = Nothing }))
-              [ deliver call (CommandDone RevokeOverride) CommandFailed ]
+            Tuple (setAdmin model (admin { pending = true, modal = Nothing, error = Nothing })) [ call ]
 
-      OpenOverrideModal ->
-        Tuple (setAdmin model (admin { modal = Just OverrideModal, overrideAck = false })) [ focusLater "override-ack" ]
+      OpenOverrideModal origin ->
+        Tuple (setAdmin model (admin { modal = Just OverrideModal, modalOrigin = Just origin, overrideAck = false })) [ focusLater "override-ack" ]
 
       SetOverrideAck checked ->
         noFx $ setAdmin model (admin { overrideAck = checked })
@@ -238,7 +274,7 @@ updateAdmin model msg =
         else noFx model
 
       CloseModal ->
-        noFx $ setAdmin model (admin { modal = Nothing, overrideAck = false })
+        closeModal
 
       Verify protection ->
         if elem protection admin.verifying then noFx model
@@ -297,8 +333,12 @@ updateAdmin model msg =
 
       KeyPressed key ->
         if key /= "Escape" then noFx model
-        else if admin.modal /= Nothing then noFx $ setAdmin model (admin { modal = Nothing, overrideAck = false })
+        else if admin.modal /= Nothing then closeModal
         else if admin.bellOpen then Tuple (setAdmin model (admin { bellOpen = false })) [ focusLater "notification-bell" ]
         else noFx model
   where
   enterRouteEffects m = enterRoute m.route m
+  -- 閉じたらモーダルを開いたボタンへフォーカスを戻す
+  closeModal =
+    Tuple (model { admin = model.admin { modal = Nothing, modalOrigin = Nothing, overrideAck = false } })
+      (maybe [] (\origin -> [ focusLater origin ]) model.admin.modalOrigin)

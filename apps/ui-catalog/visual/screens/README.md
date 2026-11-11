@@ -36,11 +36,11 @@ is captured at 1280×900 and 390×844, at device scale 1, with a full-page scree
 - Emumet registration gate admin (`admin-*`): every gate state of ui-spec "mock A v5" (not opened, open,
   open with one protection unresponsive, temporarily suspended, auto-stopped with and without recovered
   protection, admin-stopped, override with and without a ready protection, enforcement lost), the override and
-  revoke confirmations, the notification panel, the Webhook tab (healthy, delivery failures, not configured,
+  revoke confirmations, the notification panel (and loading the page beyond the first 50), the Webhook tab (healthy, delivery failures, not configured,
   misconfigured) and the 404 a non-admin gets. Each case selects a built-in mock scenario through the mock-only
   `POST /__mock/registration-gate/scenario` before the page loads; other Emumet cases reset it to `default`.
-  The checks also assert a single intact DOM after resume and that the override warning survives reload and
-  admin-tab navigation but never shows on general pages. main renders 404 for these paths.
+  The checks also assert a single intact DOM after resume, that the override warning is already in the SSR HTML,
+  and that it survives reload and admin-tab navigation but never shows on general pages. main renders 404 for these paths.
 
 The fixed app theme is Catppuccin Mocha / Rounded; the component catalog covers
 the theme combinations. These are UI-review fixtures, not a substitute for
