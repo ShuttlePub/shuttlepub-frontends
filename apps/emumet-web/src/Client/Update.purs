@@ -7,7 +7,9 @@ import App.Api.Auth as Auth
 import App.Api.Auth (LoginRequest(..), LoginResponse(..), SessionResponse(..))
 import App.Api.GraphQL as GraphQL
 import App.Api.GraphQL.Types (AccountResponse(..), MetadataResponse(..), ProfileResponse(..), Tristate(..))
+import App.Admin.Types (emptyAdminModel)
 import App.Message (Message(..), UsernameTarget(..))
+import Client.Admin (enterRoute, fetchViewerAff, updateAdmin)
 import App.Model (AccountWithDetails, DialogStep(..), Model, RemoteData(..), emptyLoginForm, emptyNewAccountForm, emptySetUsernameDialog, isProtectedRoute, pageForMaybeRoute)
 import App.Route (Route(..), routeCodec)
 import App.Username (Reason(..), Verdict(..), isAvailable, shouldAskServer)
@@ -32,7 +34,37 @@ currentAccountId model = case model.selectedAccount of
   _ -> Nothing
 
 mkUpdate :: PushStateInterface -> Update Model Message
-mkUpdate nav model = case _ of
+mkUpdate nav model msg = case msg of
+  Admin adminMsg -> updateAdmin model adminMsg
+  SessionLoaded _ ->
+    -- 管理画面の導線 (nav の「管理」・ベル) を出すかのヒントを取る。権限判断の正本は各管理 API
+    let
+      Tuple m fx = baseUpdate nav model msg
+    in
+      Tuple m (fx <> [ fetchViewerAff ])
+  UrlChanged _ | model.isHydrated ->
+    let
+      Tuple m fx = baseUpdate nav model msg
+    in
+      Tuple (m { admin = m.admin { bellOpen = false, modal = Nothing, error = Nothing } }) (fx <> enterRoute m.route m)
+  SessionExpired -> resetAdmin (baseUpdate nav model msg)
+  -- 適用された SessionFailed (確認済みの session が無い) は管理画面の状態も捨てる
+  SessionFailed | not (isJust model.session && model.sessionVerified) -> resetAdmin (baseUpdate nav model msg)
+  SessionUnavailable ->
+    if isJust model.session && not model.sessionVerified then
+      -- SSR (管理画面) が渡した未確認の session と管理画面の状態 (警告帯を含む) は、一時障害では捨てずに保ち、少し待って照合し直す
+      Tuple model [ delay (Milliseconds 5000.0) $> Just CheckSession ]
+    else if isJust model.session then noMessages model
+    -- 既知の session が無いときは従来どおり (SessionFailed と同じ扱い)
+    else resetAdmin (baseUpdate nav model SessionFailed)
+  LogoutDone -> resetAdmin (baseUpdate nav model msg)
+  _ -> baseUpdate nav model msg
+
+resetAdmin :: Tuple Model (Array (Aff (Maybe Message))) -> Tuple Model (Array (Aff (Maybe Message)))
+resetAdmin (Tuple m fx) = Tuple (m { admin = emptyAdminModel }) fx
+
+baseUpdate :: PushStateInterface -> Update Model Message
+baseUpdate nav model = case _ of
   Navigate route ->
     let
       url = print routeCodec route
@@ -83,7 +115,7 @@ mkUpdate nav model = case _ of
 
   SessionLoaded sessionInfo ->
     let
-      m = model { session = Just sessionInfo }
+      m = model { session = Just sessionInfo, sessionVerified = true }
     in
       case m.route of
         Just r | isProtectedRoute r ->
@@ -108,12 +140,13 @@ mkUpdate nav model = case _ of
         _ -> noMessages m
 
   SessionFailed ->
-    -- Ignore stale SessionFailed if we already have an active session
-    -- (e.g., startup CheckSession returns after successful LoginSuccess)
-    if isJust model.session then noMessages model
+    -- Ignore stale SessionFailed if we already have a session confirmed by this client
+    -- (e.g., startup CheckSession returns after successful LoginSuccess). A session that only came
+    -- from the admin page SSR is not confirmed yet, so its first 401 is applied.
+    if isJust model.session && model.sessionVerified then noMessages model
     else
       let
-        m = model { session = Nothing, savePending = false, editProfileForm = Nothing, editMetadataForm = Nothing }
+        m = model { session = Nothing, sessionVerified = false, savePending = false, editProfileForm = Nothing, editMetadataForm = Nothing }
       in
         case m.route of
           Just r | isProtectedRoute r ->
@@ -560,6 +593,10 @@ mkUpdate nav model = case _ of
     else if currentAccountId model == Just accountId then noMessages $ model { errorMessage = Just msg, savePending = false }
     else noMessages $ model { savePending = false }
 
+  -- mkUpdate が先に処理する
+  Admin _ -> noMessages model
+  SessionUnavailable -> noMessages model
+
 -- Helper: find metadata by nanoid
 findMetadata :: String -> Array MetadataResponse -> Maybe MetadataResponse
 findMetadata targetId = find (\(MetadataResponse r) -> r.nanoid == targetId)
@@ -578,7 +615,10 @@ checkSessionAff = do
     Right (SessionResponse r) ->
       if r.authenticated then SessionLoaded { username: r.username }
       else SessionFailed
-    Left _ -> SessionFailed
+    -- 401/403 だけが「セッションが無い」という答え。5xx・通信失敗・decode 失敗は答えが得られていない
+    Left (HttpError 401 _) -> SessionFailed
+    Left (HttpError 403 _) -> SessionFailed
+    Left _ -> SessionUnavailable
 
 fetchAccountsAff :: Aff (Maybe Message)
 fetchAccountsAff = do

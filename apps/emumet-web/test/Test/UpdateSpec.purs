@@ -1,5 +1,6 @@
 module Test.UpdateSpec where
 
+import App.Admin.Types (emptyAdminModel)
 import Prelude
 
 import App.Api.GraphQL.Types (AccountResponse(..))
@@ -39,6 +40,7 @@ base =
   , page: unsafeCoerce unit
   , isHydrated: true
   , session: Just { username: "u" }
+  , sessionVerified: false
   , loginForm: { identifier: "", password: "" }
   , accounts: Loaded []
   , selectedAccount: NotAsked
@@ -50,6 +52,7 @@ base =
   , errorMessage: Nothing
   , savePending: false
   , saveGeneration: 0
+  , admin: emptyAdminModel
   }
 
 -- | The create modal with a name and an available username, `submitting` when Create was confirmed.

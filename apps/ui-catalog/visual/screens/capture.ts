@@ -173,9 +173,125 @@ async function prepareScreen(page: Page, item: ScreenCase) {
       await expect(content).toContainText(MOCK_IDENTIFIER);
       await expect(content.locator("button[data-color-option]")).toHaveCount(2);
       await expect(content.locator("button[data-shape-option]")).toHaveCount(2);
+    } else if (item.id.startsWith("admin-")) {
+      expectedPath = await prepareAdminScreen(page, item);
     }
   }
   return expectedPath;
+}
+
+const ADMIN_GATE_STATUS: Record<string, string> = {
+  "admin-registration-not-opened": "NOT_OPENED",
+  "admin-registration-open": "OPEN",
+  "admin-registration-open-degraded": "OPEN",
+  "admin-registration-suspended": "TEMPORARILY_SUSPENDED",
+  "admin-registration-auto-stopped": "AUTO_STOPPED",
+  "admin-registration-auto-stopped-recovered": "AUTO_STOPPED",
+  "admin-registration-admin-stopped": "ADMIN_STOPPED",
+  "admin-registration-override": "OVERRIDE",
+  "admin-registration-override-ready": "OVERRIDE",
+  "admin-registration-enforcement-lost": "AUTO_STOPPED",
+  "admin-override-confirm": "NOT_OPENED",
+  "admin-revoke-confirm": "OVERRIDE",
+  "admin-notifications": "OPEN",
+  "admin-notifications-more": "OPEN",
+};
+
+/** Cases whose scenario keeps the override value, so the warning strip must be shown on every admin page. */
+const ADMIN_OVERRIDE_CASES = new Set([
+  "admin-registration-override",
+  "admin-registration-override-ready",
+  "admin-registration-enforcement-lost",
+  "admin-revoke-confirm",
+  "admin-webhook-failed",
+]);
+
+/**
+ * Registration gate admin screens. main (the baseline) has no admin routes and renders its 404 page for these
+ * paths, so the admin assertions only run when the branch build serves the admin page. The checks also prove
+ * the SSR + hydration path left one intact DOM and that the override warning survives reload and navigation
+ * while it never appears on general pages.
+ */
+async function prepareAdminScreen(page: Page, item: ScreenCase): Promise<string> {
+  const content = page.locator("#content");
+  const adminPage = content.getByTestId("admin-page");
+  const notFound = content.locator("h1 + p");
+  await expect(adminPage.or(notFound).first()).toBeVisible();
+  if (item.id === "admin-not-found-for-member" || (await adminPage.count()) === 0) {
+    await expect(notFound).toBeVisible();
+    await expect(page.locator("#notification-bell")).toHaveCount(0);
+    await expect(page.locator('main#app > nav a[href^="/admin/"]')).toHaveCount(0);
+    return item.path;
+  }
+  const strip = page.getByTestId("override-strip");
+  const expectStrip = async () => {
+    await expect(strip).toHaveCount(ADMIN_OVERRIDE_CASES.has(item.id) ? 1 : 0);
+  };
+  const registrationReady = async () => {
+    const gate = content.getByTestId("registration-gate");
+    await expect(gate).toHaveCount(1);
+    await expect(gate).toHaveAttribute("data-status", ADMIN_GATE_STATUS[item.id] ?? "");
+    await expect(content.locator('[data-testid^="protection-"]')).toHaveCount(2);
+  };
+  const webhookReady = async () => {
+    await expect(content.getByTestId("webhook-destinations")).toHaveCount(1);
+    await expect(content.getByTestId("webhook-failed")).toHaveCount(item.id === "admin-webhook-failed" ? 1 : 0);
+  };
+  await expect(page.locator("main#app")).toHaveCount(1);
+  await expect(page.locator("main#app > nav")).toHaveCount(1);
+  await expect(content.locator("h1")).toHaveCount(1);
+  await expect(page.locator("#notification-bell")).toHaveCount(1);
+  if (item.path === "/admin/webhook") await webhookReady();
+  else await registrationReady();
+  await expectStrip();
+
+  if (item.id === "admin-registration-override") {
+    // The warning is part of the SSR HTML itself (not only added after the client fetch).
+    const ssr = await page.context().request.get(page.url());
+    expect(await ssr.text()).toContain('data-testid="override-strip"');
+    // Reload: SSR + resume again, the warning comes back with the state.
+    await page.reload({ waitUntil: "networkidle" });
+    await registrationReady();
+    await expectStrip();
+    // General pages never show the warning; returning to the admin page shows it again.
+    await page.locator('main#app > nav a[href="/"]').click();
+    await expect(page.locator('main a[href="/accounts/acc_01"]')).toBeVisible();
+    await expect(strip).toHaveCount(0);
+    await page.locator('main#app > nav a[href="/admin/registration"]').click();
+    await registrationReady();
+    await expectStrip();
+  } else if (item.id === "admin-webhook-failed") {
+    // Navigating between admin tabs keeps the warning.
+    await content.locator('a[href="/admin/registration"]').click();
+    await expect(content.getByTestId("registration-gate")).toHaveCount(1);
+    await expectStrip();
+    await content.locator('a[href="/admin/webhook"]').click();
+    await webhookReady();
+    await expectStrip();
+  } else if (item.id === "admin-override-confirm") {
+    await content.getByTestId("gate-override").click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.locator("#override-ack")).not.toBeChecked();
+    await expect(page.getByTestId("override-confirm")).toBeDisabled();
+  } else if (item.id === "admin-revoke-confirm") {
+    await strip.getByTestId("override-strip-revoke").click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.getByTestId("revoke-confirm")).toBeEnabled();
+  } else if (item.id === "admin-notifications") {
+    await page.locator("#notification-bell").click();
+    const panel = page.getByTestId("notification-panel");
+    await expect(panel).toBeVisible();
+    await expect(panel.locator("button")).toHaveCount(7);
+  } else if (item.id === "admin-notifications-more") {
+    // Notifications beyond the first page (50) are reachable; the load-more control disappears on the last page.
+    await page.locator("#notification-bell").click();
+    const panel = page.getByTestId("notification-panel");
+    await expect(panel.locator("button")).toHaveCount(52);
+    await panel.getByTestId("notifications-more").click();
+    await expect(panel.locator("button")).toHaveCount(63);
+    await expect(panel.getByTestId("notifications-more")).toHaveCount(0);
+  }
+  return item.path;
 }
 
 /**
@@ -329,6 +445,13 @@ async function captureScreen(browser: Browser, server: AppServer, item: ScreenCa
     // ShuttlePub has no sessions: its client sends its first /graphql request on resume.
     const resumeProof = item.app === "ShuttlePub" ? `${server.url}/graphql` : `${server.url}/auth/session`;
     const sessionResponse = page.waitForResponse(resumeProof);
+    if (item.app === "Emumet") {
+      // The built-in Emumet mock is shared by all cases: select this case's registration gate state (or reset it)
+      // before SSR. main has no such endpoint and answers with its SSR page, which leaves its mock untouched.
+      const scenario = "scenario" in item ? item.scenario : "default";
+      const selected = await context.request.post(`${server.url}/__mock/registration-gate/scenario`, { data: { name: scenario } });
+      expect(selected.status(), `${item.filename}: mock scenario ${scenario}`).toBeLessThan(300);
+    }
     const documentResponse = await page.goto(item.path, { waitUntil: "networkidle" });
     expect(documentResponse?.status(), `${item.filename}: SSR`).toBe(200);
     expect((await sessionResponse).status()).toBe(item.app === "ShuttlePub" || item.authenticated ? 200 : 401);

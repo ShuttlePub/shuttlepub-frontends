@@ -1,5 +1,6 @@
 module App.Fixtures where
 
+import App.Admin.Types (emptyAdminModel)
 import Prelude
 
 import App.Api.GraphQL.Types (AccountResponse(..), MetadataResponse(..), ProfileResponse(..))
@@ -77,6 +78,7 @@ start route =
   , page: pageForMaybeRoute (Just route)
   , isHydrated: false
   , session: Just { username: "visual-review@example.com" }
+  , sessionVerified: false
   , loginForm: { identifier: "", password: "" }
   , accounts: Loaded [ alice, bob, newsBot ]
   , selectedAccount: NotAsked
@@ -88,6 +90,7 @@ start route =
   , errorMessage: Nothing
   , savePending: false
   , saveGeneration: 0
+  , admin: emptyAdminModel
   }
 
 field :: String -> Verdict -> UsernameField

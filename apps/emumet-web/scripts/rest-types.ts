@@ -4,8 +4,8 @@ import { OPENAPI_DIR, SCHEMA_FILE, verifyLock } from "../bff/openapi/lock.ts";
 
 export const REST_TYPES_RELATIVE_PATH = "bff/emumet/generated/emumet-api.ts";
 
-/** The Emumet OpenAPI tag whose operations this app consumes (registration-gate-admin-ui). */
-export const CONSUMED_TAGS = ["RegistrationGate"] as const;
+/** The Emumet OpenAPI tags whose operations this app consumes (registration-gate-admin-ui: gate, protection readiness, webhook status, caller roles). */
+export const CONSUMED_TAGS = ["RegistrationGate", "RegistrationProtection", "RegistrationGateWebhook", "Me"] as const;
 
 type Json = Record<string, unknown>;
 

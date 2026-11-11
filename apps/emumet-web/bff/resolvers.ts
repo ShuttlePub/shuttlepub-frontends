@@ -60,6 +60,8 @@ export const resolvers = {
       withEmumetErrors(() => context.makeLoaders().metadata.load(parent.id)),
   },
   Profile: profileIdentityResolvers.Profile,
+  RegistrationGate: registrationGateResolvers.RegistrationGate,
+  Viewer: registrationGateResolvers.Viewer,
   Mutation: {
     ...registrationGateResolvers.Mutation,
     ...profileIdentityResolvers.Mutation,

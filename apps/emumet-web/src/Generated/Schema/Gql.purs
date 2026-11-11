@@ -5,15 +5,22 @@ import Data.Maybe as Data.Maybe
 import Data.Newtype as Data.Newtype
 import Data.Void as Data.Void
 import Generated.Directives.Gql (Directives)
+import Generated.Schema.Gql.Enum.InstanceRole (InstanceRole)
 import Generated.Schema.Gql.Enum.ModerationType (ModerationType)
 import Generated.Schema.Gql.Enum.ProfileUsernameCheck (ProfileUsernameCheck)
 import Generated.Schema.Gql.Enum.ProfileUsernameState (ProfileUsernameState)
 import Generated.Schema.Gql.Enum.RegistrationAdminState (RegistrationAdminState)
 import Generated.Schema.Gql.Enum.RegistrationDecision (RegistrationDecision)
 import Generated.Schema.Gql.Enum.RegistrationGateEventKind (RegistrationGateEventKind)
+import Generated.Schema.Gql.Enum.RegistrationGateStatus (RegistrationGateStatus)
 import Generated.Schema.Gql.Enum.RegistrationHealthEpisode (RegistrationHealthEpisode)
 import Generated.Schema.Gql.Enum.RegistrationProbeStatus (RegistrationProbeStatus)
 import Generated.Schema.Gql.Enum.RegistrationProtection (RegistrationProtection)
+import Generated.Schema.Gql.Enum.RegistrationProtectionStatus (RegistrationProtectionStatus)
+import Generated.Schema.Gql.Enum.RegistrationProtectionVerifyDisposition (RegistrationProtectionVerifyDisposition)
+import Generated.Schema.Gql.Enum.RegistrationProtectionVerifyOutcome (RegistrationProtectionVerifyOutcome)
+import Generated.Schema.Gql.Enum.RegistrationWebhookConfiguration (RegistrationWebhookConfiguration)
+import Generated.Schema.Gql.Enum.RegistrationWebhookDeliveryStatus (RegistrationWebhookDeliveryStatus)
 import GraphQL.Client.Args (NotNull)
 import GraphQL.Client.AsGql (AsGql)
 import GraphQL.Client.ID as GraphQL.Client.ID
@@ -36,6 +43,10 @@ newtype Query = Query
   { accounts :: {} -> AsGql "AccountConnection" AccountConnection
   , registrationGate :: {} -> AsGql "RegistrationGate" RegistrationGate
   , registrationGateUnreadCount :: {} -> AsGql "Int" Int
+  , registrationProtections ::
+      {} -> Array (AsGql "RegistrationProtectionReadiness" RegistrationProtectionReadiness)
+  , registrationWebhook :: {} -> AsGql "RegistrationWebhookStatus" RegistrationWebhookStatus
+  , viewer :: {} -> AsGql "Viewer" Viewer
   , instanceHost ::
       {}
       ->
@@ -65,12 +76,6 @@ newtype RegistrationProtectionObservation = RegistrationProtectionObservation
   }
 
 derive instance Data.Newtype.Newtype RegistrationProtectionObservation _
-newtype RegistrationObservation = RegistrationObservation
-  { bot :: {} -> AsGql "RegistrationProtectionObservation" RegistrationProtectionObservation
-  , email :: {} -> AsGql "RegistrationProtectionObservation" RegistrationProtectionObservation
-  }
-
-derive instance Data.Newtype.Newtype RegistrationObservation _
 newtype RegistrationGateNotification = RegistrationGateNotification
   { createdAt :: {} -> AsGql "String" String
   , id :: {} -> AsGql "ID" GraphQL.Client.ID.ID
@@ -159,6 +164,29 @@ newtype RegistrationGateNotificationConnection = RegistrationGateNotificationCon
   }
 
 derive instance Data.Newtype.Newtype RegistrationGateNotificationConnection _
+newtype RegistrationProtectionVerification = RegistrationProtectionVerification
+  { disposition ::
+      {} -> AsGql "RegistrationProtectionVerifyDisposition" RegistrationProtectionVerifyDisposition
+  , outcome :: {} -> AsGql "RegistrationProtectionVerifyOutcome" RegistrationProtectionVerifyOutcome
+  , readiness :: {} -> AsGql "RegistrationProtectionReadiness" RegistrationProtectionReadiness
+  , reason :: {} -> AsGql "String" String
+  , recorded ::
+      {}
+      ->
+      -- | readiness へ記録したか
+      AsGql "Boolean" Boolean
+  }
+
+derive instance Data.Newtype.Newtype RegistrationProtectionVerification _
+newtype RegistrationWebhookCounts = RegistrationWebhookCounts
+  { delivered :: {} -> AsGql "Int" Int
+  , failed :: {} -> AsGql "Int" Int
+  , inFlight :: {} -> AsGql "Int" Int
+  , pending :: {} -> AsGql "Int" Int
+  , retrying :: {} -> AsGql "Int" Int
+  }
+
+derive instance Data.Newtype.Newtype RegistrationWebhookCounts _
 newtype Moderation = Moderation
   { bannedAt :: {} -> AsGql "DateTime" (Data.Maybe.Maybe (AsGql "DateTime" DateTime))
   , expiresAt :: {} -> AsGql "DateTime" (Data.Maybe.Maybe (AsGql "DateTime" DateTime))
@@ -168,6 +196,33 @@ newtype Moderation = Moderation
   }
 
 derive instance Data.Newtype.Newtype Moderation _
+newtype RegistrationObservation = RegistrationObservation
+  { bot :: {} -> AsGql "RegistrationProtectionObservation" RegistrationProtectionObservation
+  , email :: {} -> AsGql "RegistrationProtectionObservation" RegistrationProtectionObservation
+  , enforcementVerified ::
+      {}
+      ->
+      -- | E15d: 登録の保護 (Kratos hook) が現在の deployment で適用されている証明。false の間は開放・再開・override が PRECONDITION_FAILED
+      AsGql "Boolean" Boolean
+  }
+
+derive instance Data.Newtype.Newtype RegistrationObservation _
+newtype RegistrationWebhookTestResult = RegistrationWebhookTestResult
+  { attemptedAt :: {} -> AsGql "String" String
+  , httpStatus :: {} -> AsGql "Int" (Data.Maybe.Maybe (AsGql "Int" Int))
+  , delivered ::
+      {}
+      ->
+      -- | 受信側が 2xx を返したら true
+      AsGql "Boolean" Boolean
+  , result ::
+      {}
+      ->
+      -- | 結果の分類 (配送記録の lastResult と同じ語彙)
+      AsGql "String" String
+  }
+
+derive instance Data.Newtype.Newtype RegistrationWebhookTestResult _
 newtype RegistrationGate = RegistrationGate
   { accepting :: {} -> AsGql "Boolean" Boolean
   , adminState :: {} -> AsGql "RegistrationAdminState" RegistrationAdminState
@@ -177,10 +232,20 @@ newtype RegistrationGate = RegistrationGate
   , observation :: {} -> AsGql "RegistrationObservation" RegistrationObservation
   , override :: {} -> AsGql "RegistrationOverride" RegistrationOverride
   , updatedAt :: {} -> AsGql "String" String
+  , enforcementLostLatch ::
+      {}
+      ->
+      -- | E15d: 適用証明の喪失による停止ラッチ (override 中でも STOPPED。復旧後も手動再開が必要)
+      AsGql "Boolean" Boolean
   , requiresManualResume ::
       {}
       ->
       -- | decision が STOPPED のとき true。復旧しても自動再開しない
+      AsGql "Boolean" Boolean
+  , minimumMet ::
+      {}
+      ->
+      -- | 最低条件 (メール認証か BOT 保護の少なくとも一方が設定済みかつ応答あり) を満たすか。false なら開放・再開は PRECONDITION_FAILED
       AsGql "Boolean" Boolean
   , revision ::
       {}
@@ -192,6 +257,11 @@ newtype RegistrationGate = RegistrationGate
       ->
       -- | 登録時に課す対策 (検証 API が実際に応答した対策のみ)
       Array (AsGql "RegistrationProtection" RegistrationProtection)
+  , status ::
+      {}
+      ->
+      -- | 管理画面の状態チップ (BFF が decision・adminState・revision・override から導出。registration-gate-status.ts)
+      AsGql "RegistrationGateStatus" RegistrationGateStatus
   , degradedProtections ::
       {}
       ->
@@ -202,6 +272,11 @@ newtype RegistrationGate = RegistrationGate
 derive instance Data.Newtype.Newtype RegistrationGate _
 newtype Mutation = Mutation
   { markAllRegistrationGateNotificationsRead :: {} -> AsGql "Int" Int
+  , sendRegistrationWebhookTest ::
+      {}
+      ->
+      -- | テスト送信 (1 回のみ・記録しない)。未設定・設定不備なら WEBHOOK_NOT_CONFIGURED
+      AsGql "RegistrationWebhookTestResult" RegistrationWebhookTestResult
   , updateProfile ::
       { accountId :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
       , input :: NotNull (AsGql "UpdateProfileInput" UpdateProfileInput)
@@ -229,6 +304,11 @@ newtype Mutation = Mutation
       ->
       -- | 実 Emumet 接続時は未対応 (UNSUPPORTED): fields の項目 ID・revision が Emumet に無く安全に書けない (後続課題)
       AsGql "Metadata" Metadata
+  , retryRegistrationWebhook ::
+      { eventId :: AsGql "ID" GraphQL.Client.ID.ID }
+      ->
+      -- | eventId の failed 配送を再キューする (省略で failed 全件)。戻り値は再キュー件数。対象が無ければ NOT_FOUND
+      AsGql "Int" Int
   , markRegistrationGateNotificationsRead ::
       { eventIds :: NotNull (Array (NotNull (AsGql "ID" GraphQL.Client.ID.ID))) }
       ->
@@ -243,6 +323,11 @@ newtype Mutation = Mutation
       ->
       -- | username が未設定の Profile (profileId は nanoid) に一度だけ設定する。設定済みは USERNAME_ALREADY_SET
       AsGql "Profile" Profile
+  , verifyRegistrationProtection ::
+      { protection :: NotNull (AsGql "RegistrationProtection" RegistrationProtection) }
+      ->
+      -- | 入力なしの検証 (bot は secret の負の probe、email は canary mailbox への送信)。未知の保護は NOT_FOUND
+      AsGql "RegistrationProtectionVerification" RegistrationProtectionVerification
   , closeRegistrationGate ::
       { revision :: NotNull (AsGql "Int" Int) } -> AsGql "RegistrationGate" RegistrationGate
   , revokeRegistrationGateOverride ::
@@ -271,6 +356,56 @@ newtype Metadata = Metadata
   }
 
 derive instance Data.Newtype.Newtype Metadata _
+-- | Webhook の配送状態 (E15w)。endpoint と secret はサーバー設定のみで、宛先は host だけを返す
+newtype RegistrationWebhookStatus = RegistrationWebhookStatus
+  { configuration :: {} -> AsGql "RegistrationWebhookConfiguration" RegistrationWebhookConfiguration
+  , counts :: {} -> AsGql "RegistrationWebhookCounts" RegistrationWebhookCounts
+  , lastFailureAt :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , lastSuccessAt :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , issue ::
+      {}
+      ->
+      -- | MISCONFIGURED のときの不備の分類 (固定語彙)
+      AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , destinationHost ::
+      {}
+      ->
+      -- | 宛先の host 部分のみ (userinfo・port・path・query・secret は出さない)
+      AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , recentDeliveries ::
+      {}
+      ->
+      -- | 新しい順の直近の配送記録
+      Array (AsGql "RegistrationWebhookDelivery" RegistrationWebhookDelivery)
+  }
+
+derive instance Data.Newtype.Newtype RegistrationWebhookStatus _
+-- | Webhook の配送記録 (本文・宛先 URL・secret は含まない)
+newtype RegistrationWebhookDelivery = RegistrationWebhookDelivery
+  { attemptCount :: {} -> AsGql "Int" Int
+  , createdAt :: {} -> AsGql "String" String
+  , deliveredAt :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , eventType :: {} -> AsGql "RegistrationGateEventKind" RegistrationGateEventKind
+  , lastAttemptAt :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , status :: {} -> AsGql "RegistrationWebhookDeliveryStatus" RegistrationWebhookDeliveryStatus
+  , failureReason ::
+      {}
+      ->
+      -- | failed のときの理由 (permanent_error / retries_exhausted)
+      AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , lastResult ::
+      {}
+      ->
+      -- | 固定語彙の結果分類 (timeout / http_server_error など)
+      AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , eventId ::
+      {}
+      ->
+      -- | 通知イベント ID (再試行・再送で不変)
+      AsGql "ID" GraphQL.Client.ID.ID
+  }
+
+derive instance Data.Newtype.Newtype RegistrationWebhookDelivery _
 -- | override の状態。decision とは独立で、管理者閉鎖中でも active のまま保持される
 newtype RegistrationOverride = RegistrationOverride
   { activatedAt :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
@@ -279,6 +414,37 @@ newtype RegistrationOverride = RegistrationOverride
   }
 
 derive instance Data.Newtype.Newtype RegistrationOverride _
+-- | 保護 (メール認証・BOT 保護) の準備状態 (E15c)。secret・fingerprint・設定値は含まない
+newtype RegistrationProtectionReadiness = RegistrationProtectionReadiness
+  { checkedAt :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , protection :: {} -> AsGql "RegistrationProtection" RegistrationProtection
+  , status :: {} -> AsGql "RegistrationProtectionStatus" RegistrationProtectionStatus
+  , validUntil :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , enabled ::
+      {}
+      ->
+      -- | 設定が有効か (未設定・明示無効は false)
+      AsGql "Boolean" Boolean
+  , reason ::
+      {}
+      ->
+      -- | 評価の理由 (Emumet の固定語彙。例 invalid_secret / timeout)
+      AsGql "String" String
+  }
+
+derive instance Data.Newtype.Newtype RegistrationProtectionReadiness _
+-- | 呼び出し者 (GET /api/v1/me)。管理画面の導線を出すかのヒントで、権限判断の正本ではない (各管理 API が FORBIDDEN を返す)
+newtype Viewer = Viewer
+  { accountId :: {} -> AsGql "ID" GraphQL.Client.ID.ID
+  , instanceRoles :: {} -> Array (AsGql "InstanceRole" InstanceRole)
+  , isAdmin ::
+      {}
+      ->
+      -- | instanceRoles に ADMIN を含む
+      AsGql "Boolean" Boolean
+  }
+
+derive instance Data.Newtype.Newtype Viewer _
 newtype UpdateProfileInput = UpdateProfileInput
   { bannerUrl :: AsGql "String" String
   , displayName :: AsGql "String" String
