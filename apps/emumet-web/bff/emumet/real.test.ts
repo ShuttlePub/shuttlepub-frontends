@@ -9,7 +9,8 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { createRealEmumetClient } from "./real.ts";
-import { EmumetNotFoundError, type EmumetClient } from "./client.ts";
+import { EmumetApiError, EmumetNotFoundError, EmumetUnsupportedError, type EmumetClient } from "./client.ts";
+import { violationsForSchema } from "../openapi/contract.ts";
 import { jsonResponse, stubFetch, type FetchCall } from "../test-utils.ts";
 
 const BASE = "http://emumet.test";
@@ -24,9 +25,18 @@ const wireAccount1 = {
   id: "acc_01",
   name: "alice",
   is_bot: false,
-  public_key: "ed25519:AAAA",
   created_at: "2025-01-15T09:00:00Z",
   moderation: null,
+  profile_id: "prof_01",
+  profile_username: "alice",
+  display_name: "Alice",
+  summary: "hello",
+  icon_url: "https://icon.example.com/a",
+  banner_url: null,
+  fields: [
+    { label: "Website", content: "https://alice.example.com" },
+    { label: "Pronouns", content: "she/her" },
+  ],
 };
 const wireAccountSuspended = {
   ...wireAccount1,
@@ -38,16 +48,6 @@ const wireAccountBanned = {
   id: "acc_b",
   moderation: { type: "banned", reason: "tos", banned_at: "2025-06-02T00:00:00Z" },
 };
-const wireProfile1 = {
-  account_id: "acc_01",
-  nanoid: "prof_01",
-  display_name: "Alice",
-  summary: "hello",
-  icon_url: "https://icon.example.com/a",
-  banner_url: null,
-};
-const wireMeta1 = { account_id: "acc_01", nanoid: "meta_01", label: "Website", content: "https://alice.example.com" };
-
 function unexpected(call: FetchCall): never {
   throw new Error(`unexpected fetch: ${call.method} ${call.url}`);
 }
@@ -58,11 +58,11 @@ afterEach(() => {
 });
 
 describe("(f) REST contract — method/path/query/body/Authorization", () => {
-  test("listAccounts: GET /accounts with Bearer token, converts snake_case → camelCase incl. moderation", async () => {
+  test("listAccounts: GET /api/v1/accounts with Bearer token, converts snake_case → camelCase incl. moderation", async () => {
     // Given: 3 アカウント (moderation: null / suspended / banned)
     const { calls } = stubFetch((call) => {
       expect(call.method).toBe("GET");
-      expect(call.url).toBe(`${BASE}/accounts`);
+      expect(call.url).toBe(`${BASE}/api/v1/accounts`);
       return jsonResponse(200, { items: [wireAccount1, wireAccountSuspended, wireAccountBanned], first: "acc_01", last: "acc_b" });
     });
     // When
@@ -79,9 +79,11 @@ describe("(f) REST contract — method/path/query/body/Authorization", () => {
       id: "acc_01",
       name: "alice",
       isBot: false,
-      publicKey: "ed25519:AAAA",
+      publicKey: "",
       createdAt: "2025-01-15T09:00:00Z",
       moderation: null,
+      profileId: "prof_01",
+      profileUsername: "alice",
     });
     expect(result.items[1]?.moderation).toEqual({
       type: "SUSPENDED",
@@ -108,7 +110,7 @@ describe("(f) REST contract — method/path/query/body/Authorization", () => {
     expect(result).toEqual({ items: [], first: null, last: null });
   });
 
-  test("getAccount: GET /accounts?ids=<id> returns first item converted", async () => {
+  test("getAccount: GET /api/v1/accounts?ids=<id> returns first item converted", async () => {
     // Given
     const { calls } = stubFetch((call) => {
       expect(call.method).toBe("GET");
@@ -117,7 +119,7 @@ describe("(f) REST contract — method/path/query/body/Authorization", () => {
     // When
     const result = await makeClient().getAccount("acc_01");
     // Then: ids クエリで 1 件取得
-    expect(calls[0]?.url).toBe(`${BASE}/accounts?ids=acc_01`);
+    expect(calls[0]?.url).toBe(`${BASE}/api/v1/accounts?ids=acc_01`);
     expect(result?.id).toBe("acc_01");
     expect(result?.isBot).toBe(false);
   });
@@ -138,11 +140,11 @@ describe("(f) REST contract — method/path/query/body/Authorization", () => {
     expect(result).toBeNull();
   });
 
-  test("createAccount: POST /accounts with snake_case body, isBot omitted → is_bot false", async () => {
+  test("createAccount: POST /api/v1/accounts with snake_case body, isBot omitted → is_bot false", async () => {
     // Given
     const { calls } = stubFetch((call) => {
       expect(call.method).toBe("POST");
-      expect(call.url).toBe(`${BASE}/accounts`);
+      expect(call.url).toBe(`${BASE}/api/v1/accounts`);
       return jsonResponse(201, wireAccount1);
     });
     // When
@@ -161,16 +163,17 @@ describe("(f) REST contract — method/path/query/body/Authorization", () => {
     expect(JSON.parse(calls[0]?.body ?? "")).toEqual({ name: "bot", is_bot: true });
   });
 
-  test("listProfiles: GET /profiles?account_ids=a,b batch param, converts to camelCase", async () => {
+  test("listProfiles: GET /api/v1/accounts?ids=a,b — Profile は AccountResponse の profile_id・display_name・summary・icon_url・banner_url・profile_username から作る", async () => {
     // Given
     const { calls } = stubFetch((call) => {
       expect(call.method).toBe("GET");
-      return jsonResponse(200, [wireProfile1]);
+      return jsonResponse(200, { items: [wireAccount1], first: null, last: null });
     });
     // When
     const result = await makeClient().listProfiles(["acc_01", "acc_02"]);
-    // Then: バッチパラメータ (カンマ連結)
-    expect(calls[0]?.url).toBe(`${BASE}/profiles?account_ids=acc_01,acc_02`);
+    // Then: バッチパラメータ (カンマ連結)。旧 /profiles は呼ばない
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe(`${BASE}/api/v1/accounts?ids=acc_01,acc_02`);
     expect(result).toEqual([
       {
         nanoid: "prof_01",
@@ -179,176 +182,122 @@ describe("(f) REST contract — method/path/query/body/Authorization", () => {
         summary: "hello",
         iconUrl: "https://icon.example.com/a",
         bannerUrl: null,
+        username: "alice",
       },
     ]);
   });
 
-  test("listProfiles: empty ids → no fetch, empty result", async () => {
-    // Given
+  test("listProfiles: 404 \"No accounts found\" → []、empty ids → no fetch", async () => {
+    stubFetch(() => new Response("No accounts found", { status: 404 }));
+    expect(await makeClient().listProfiles(["acc_01"])).toEqual([]);
     const { calls } = stubFetch(unexpected);
-    // When
-    const result = await makeClient().listProfiles([]);
-    // Then: fetch 自体が呼ばれない
-    expect(result).toEqual([]);
+    expect(await makeClient().listProfiles([])).toEqual([]);
     expect(calls).toHaveLength(0);
   });
 
-  test("getProfile: returns first profile, null when absent", async () => {
-    // Given: 存在するケース
-    stubFetch(() => jsonResponse(200, [wireProfile1]));
-    // When / Then
+  test("getProfile: 先頭の Profile / 無ければ null", async () => {
+    stubFetch(() => jsonResponse(200, { items: [wireAccount1], first: null, last: null }));
     expect((await makeClient().getProfile("acc_01"))?.nanoid).toBe("prof_01");
-  });
-
-  test("getProfile: absent → null", async () => {
-    // Given / When
-    stubFetch(() => jsonResponse(200, []));
-    // Then
+    stubFetch(() => jsonResponse(200, { items: [], first: null, last: null }));
     expect(await makeClient().getProfile("nope")).toBeNull();
   });
 
-  test("listMetadata: GET /metadata?account_ids=a,b batch param", async () => {
-    // Given
-    const { calls } = stubFetch(() => jsonResponse(200, [wireMeta1]));
-    // When
-    const result = await makeClient().listMetadata(["acc_01", "acc_02"]);
-    // Then
-    expect(calls[0]?.method).toBe("GET");
-    expect(calls[0]?.url).toBe(`${BASE}/metadata?account_ids=acc_01,acc_02`);
-    expect(result).toEqual([{ nanoid: "meta_01", accountId: "acc_01", label: "Website", content: "https://alice.example.com" }]);
+  test("Profile の username は profile_username (未設定は null)。Account 名からは導出しない", async () => {
+    stubFetch(() => jsonResponse(200, { items: [{ ...wireAccount1, profile_username: null }], first: null, last: null }));
+    const profile = await makeClient().getProfile("acc_01");
+    expect(profile?.username).toBeNull();
+    expect(profile?.displayName).toBe("Alice");
   });
 
-  test("listMetadata: empty ids → no fetch, empty result", async () => {
-    // Given / When
+  test("listMetadata: GET /api/v1/accounts?ids=a,b — fields[index] を {nanoid: index, label, content} にする", async () => {
+    // Given
+    const { calls } = stubFetch(() => jsonResponse(200, { items: [wireAccount1, wireAccountSuspended], first: null, last: null }));
+    // When
+    const result = await makeClient().listMetadata(["acc_01", "acc_s"]);
+    // Then
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe(`${BASE}/api/v1/accounts?ids=acc_01,acc_s`);
+    expect(result).toEqual([
+      { nanoid: "0", accountId: "acc_01", label: "Website", content: "https://alice.example.com" },
+      { nanoid: "1", accountId: "acc_01", label: "Pronouns", content: "she/her" },
+      { nanoid: "0", accountId: "acc_s", label: "Website", content: "https://alice.example.com" },
+      { nanoid: "1", accountId: "acc_s", label: "Pronouns", content: "she/her" },
+    ]);
+  });
+
+  test("listMetadata: empty ids → no fetch、fields が空なら []", async () => {
     const { calls } = stubFetch(unexpected);
-    const result = await makeClient().listMetadata([]);
-    // Then
-    expect(result).toEqual([]);
+    expect(await makeClient().listMetadata([])).toEqual([]);
     expect(calls).toHaveLength(0);
-  });
-
-  test("createMetadata: POST /accounts/{id}/metadata with label/content body", async () => {
-    // Given
-    const { calls } = stubFetch((call) => {
-      expect(call.method).toBe("POST");
-      return jsonResponse(201, wireMeta1);
-    });
-    // When
-    const result = await makeClient().createMetadata("acc_01", { label: "Website", content: "https://alice.example.com" });
-    // Then
-    expect(calls[0]?.url).toBe(`${BASE}/accounts/acc_01/metadata`);
-    expect(JSON.parse(calls[0]?.body ?? "")).toEqual({ label: "Website", content: "https://alice.example.com" });
-    expect(result.nanoid).toBe("meta_01");
-    expect(result.accountId).toBe("acc_01");
-  });
-
-  test("deleteMetadata: DELETE 204 succeeds", async () => {
-    // Given
-    const { calls } = stubFetch(() => new Response(null, { status: 204 }));
-    // When / Then: throw しない
-    await makeClient().deleteMetadata("acc_01", "meta_01");
-    expect(calls[0]?.method).toBe("DELETE");
-    expect(calls[0]?.url).toBe(`${BASE}/accounts/acc_01/metadata/meta_01`);
-    expect(calls[0]?.headers.Authorization).toBe(`Bearer ${TOKEN}`);
-  });
-
-  test("deleteMetadata: 404 → EmumetNotFoundError", async () => {
-    // Given / When / Then
-    stubFetch(() => new Response("not found", { status: 404 }));
-    await expect(makeClient().deleteMetadata("acc_01", "meta_xx")).rejects.toBeInstanceOf(EmumetNotFoundError);
+    stubFetch(() => jsonResponse(200, { items: [{ ...wireAccount1, fields: [] }], first: null, last: null }));
+    expect(await makeClient().listMetadata(["acc_01"])).toEqual([]);
   });
 });
 
-describe("(c)(d) upsertProfile — Tristate 変換 + 204→再フェッチ", () => {
-  test("existing profile: GET → PUT 204 (tristate body) → GET refetch", async () => {
-    // Given: 既存 profile あり
-    const updatedWire = { ...wireProfile1, display_name: "Alicia", summary: null };
+// 書込みは PATCH /api/v1/accounts/{id} だけ。fields は配列ごと置換、Profile 属性は Tristate (省略=変更なし / null=クリア)
+describe("(c) upsertProfile — Tristate 変換 (PATCH)", () => {
+  test("PATCH /api/v1/accounts/{id}: 値はそのまま、null は JSON null、undefined は省略。戻り値は応答の Profile", async () => {
+    // Given
     const { calls } = stubFetch((call) => {
-      const url = new URL(call.url);
-      if (call.method === "GET" && url.pathname === "/profiles") {
-        // 1 回目 (存在確認) は旧値、2 回目 (再フェッチ) は更新後を返す
-        // (stub は handler 呼出前に calls へ push するため、自分を含め 2 件目以降が再フェッチ)
-        const isRefetch = calls.filter((c) => c.method === "GET").length > 1;
-        return jsonResponse(200, [isRefetch ? updatedWire : wireProfile1]);
-      }
-      if (call.method === "PUT") return new Response(null, { status: 204 });
-      return unexpected(call);
+      expect(call.method).toBe("PATCH");
+      return jsonResponse(200, { ...wireAccount1, display_name: "Alicia", summary: null });
     });
     // When: displayName=値, summary=null (クリア), iconUrl/bannerUrl=undefined (省略)
     const result = await makeClient().upsertProfile("acc_01", { displayName: "Alicia", summary: null });
-    // Then: 呼出順序は GET → PUT → GET (204 のあと再フェッチ)
-    expect(calls.map((c) => `${c.method} ${new URL(c.url).pathname}`)).toEqual([
-      "GET /profiles",
-      "PUT /accounts/acc_01/profile",
-      "GET /profiles",
-    ]);
-    // And: (c) Tristate — undefined の icon_url/banner_url は body に存在せず、summary は JSON null
-    const putBody = JSON.parse(calls[1]?.body ?? "") as Record<string, unknown>;
-    expect(putBody).toEqual({ display_name: "Alicia", summary: null });
-    expect(Object.keys(putBody).sort()).toEqual(["display_name", "summary"]);
-    expect("icon_url" in putBody).toBe(false);
-    expect("banner_url" in putBody).toBe(false);
-    // And: 戻り値は再フェッチ結果
+    // Then: 1 回の PATCH だけ (旧 GET → PUT/POST → GET は無い)
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.url).toBe(`${BASE}/api/v1/accounts/acc_01`);
+    expect(calls[0]?.headers["Content-Type"]).toBe("application/json");
+    const body = JSON.parse(calls[0]?.body ?? "") as Record<string, unknown>;
+    expect(body).toEqual({ display_name: "Alicia", summary: null });
+    expect("icon_url" in body).toBe(false);
+    expect("banner_url" in body).toBe(false);
+    expect(result.nanoid).toBe("prof_01");
     expect(result.displayName).toBe("Alicia");
     expect(result.summary).toBeNull();
   });
 
-  test("absent profile: GET → POST 201 → GET refetch", async () => {
-    // Given: profile 未存在
-    const createdWire = { ...wireProfile1, display_name: "New", summary: null, icon_url: null };
-    const { calls } = stubFetch((call) => {
-      const url = new URL(call.url);
-      if (call.method === "GET" && url.pathname === "/profiles") {
-        const isRefetch = calls.filter((c) => c.method === "GET").length > 1;
-        return jsonResponse(200, isRefetch ? [createdWire] : []);
-      }
-      if (call.method === "POST") return new Response(null, { status: 201 });
-      return unexpected(call);
-    });
-    // When
-    const result = await makeClient().upsertProfile("acc_01", { displayName: "New" });
-    // Then: 未存在時は POST が選ばれ、そのあと再フェッチ
-    expect(calls.map((c) => `${c.method} ${new URL(c.url).pathname}`)).toEqual([
-      "GET /profiles",
-      "POST /accounts/acc_01/profile",
-      "GET /profiles",
-    ]);
-    expect(JSON.parse(calls[1]?.body ?? "")).toEqual({ display_name: "New" });
-    expect(result.displayName).toBe("New");
+  test("icon_url / banner_url も同じ規則で送る。404 → EmumetNotFoundError、400 は EmumetApiError", async () => {
+    const { calls } = stubFetch(() => jsonResponse(200, wireAccount1));
+    await makeClient().upsertProfile("acc_01", { iconUrl: "https://i.example.com/x", bannerUrl: null });
+    expect(JSON.parse(calls[0]?.body ?? "")).toEqual({ icon_url: "https://i.example.com/x", banner_url: null });
+    stubFetch(() => new Response("", { status: 404 }));
+    await expect(makeClient().upsertProfile("nope", { summary: "x" })).rejects.toBeInstanceOf(EmumetNotFoundError);
+    stubFetch(() => new Response("bad", { status: 400 }));
+    await expect(makeClient().upsertProfile("acc_01", { summary: "x" })).rejects.toBeInstanceOf(EmumetApiError);
   });
 });
 
-describe("(d) updateMetadata — PUT 204 → listMetadata 再フェッチ", () => {
-  test("PUT 204 is followed by GET refetch, result is the matching nanoid", async () => {
-    // Given: 再フェッチ応答に対象 nanoid を含む
-    const updatedWire = { ...wireMeta1, content: "https://new.example.com" };
-    const { calls } = stubFetch((call) => {
-      const url = new URL(call.url);
-      if (call.method === "PUT") return new Response(null, { status: 204 });
-      if (call.method === "GET" && url.pathname === "/metadata") return jsonResponse(200, [updatedWire]);
-      return unexpected(call);
-    });
-    // When
-    const result = await makeClient().updateMetadata("acc_01", "meta_01", { label: "Website", content: "https://new.example.com" });
-    // Then: PUT → GET の順、PUT body は label/content
-    expect(calls.map((c) => `${c.method} ${new URL(c.url).pathname}`)).toEqual([
-      "PUT /accounts/acc_01/metadata/meta_01",
-      "GET /metadata",
-    ]);
-    expect(new URL(calls[1]?.url ?? "").search).toBe("?account_ids=acc_01");
-    expect(JSON.parse(calls[0]?.body ?? "")).toEqual({ label: "Website", content: "https://new.example.com" });
-    expect(result.content).toBe("https://new.example.com");
+describe("(d) Metadata の書込みはすべて未対応 (上流 PATCH に項目 ID・revision が無く、位置指定の配列置換は安全でない)", () => {
+  test("create / update / delete はどれも EmumetUnsupportedError で、上流へ一切リクエストしない (GET も PATCH も)", async () => {
+    const { calls } = stubFetch(unexpected);
+    const client = makeClient();
+    await expect(client.createMetadata("acc_01", { label: "Blog", content: "https://blog.example.com" })).rejects.toBeInstanceOf(EmumetUnsupportedError);
+    await expect(client.updateMetadata("acc_01", "0", { label: "Web", content: "w" })).rejects.toBeInstanceOf(EmumetUnsupportedError);
+    await expect(client.updateMetadata("acc_01", "meta_01", { label: "Web", content: "w" })).rejects.toBeInstanceOf(EmumetUnsupportedError);
+    await expect(client.deleteMetadata("acc_01", "0")).rejects.toBeInstanceOf(EmumetUnsupportedError);
+    expect(calls).toHaveLength(0);
   });
 
-  test("refetch missing the nanoid → EmumetNotFoundError", async () => {
-    // Given: 再フェッチ応答に対象 nanoid が無い
-    stubFetch((call) => {
-      if (call.method === "PUT") return new Response(null, { status: 204 });
-      return jsonResponse(200, [{ ...wireMeta1, nanoid: "meta_other" }]);
-    });
-    // When / Then
-    await expect(
-      makeClient().updateMetadata("acc_01", "meta_01", { label: "L", content: "C" }),
-    ).rejects.toBeInstanceOf(EmumetNotFoundError);
+  test("updateProfile (PATCH) は Profile 属性だけを送り、fields を含めない (Metadata を上書きしない)", async () => {
+    const { calls } = stubFetch(() => jsonResponse(200, wireAccount1));
+    await makeClient().upsertProfile("acc_01", { displayName: "A", summary: null, iconUrl: "https://i.example.com/x", bannerUrl: null });
+    expect(calls).toHaveLength(1);
+    const body = JSON.parse(calls[0]?.body ?? "") as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(["banner_url", "display_name", "icon_url", "summary"]);
+    expect("fields" in body).toBe(false);
+    const empty = stubFetch(() => jsonResponse(200, wireAccount1));
+    await makeClient().upsertProfile("acc_01", {});
+    expect(JSON.parse(empty.calls[0]?.body ?? "")).toEqual({});
+  });
+});
+
+describe("固定した OpenAPI 契約への適合 (fixture は AccountResponse を満たす)", () => {
+  test("AccountResponse fixture と AccountsResponse が契約に適合し、PATCH body は UpdateAccountRequest に適合する", () => {
+    expect(violationsForSchema("AccountResponse", wireAccount1)).toEqual([]);
+    expect(violationsForSchema("AccountResponse", wireAccountSuspended)).toEqual([]);
+    expect(violationsForSchema("AccountResponse", wireAccountBanned)).toEqual([]);
+    expect(violationsForSchema("AccountsResponse", { items: [wireAccount1], first: null, last: null })).toEqual([]);
+    expect(violationsForSchema("UpdateAccountRequest", { display_name: "A", summary: null, fields: [{ label: "L", content: "C" }] })).toEqual([]);
   });
 });

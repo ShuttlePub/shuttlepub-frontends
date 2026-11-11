@@ -13,9 +13,10 @@ import type {
   MetadataInput,
   ProfileFields,
 } from "./emumet/client.ts";
-import { EmumetNotFoundError } from "./emumet/client.ts";
+import { EmumetNotFoundError, EmumetUnsupportedError } from "./emumet/client.ts";
 import { requireEmumet, type GraphQLContext } from "./context.ts";
 import { registrationGateResolvers } from "./registration-gate-resolvers.ts";
+import { classifyCreateAccountError, profileIdentityResolvers } from "./profile-identity-resolvers.ts";
 
 export { requireEmumet };
 
@@ -23,6 +24,10 @@ function toGraphQLError(error: unknown): GraphQLError {
   if (error instanceof GraphQLError) return error;
   if (error instanceof EmumetNotFoundError) {
     return new GraphQLError(error.message, { extensions: { code: "NOT_FOUND" }, originalError: error });
+  }
+  if (error instanceof EmumetUnsupportedError) {
+    // originalError を付けない: Yoga が INTERNAL_SERVER_ERROR にマスクして区別が消えるため
+    return new GraphQLError("This operation is not supported yet", { extensions: { code: "UNSUPPORTED" } });
   }
   return new GraphQLError("Internal server error", {
     extensions: { code: "INTERNAL_SERVER_ERROR" },
@@ -42,6 +47,7 @@ async function withEmumetErrors<T>(call: () => Promise<T>): Promise<T> {
 export const resolvers = {
   Query: {
     ...registrationGateResolvers.Query,
+    ...profileIdentityResolvers.Query,
     accounts: (_parent: unknown, _args: unknown, context: GraphQLContext) =>
       withEmumetErrors(() => requireEmumet(context).listAccounts()),
     account: (_parent: unknown, args: { id: string }, context: GraphQLContext) =>
@@ -53,10 +59,20 @@ export const resolvers = {
     metadata: (parent: Account, _args: unknown, context: GraphQLContext) =>
       withEmumetErrors(() => context.makeLoaders().metadata.load(parent.id)),
   },
+  Profile: profileIdentityResolvers.Profile,
   Mutation: {
     ...registrationGateResolvers.Mutation,
-    createAccount: (_parent: unknown, args: { input: CreateAccountInput }, context: GraphQLContext) =>
-      withEmumetErrors(() => requireEmumet(context).createAccount(args.input)),
+    ...profileIdentityResolvers.Mutation,
+    createAccount: async (_parent: unknown, args: { input: CreateAccountInput }, context: GraphQLContext) => {
+      // GraphQL の省略 (undefined) と null は同じ「送らない」。username を送った作成だけ、上流の拒否を username の種別で返す
+      const { username, ...rest } = args.input as Omit<CreateAccountInput, "username"> & { username?: string | null };
+      const input: CreateAccountInput = username == null ? rest : { ...rest, username };
+      try {
+        return await requireEmumet(context).createAccount(input);
+      } catch (error) {
+        throw classifyCreateAccountError(input, error) ?? toGraphQLError(error);
+      }
+    },
     updateProfile: (
       _parent: unknown,
       args: { accountId: string; input: ProfileFields },

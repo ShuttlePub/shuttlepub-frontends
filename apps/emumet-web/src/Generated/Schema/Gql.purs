@@ -6,6 +6,8 @@ import Data.Newtype as Data.Newtype
 import Data.Void as Data.Void
 import Generated.Directives.Gql (Directives)
 import Generated.Schema.Gql.Enum.ModerationType (ModerationType)
+import Generated.Schema.Gql.Enum.ProfileUsernameCheck (ProfileUsernameCheck)
+import Generated.Schema.Gql.Enum.ProfileUsernameState (ProfileUsernameState)
 import Generated.Schema.Gql.Enum.RegistrationAdminState (RegistrationAdminState)
 import Generated.Schema.Gql.Enum.RegistrationDecision (RegistrationDecision)
 import Generated.Schema.Gql.Enum.RegistrationGateEventKind (RegistrationGateEventKind)
@@ -42,6 +44,11 @@ newtype Query = Query
       ->
       -- | limit は 1〜100 (既定 50)、before は前ページ最後の通知 ID
       AsGql "RegistrationGateNotificationConnection" RegistrationGateNotificationConnection
+  , checkProfileUsername ::
+      { username :: NotNull (AsGql "String" String) }
+      ->
+      -- | 入力中の検証用。Emumet は呼ばず規則 (形式・予約語) だけを判定する
+      AsGql "ProfileUsernameCheck" ProfileUsernameCheck
   }
 
 derive instance Data.Newtype.Newtype Query _
@@ -85,7 +92,21 @@ newtype Account = Account
   , moderation :: {} -> AsGql "Moderation" (Data.Maybe.Maybe (AsGql "Moderation" Moderation))
   , name :: {} -> AsGql "String" String
   , profile :: {} -> AsGql "Profile" (Data.Maybe.Maybe (AsGql "Profile" Profile))
-  , publicKey :: {} -> AsGql "String" String
+  , publicKey ::
+      {}
+      ->
+      -- | Emumet は Account 単位の鍵を返さない (Profile モデル移行で廃止)。実 Emumet 接続時は値を持たず常に空文字。画面側の非表示・nullable 化は画面 PR
+      AsGql "String" String
+  , profileUsername ::
+      {}
+      ->
+      -- | profileId の Profile の username。profileId があるのに null なら未設定 (一回限り設定できる)。Account 名から導出しない
+      AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , profileId ::
+      {}
+      ->
+      -- | この Account を記述する Profile の nanoid (組織 Account は最小 id の Profile)。Profile を持たない場合は null
+      AsGql "ID" (Data.Maybe.Maybe (AsGql "ID" GraphQL.Client.ID.ID))
   }
 
 derive instance Data.Newtype.Newtype Account _
@@ -103,17 +124,19 @@ newtype Profile = Profile
   , iconUrl :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
   , nanoid :: {} -> AsGql "ID" GraphQL.Client.ID.ID
   , summary :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , username ::
+      {}
+      ->
+      -- | acct の名前部分。一度だけ設定でき、変更できない。未設定 (既存 Profile) は null。Account 名や所有者 (移管先) から導出しない
+      AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , usernameState ::
+      {}
+      ->
+      -- | username の状態。UNSET なら setProfileUsername で一回限り設定できる。SET は変更不可
+      AsGql "ProfileUsernameState" ProfileUsernameState
   }
 
 derive instance Data.Newtype.Newtype Profile _
-newtype Metadata = Metadata
-  { accountId :: {} -> AsGql "ID" GraphQL.Client.ID.ID
-  , content :: {} -> AsGql "String" String
-  , label :: {} -> AsGql "String" String
-  , nanoid :: {} -> AsGql "ID" GraphQL.Client.ID.ID
-  }
-
-derive instance Data.Newtype.Newtype Metadata _
 newtype RegistrationGateNotificationConnection = RegistrationGateNotificationConnection
   { notifications :: {} -> Array (AsGql "RegistrationGateNotification" RegistrationGateNotification)
   , unreadCount ::
@@ -181,18 +204,24 @@ newtype Mutation = Mutation
       { accountId :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
       , input :: NotNull (AsGql "UpsertMetadataInput" UpsertMetadataInput)
       }
-      -> AsGql "Metadata" Metadata
+      ->
+      -- | 実 Emumet 接続時は未対応 (UNSUPPORTED): fields の項目 ID・revision が Emumet に無く安全に書けない (後続課題)
+      AsGql "Metadata" Metadata
   , deleteMetadata ::
       { accountId :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
       , nanoid :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
       }
-      -> AsGql "Boolean" Boolean
+      ->
+      -- | 実 Emumet 接続時は未対応 (UNSUPPORTED): fields の項目 ID・revision が Emumet に無く安全に書けない (後続課題)
+      AsGql "Boolean" Boolean
   , updateMetadata ::
       { accountId :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
       , input :: NotNull (AsGql "UpsertMetadataInput" UpsertMetadataInput)
       , nanoid :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
       }
-      -> AsGql "Metadata" Metadata
+      ->
+      -- | 実 Emumet 接続時は未対応 (UNSUPPORTED): fields の項目 ID・revision が Emumet に無く安全に書けない (後続課題)
+      AsGql "Metadata" Metadata
   , markRegistrationGateNotificationsRead ::
       { eventIds :: NotNull (Array (NotNull (AsGql "ID" GraphQL.Client.ID.ID))) }
       ->
@@ -200,6 +229,13 @@ newtype Mutation = Mutation
       AsGql "Int" Int
   , createAccount ::
       { input :: NotNull (AsGql "CreateAccountInput" CreateAccountInput) } -> AsGql "Account" Account
+  , setProfileUsername ::
+      { profileId :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
+      , username :: NotNull (AsGql "String" String)
+      }
+      ->
+      -- | username が未設定の Profile (profileId は nanoid) に一度だけ設定する。設定済みは USERNAME_ALREADY_SET
+      AsGql "Profile" Profile
   , closeRegistrationGate ::
       { revision :: NotNull (AsGql "Int" Int) } -> AsGql "RegistrationGate" RegistrationGate
   , revokeRegistrationGateOverride ::
@@ -219,6 +255,15 @@ newtype Mutation = Mutation
   }
 
 derive instance Data.Newtype.Newtype Mutation _
+-- | Account の fields の 1 件。nanoid は fields 内の位置 (0 始まりの index)。削除すると後続の位置が繰り上がる
+newtype Metadata = Metadata
+  { accountId :: {} -> AsGql "ID" GraphQL.Client.ID.ID
+  , content :: {} -> AsGql "String" String
+  , label :: {} -> AsGql "String" String
+  , nanoid :: {} -> AsGql "ID" GraphQL.Client.ID.ID
+  }
+
+derive instance Data.Newtype.Newtype Metadata _
 -- | override の状態。decision とは独立で、管理者閉鎖中でも active のまま保持される
 newtype RegistrationOverride = RegistrationOverride
   { activatedAt :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
@@ -240,6 +285,11 @@ newtype UpsertMetadataInput = UpsertMetadataInput
 
 derive instance Data.Newtype.Newtype UpsertMetadataInput _
 newtype CreateAccountInput = CreateAccountInput
-  { isBot :: AsGql "Boolean" Boolean, name :: NotNull (AsGql "String" String) }
+  { isBot :: AsGql "Boolean" Boolean
+  , name :: NotNull (AsGql "String" String)
+  , username ::
+      -- | Profile の username (Account 名とは別入力)。新 UI は必ず送る。省略は旧経路との互換のための暂定 (画面実装 PR で String! にする)
+      AsGql "String" String
+  }
 
 derive instance Data.Newtype.Newtype CreateAccountInput _

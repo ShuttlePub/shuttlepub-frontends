@@ -302,6 +302,89 @@
         }
       }
     },
+    "/ap/profiles/{profile_nanoid}": {
+      "get": {
+        "tags": [
+          "ProfileActor"
+        ],
+        "description": "Profile ActivityPub actor document (1 Profile = 1 actor, ADR 0002). Actor id: {PUBLIC_BASE_URL}/ap/profiles/{profile_nanoid}; inbox/outbox/followers/following are that URL plus /inbox, /outbox, /followers, /following; the key id is that URL plus #main-key; preferredUsername is the Profile username. A Profile is only an actor once it has a username and a Profile signing key (404 otherwise). NOT MOUNTED on the production router: the production mount is owned by the P4 cutover; P1 only provides the generation logic.",
+        "operationId": "get_profile_actor",
+        "parameters": [
+          {
+            "name": "profile_nanoid",
+            "in": "path",
+            "description": "Profile nanoid (external ID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "ActivityPub actor document",
+            "content": {
+              "application/activity+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Actor"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Profile not found, or it has no username / signing key yet"
+          }
+        }
+      }
+    },
+    "/ap/profiles/{profile_nanoid}/inbox": {
+      "post": {
+        "tags": [
+          "ProfileActor"
+        ],
+        "description": "ActivityPub inbox of one Profile actor. NOT MOUNTED on the production router (the production mount is owned by the P4 cutover). Requires a valid HTTP Signature whose key owner is `activity.actor`. Received activity table: Follow (object = this Profile; stored as an accepted generation and an Accept delivery job is reserved in the same transaction; when the Profile blocks the signer the Follow is refused instead: an ended generation is stored and a Reject(Follow) delivery job is reserved), Accept / Reject (object = a Follow this Profile sent, matched by the original Follow activity ID and by both parties), Undo (object = a Follow of the signer; an Undo that overtakes its Follow is remembered so the late Follow creates nothing). Every other activity (post activities such as Create / Like / EmojiReact / Announce, Block, Undo of a non-Follow, ...) is acknowledged with 202 and changes nothing: post authorization belongs to ShuttlePub and domain policy to D8G. Stale (ended generation), foreign (other Profile / other actor), unknown-Follow and duplicate activities are acknowledged with 202 without changing any relation.",
+        "operationId": "post_profile_inbox",
+        "parameters": [
+          {
+            "name": "profile_nanoid",
+            "in": "path",
+            "description": "Profile nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/activity+json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Activity applied, duplicate, or ignored without effect"
+          },
+          "400": {
+            "description": "Malformed ActivityPub activity"
+          },
+          "401": {
+            "description": "Missing or invalid HTTP Signature, or the signing actor is not activity.actor"
+          },
+          "404": {
+            "description": "Profile not found or not an actor"
+          },
+          "408": {
+            "description": "The follower actor could not be resolved (retryable)"
+          },
+          "422": {
+            "description": "Activity violates the Profile inbox rules (wrong target Profile, malformed reference)"
+          }
+        }
+      }
+    },
     "/api/v1/accounts": {
       "get": {
         "tags": [
@@ -377,7 +460,7 @@
         "tags": [
           "Account"
         ],
-        "description": "Create a new account with a generated signing key pair.",
+        "description": "Create a new account with a generated signing key pair. `profile_username` is optional: a valid value is stored on the created Profile (unique across all Profiles including deleted ones, immutable afterwards); omit it to keep the legacy behaviour.",
         "operationId": "create_account",
         "requestBody": {
           "content": {
@@ -401,7 +484,10 @@
             }
           },
           "400": {
-            "description": "Invalid request"
+            "description": "Invalid request (including a malformed or reserved profile_username)"
+          },
+          "409": {
+            "description": "profile_username is already taken; nothing was created"
           }
         },
         "security": [
@@ -1412,7 +1498,7 @@
         "tags": [
           "RegistrationGate"
         ],
-        "description": "Get the registration gate state. `override.active` is true while the override is in effect so the admin UI can keep showing the warning on every page. NOTE: E15a is the control plane only. Until the Kratos enforcement unit (E15d) is connected, opening, closing or overriding the gate does NOT block or allow real Kratos registrations; real registration is not protected yet.",
+        "description": "Get the registration gate state. `override.active` is true while the override is in effect so the admin UI can keep showing the warning on every page. The authenticated Kratos pre-persist hook enforces this decision on self-service registration. Enforcement attestation loss stops registration ahead of override and requires manual resume after restoration.",
         "operationId": "get_registration_gate",
         "responses": {
           "200": {
@@ -1444,7 +1530,7 @@
         "tags": [
           "RegistrationGate"
         ],
-        "description": "Manually close the registration gate. The closure is never lifted automatically. NOTE: E15a is the control plane only. Until the Kratos enforcement unit (E15d) is connected, opening, closing or overriding the gate does NOT block or allow real Kratos registrations; real registration is not protected yet.",
+        "description": "Manually close the registration gate. The closure is never lifted automatically. The authenticated Kratos pre-persist hook enforces this decision on self-service registration. Enforcement attestation loss stops registration ahead of override and requires manual resume after restoration.",
         "operationId": "close_registration_gate",
         "requestBody": {
           "content": {
@@ -1666,7 +1752,7 @@
         "tags": [
           "RegistrationGate"
         ],
-        "description": "Open (or manually resume after a config-loss stop) the registration gate. Succeeds only when at least one protection (email or bot) is verified; clears the stop latch. NOTE: E15a is the control plane only. Until the Kratos enforcement unit (E15d) is connected, opening, closing or overriding the gate does NOT block or allow real Kratos registrations; real registration is not protected yet.",
+        "description": "Open (or manually resume after a config-loss stop) the registration gate. Succeeds only when at least one protection (email or bot) is verified; clears the stop latch. The authenticated Kratos pre-persist hook enforces this decision on self-service registration. Enforcement attestation loss stops registration ahead of override and requires manual resume after restoration.",
         "operationId": "open_registration_gate",
         "requestBody": {
           "content": {
@@ -1717,7 +1803,7 @@
         "tags": [
           "RegistrationGate"
         ],
-        "description": "Open the registration gate with override: allowed even without a verified protection, but only after the warning is explicitly acknowledged. Stays in effect until explicitly revoked; automatic stop and outage rejection are not applied while it is active (verified protections are still enforced). NOTE: E15a is the control plane only. Until the Kratos enforcement unit (E15d) is connected, opening, closing or overriding the gate does NOT block or allow real Kratos registrations; real registration is not protected yet.",
+        "description": "Open the registration gate with override: allowed even without a verified protection, but only after the warning is explicitly acknowledged. Stays in effect until explicitly revoked; automatic stop and outage rejection are not applied while it is active (verified protections are still enforced). The authenticated Kratos pre-persist hook enforces this decision on self-service registration. Enforcement attestation loss stops registration ahead of override and requires manual resume after restoration.",
         "operationId": "enable_registration_gate_override",
         "requestBody": {
           "content": {
@@ -1768,7 +1854,7 @@
         "tags": [
           "RegistrationGate"
         ],
-        "description": "Revoke the override and return to normal judgement, re-evaluated against the current observation. Never closes the gate by itself. NOTE: E15a is the control plane only. Until the Kratos enforcement unit (E15d) is connected, opening, closing or overriding the gate does NOT block or allow real Kratos registrations; real registration is not protected yet.",
+        "description": "Revoke the override and return to normal judgement, re-evaluated against the current observation. Never closes the gate by itself. The authenticated Kratos pre-persist hook enforces this decision on self-service registration. Enforcement attestation loss stops registration ahead of override and requires manual resume after restoration.",
         "operationId": "revoke_registration_gate_override",
         "requestBody": {
           "content": {
@@ -1805,6 +1891,212 @@
           },
           "422": {
             "description": "Override is not active"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/registration-gate/protections": {
+      "get": {
+        "tags": [
+          "RegistrationProtection"
+        ],
+        "description": "Readiness of each registration protection (email via SMTP, bot via Turnstile), evaluated at the current time against the current configuration. `status` is `operational` only while a real verification business success bound to the current configuration `generation` is fresh (`valid_until`); health, HTTP 200 or an SMTP 250 alone never make a protection operational. `unverified` covers never verified, configuration changed, success expired and probe stopped. `configuration_invalid` covers unset/empty/disabled configuration, invalid secrets and SMTP auth/configuration failures; `temporarily_unavailable` covers 429/5xx/timeouts/connection failures/SMTP 4xx. Secrets, tokens, proofs and registrant emails never appear; `fingerprint` is a short non-reversible digest of the secret.",
+        "operationId": "list_registration_protections",
+        "responses": {
+          "200": {
+            "description": "Protection readiness",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtectionListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/registration-gate/protections/{protection}/verify": {
+      "post": {
+        "tags": [
+          "RegistrationProtection"
+        ],
+        "description": "Run one real verification now (bootstrap or re-verification) and record both the business result and the transport classification. bot: with `token` (a valid token issued by the widget for the configured site key) the real Siteverify business result decides (success must match the expected hostname/action and be fresh); without it only a negative probe runs (confirms the secret is accepted, never makes the protection operational). email: without `challenge_id`/`code` an SMTP connection/auth probe runs and a code is sent to the approved canary mailbox (REGISTRATION_EMAIL_CANARY_ADDRESS; `canary_not_configured` leaves the protection unverified); with `challenge_id` and `code` the canary roundtrip is confirmed, which is the business success. A canary confirmation never issues a registration proof. A user-attributable rejection (`attempt_rejected`, for example a wrong code or an invalid token) is reported but not recorded and does not change the gate observation. Recorded results update the registration gate observation through the E15a use case.",
+        "operationId": "verify_registration_protection",
+        "parameters": [
+          {
+            "name": "protection",
+            "in": "path",
+            "description": "`email` or `bot`",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyProtectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Verification result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyProtectionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "Unknown protection"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/registration-gate/webhook": {
+      "get": {
+        "tags": [
+          "RegistrationGateWebhook"
+        ],
+        "description": "Webhook delivery status: whether the external Webhook is configured (`not_configured` means it is disabled, which is not an error: nothing is delivered and the gate is unaffected), a misconfiguration classification, the destination host only (never userinfo, path, query or the signing secret), delivery counts, the last success/failure times and the most recent delivery records. Delivery guarantees: at-least-once (the same event can arrive more than once after a retry, a crash or an admin retry, so receivers must de-duplicate by the stable event ID), no ordering guarantee, signed with HMAC-SHA256 over timestamp and body. The endpoint and secret are server configuration only and cannot be changed through the API. Delivery runs outside the gate state transition: Webhook failures never change the gate and never create new notification events.",
+        "operationId": "get_registration_gate_webhook_status",
+        "responses": {
+          "200": {
+            "description": "Webhook status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookStatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/registration-gate/webhook/retry": {
+      "post": {
+        "tags": [
+          "RegistrationGateWebhook"
+        ],
+        "description": "Requeue failed deliveries so they are sent again with the same event ID (at-least-once: the receiver may see the event more than once). With `event_id`, only that failed delivery is requeued (404 if it is not currently failed); without it, every failed delivery is requeued. Failed deliveries are never retried automatically.",
+        "operationId": "retry_registration_gate_webhooks",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WebhookRetryRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Number of requeued deliveries",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookRetryResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "404": {
+            "description": "No failed delivery with that event ID"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/admin/registration-gate/webhook/test": {
+      "post": {
+        "tags": [
+          "RegistrationGateWebhook"
+        ],
+        "description": "Send one synthetic `webhook_test` event (event ID prefixed `test_`) to the configured endpoint through the same path as real deliveries (signature, destination check, timeout) and return the result. The test is a single attempt: it is not retried and no delivery record is stored. It never changes the gate state, the notification list or unread counts. Returns 409 when the Webhook is not configured or misconfigured (nothing is sent).",
+        "operationId": "send_registration_gate_webhook_test",
+        "responses": {
+          "200": {
+            "description": "Test sent; `delivered` tells whether the receiver answered 2xx",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookTestResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Permission denied"
+          },
+          "409": {
+            "description": "Webhook is not configured or misconfigured"
           }
         },
         "security": [
@@ -2498,6 +2790,7 @@
         "tags": [
           "Account"
         ],
+        "description": "Create an organization-owned Profile. `username` is optional: a valid value is stored on the created Profile (unique across all Profiles including deleted ones, immutable afterwards).",
         "operationId": "create_profile",
         "parameters": [
           {
@@ -2531,14 +2824,934 @@
               }
             }
           },
+          "400": {
+            "description": "Missing organization header or malformed/reserved username"
+          },
           "403": {
             "description": "Authenticated person is not an active organization member"
           },
           "404": {
             "description": "Organization not found"
           },
+          "409": {
+            "description": "username is already taken; nothing was created"
+          },
           "422": {
             "description": "Organization profile already exists"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/profiles/{profile_nanoid}": {
+      "get": {
+        "tags": [
+          "ProfilePolicy"
+        ],
+        "description": "Profile identity read. NOT MOUNTED in production (contract only); the skeleton answers 501. Authorization: only the Profile's current owner (the owning personal Account, or an active member of the owning organization via X-Organization-Id). `username` is null while the Profile has no username (legacy Profiles; username is set once in P1 and is immutable afterwards). There is deliberately no username update API.",
+        "operationId": "get_profile_identity",
+        "parameters": [
+          {
+            "name": "profile_nanoid",
+            "in": "path",
+            "description": "Profile nanoid (external ID)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Profile identity",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Caller is not the current owner of the Profile"
+          },
+          "404": {
+            "description": "Profile not found"
+          },
+          "501": {
+            "description": "Contract only: not implemented and not mounted on the production router"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/profiles/{profile_nanoid}/blocks": {
+      "get": {
+        "tags": [
+          "ProfilePolicy"
+        ],
+        "description": "Individual blocks owned by the Profile. NOT MOUNTED in production (contract only); the skeleton answers 501. Authorization: only the Profile's current owner.",
+        "operationId": "list_profile_blocks",
+        "parameters": [
+          {
+            "name": "profile_nanoid",
+            "in": "path",
+            "description": "Profile nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Pagination limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Pagination cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Block list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileRelationListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Caller is not the current owner of the Profile"
+          },
+          "404": {
+            "description": "Profile not found"
+          },
+          "501": {
+            "description": "Contract only: not implemented and not mounted on the production router"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "ProfilePolicy"
+        ],
+        "description": "Block one target (individual actor) as the Profile. NOT MOUNTED in production (contract only; block writes stay unmounted until D8R); the skeleton answers 501. Semantics: display suppression, detaches existing follow relations in both directions and rejects new follows/interactions in both directions. No ActivityPub Block is sent. Removing the block never restores detached relations. Authorization: only the Profile's current owner. Settings never propagate to other Profiles or Accounts.",
+        "operationId": "create_profile_block",
+        "parameters": [
+          {
+            "name": "profile_nanoid",
+            "in": "path",
+            "description": "Blocking Profile nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProfileRelationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Block recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileRelationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid target"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Caller is not the current owner of the Profile"
+          },
+          "404": {
+            "description": "Profile not found"
+          },
+          "409": {
+            "description": "Target is already blocked"
+          },
+          "501": {
+            "description": "Contract only: not implemented and not mounted on the production router"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/profiles/{profile_nanoid}/blocks/{block_id}": {
+      "delete": {
+        "tags": [
+          "ProfilePolicy"
+        ],
+        "description": "Remove an individual block. Detached follow relations are NOT restored and no restore list is kept. NOT MOUNTED in production (contract only); the skeleton answers 501. Authorization: only the Profile's current owner.",
+        "operationId": "delete_profile_block",
+        "parameters": [
+          {
+            "name": "profile_nanoid",
+            "in": "path",
+            "description": "Blocking Profile nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "block_id",
+            "in": "path",
+            "description": "Block setting nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Block removed"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Caller is not the current owner of the Profile"
+          },
+          "404": {
+            "description": "Profile or block not found"
+          },
+          "501": {
+            "description": "Contract only: not implemented and not mounted on the production router"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/profiles/{profile_nanoid}/domain-controls": {
+      "get": {
+        "tags": [
+          "ProfilePolicy"
+        ],
+        "description": "List the Profile's domain mute/block controls (ordered by domain). NOT MOUNTED in production (implemented by D8P; the route is mounted only in tests until P4/D8R). Domains match exactly (`example.com` does not cover `sub.example.com`). Controls are per Profile: they never apply to other Profiles of the same Account or to other Accounts, and are unrelated to server-wide HostModeration. Authorization: only the Profile's current owner (after a Profile transfer, the new owner; the controls stay attached to the Profile).",
+        "operationId": "list_domain_controls",
+        "parameters": [
+          {
+            "name": "profile_nanoid",
+            "in": "path",
+            "description": "Profile nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Domain controls",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainControlListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Caller is not the current owner of the Profile"
+          },
+          "404": {
+            "description": "Profile not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/profiles/{profile_nanoid}/domain-controls/{domain}": {
+      "get": {
+        "tags": [
+          "ProfilePolicy"
+        ],
+        "description": "Read the control for one exact domain. NOT MOUNTED in production (implemented by D8P; the route is mounted only in tests until P4/D8R). The `domain` is normalized before lookup (case, trailing dot, IDNA): `Example.COM.` and `example.com` address the same control. Authorization: only the Profile's current owner.",
+        "operationId": "get_domain_control",
+        "parameters": [
+          {
+            "name": "profile_nanoid",
+            "in": "path",
+            "description": "Profile nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "domain",
+            "in": "path",
+            "description": "Exact host name. Normalized: lowercase, one trailing dot removed, IDNA A-label (Punycode). No scheme, port, userinfo, path, wildcard or IP address (422).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Domain control",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainControlResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Caller is not the current owner of the Profile"
+          },
+          "404": {
+            "description": "Profile or domain control not found"
+          },
+          "422": {
+            "description": "Malformed domain"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "ProfilePolicy"
+        ],
+        "description": "Create or replace the mute/block control for one exact domain. NOT MOUNTED in production (implemented by D8P; the route is mounted only in tests until P4/D8R, block writes stay unmounted until D8R). Revision: `expected_revision` omitted creates (409 if the control already exists); `expected_revision` = current revision replaces (409 on mismatch, including a control deleted meanwhile). Every successful write increments the revision, which never repeats for a Profile x domain even across delete and re-create. Concurrent writers: exactly one succeeds, the others get 409. mute = display suppression only. block = display suppression, bidirectional follow detachment and rejection of new follows; no ActivityPub Block is sent and removing the block does not restore relations (D8P only stores the setting; applying it is D8G/D8R). Authorization: only the Profile's current owner.",
+        "operationId": "put_domain_control",
+        "parameters": [
+          {
+            "name": "profile_nanoid",
+            "in": "path",
+            "description": "Profile nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "domain",
+            "in": "path",
+            "description": "Exact host name. Normalized: lowercase, one trailing dot removed, IDNA A-label (Punycode). No scheme, port, userinfo, path, wildcard or IP address (422).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PutDomainControlRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Domain control created or replaced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainControlResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON body"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Caller is not the current owner of the Profile"
+          },
+          "404": {
+            "description": "Profile not found"
+          },
+          "409": {
+            "description": "Revision conflict (expected_revision does not match the current state)"
+          },
+          "422": {
+            "description": "Malformed domain, or request body is invalid (for example an unknown mode)"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "ProfilePolicy"
+        ],
+        "description": "Remove the control for one exact domain. Detached follow relations are NOT restored and no restore list is kept. NOT MOUNTED in production (implemented by D8P; the route is mounted only in tests until P4/D8R). `expected_revision` is required: 409 if it does not match the current revision. Authorization: only the Profile's current owner.",
+        "operationId": "delete_domain_control",
+        "parameters": [
+          {
+            "name": "profile_nanoid",
+            "in": "path",
+            "description": "Profile nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "domain",
+            "in": "path",
+            "description": "Exact host name. Normalized: lowercase, one trailing dot removed, IDNA A-label (Punycode). No scheme, port, userinfo, path, wildcard or IP address (422).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "expected_revision",
+            "in": "query",
+            "description": "Current revision of the control being removed (required).",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int64",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Domain control removed"
+          },
+          "400": {
+            "description": "Missing or invalid expected_revision"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Caller is not the current owner of the Profile"
+          },
+          "404": {
+            "description": "Profile or domain control not found"
+          },
+          "409": {
+            "description": "Revision conflict"
+          },
+          "422": {
+            "description": "Malformed domain"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/profiles/{profile_nanoid}/followers": {
+      "get": {
+        "tags": [
+          "ProfilePolicy"
+        ],
+        "description": "Actors following the Profile (pending and accepted follows); each follower is a local Profile or a remote actor identified by its canonical actor URL (`follower.kind`, `follower.actor_url`; `follower.profile_id` only for local). NOT MOUNTED in production (implemented by P3i; the route is mounted only in tests until P4). Oldest first; `cursor` is the opaque `next_cursor` of the previous page, `limit` defaults to 20 (1..=100). Authorization: only the Profile's current owner; other Profiles' and Accounts' relations are never returned.",
+        "operationId": "list_profile_followers",
+        "parameters": [
+          {
+            "name": "profile_nanoid",
+            "in": "path",
+            "description": "Profile nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Pagination limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Pagination cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Followers list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileFollowerListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Caller is not the current owner of the Profile"
+          },
+          "404": {
+            "description": "Profile not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/profiles/{profile_nanoid}/following": {
+      "get": {
+        "tags": [
+          "ProfilePolicy"
+        ],
+        "description": "Actors followed by the Profile (pending and accepted follows; ended generations are not listed). `target` is the canonical actor URL (the Profile actor URL for a local target). NOT MOUNTED in production (implemented by P3i; the route is mounted only in tests until P4). Oldest first; `cursor` is the opaque `next_cursor` of the previous page, `limit` defaults to 20 (1..=100). Authorization: only the Profile's current owner; other Profiles' and Accounts' relations are never returned.",
+        "operationId": "list_profile_following",
+        "parameters": [
+          {
+            "name": "profile_nanoid",
+            "in": "path",
+            "description": "Profile nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Pagination limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Pagination cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Following list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileFollowListResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid cursor"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Caller is not the current owner of the Profile"
+          },
+          "404": {
+            "description": "Profile not found"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/profiles/{profile_nanoid}/follows": {
+      "post": {
+        "tags": [
+          "ProfilePolicy"
+        ],
+        "description": "Follow a target as the Profile (the Profile, not the Account, is the follower). NOT MOUNTED in production (contract only); the skeleton answers 501. Authorization: only the Profile's current owner. A new follow is rejected (422) when the target or its domain is blocked by the Profile or blocks the Profile. Mute does not reject follows.",
+        "operationId": "create_profile_follow",
+        "parameters": [
+          {
+            "name": "profile_nanoid",
+            "in": "path",
+            "description": "Follower Profile nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProfileFollowRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Follow recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileFollowResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid target"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Caller is not the current owner of the Profile"
+          },
+          "404": {
+            "description": "Profile not found"
+          },
+          "409": {
+            "description": "Follow already exists"
+          },
+          "422": {
+            "description": "Follow refused by a block (individual or domain)"
+          },
+          "501": {
+            "description": "Contract only: not implemented and not mounted on the production router"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/profiles/{profile_nanoid}/follows/{follow_id}": {
+      "delete": {
+        "tags": [
+          "ProfilePolicy"
+        ],
+        "description": "Unfollow: remove a follow owned by the Profile. NOT MOUNTED in production (contract only); the skeleton answers 501. Authorization: only the Profile's current owner.",
+        "operationId": "delete_profile_follow",
+        "parameters": [
+          {
+            "name": "profile_nanoid",
+            "in": "path",
+            "description": "Follower Profile nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "follow_id",
+            "in": "path",
+            "description": "Follow relation nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Follow removed"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Caller is not the current owner of the Profile"
+          },
+          "404": {
+            "description": "Profile or follow not found"
+          },
+          "501": {
+            "description": "Contract only: not implemented and not mounted on the production router"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/profiles/{profile_nanoid}/mutes": {
+      "get": {
+        "tags": [
+          "ProfilePolicy"
+        ],
+        "description": "Individual mutes owned by the Profile. NOT MOUNTED in production (contract only); the skeleton answers 501. Authorization: only the Profile's current owner.",
+        "operationId": "list_profile_mutes",
+        "parameters": [
+          {
+            "name": "profile_nanoid",
+            "in": "path",
+            "description": "Profile nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Pagination limit",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Pagination cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Mute list",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileRelationListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Caller is not the current owner of the Profile"
+          },
+          "404": {
+            "description": "Profile not found"
+          },
+          "501": {
+            "description": "Contract only: not implemented and not mounted on the production router"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "ProfilePolicy"
+        ],
+        "description": "Mute one target (individual actor) as the Profile. NOT MOUNTED in production (contract only); the skeleton answers 501. Semantics: display suppression only; follow relations are kept and nothing is rejected. Authorization: only the Profile's current owner.",
+        "operationId": "create_profile_mute",
+        "parameters": [
+          {
+            "name": "profile_nanoid",
+            "in": "path",
+            "description": "Muting Profile nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateProfileRelationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Mute recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileRelationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid target"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Caller is not the current owner of the Profile"
+          },
+          "404": {
+            "description": "Profile not found"
+          },
+          "409": {
+            "description": "Target is already muted"
+          },
+          "501": {
+            "description": "Contract only: not implemented and not mounted on the production router"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/profiles/{profile_nanoid}/mutes/{mute_id}": {
+      "delete": {
+        "tags": [
+          "ProfilePolicy"
+        ],
+        "description": "Remove an individual mute. NOT MOUNTED in production (contract only); the skeleton answers 501. Authorization: only the Profile's current owner.",
+        "operationId": "delete_profile_mute",
+        "parameters": [
+          {
+            "name": "profile_nanoid",
+            "in": "path",
+            "description": "Muting Profile nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "mute_id",
+            "in": "path",
+            "description": "Mute setting nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Mute removed"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Caller is not the current owner of the Profile"
+          },
+          "404": {
+            "description": "Profile or mute not found"
+          },
+          "501": {
+            "description": "Contract only: not implemented and not mounted on the production router"
           }
         },
         "security": [
@@ -2607,6 +3820,168 @@
             "bearer_auth": []
           }
         ]
+      }
+    },
+    "/api/v1/profiles/{profile_nanoid}/username": {
+      "post": {
+        "tags": [
+          "Account"
+        ],
+        "description": "Set the username of a Profile that has none, exactly once. This is the only way to set a username after creation: there is no update API, a Profile that already has a username is refused with 409, and the username is unique across all Profiles (also deleted ones). Authorization: only the Profile's current owner (the owning personal Account, or an active member of the owning organization via X-Organization-Id). The username becomes the acct name of the Profile's future ActivityPub actor; the actor itself is not published before the P4 cutover.",
+        "operationId": "set_profile_username",
+        "parameters": [
+          {
+            "name": "profile_nanoid",
+            "in": "path",
+            "description": "Profile nanoid",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-Organization-Id",
+            "in": "header",
+            "description": "Organization account nanoid when the Profile is organization-owned",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetProfileUsernameRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Username set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed or reserved username"
+          },
+          "401": {
+            "description": "Missing or invalid bearer token"
+          },
+          "403": {
+            "description": "Caller is not the current owner of the Profile"
+          },
+          "404": {
+            "description": "Profile not found"
+          },
+          "409": {
+            "description": "The Profile already has a username, or the username is already taken"
+          },
+          "422": {
+            "description": "The owning Account is suspended or banned"
+          }
+        },
+        "security": [
+          {
+            "bearer_auth": []
+          }
+        ]
+      }
+    },
+    "/api/v1/registration/email-challenges": {
+      "post": {
+        "tags": [
+          "RegistrationProtection"
+        ],
+        "description": "Unauthenticated. Start a pre-registration email ownership challenge: a one-time code is sent to the address and bound to the normalized email, the real registration flow (flow_id) and the current configuration generation. Sending the mail is NOT proof of ownership; a proof is issued only after the code is confirmed (see `/confirm`). Abuse controls: the code is sent only while the registration gate accepts registrations and the email protection is operational (otherwise 503 and nothing is sent), per-email (1 per 60 s, 5 per hour), per-flow (3 per hour) and per-source (connection address, default 20 per hour) rate limits answer 429 with Retry-After. The response does not depend on whether the address exists, is registered or was rejected by the mail server (no user enumeration). The challenge expires after 10 minutes (never later than the flow) and allows 5 confirmation attempts. The flow is checked against Kratos (existence and its real expiry). A browser flow can only be checked with its Kratos CSRF cookie (`csrf_token_*`), so send this request with the browser credentials (cookies) for the Kratos domain; only those cookies are forwarded to Kratos. A flow whose expiry cannot be confirmed is rejected (400), never guessed.",
+        "operationId": "create_email_challenge",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateEmailChallengeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Challenge created (a code is sent to the address)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailChallengeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid email or flow"
+          },
+          "429": {
+            "description": "Rate limited (see Retry-After)"
+          },
+          "503": {
+            "description": "Email verification is unavailable; nothing was sent"
+          }
+        }
+      }
+    },
+    "/api/v1/registration/email-challenges/{challenge_id}/confirm": {
+      "post": {
+        "tags": [
+          "RegistrationProtection"
+        ],
+        "description": "Unauthenticated. Confirm the emailed code. Only a correct code issues an opaque `proof` (shown once), bound to the challenge's flow, email and configuration generation, valid for 15 minutes (never later than the flow). The proof is passed to registration as `transient_payload.email_proof` and verified and consumed atomically by the registration hook (E15d); it is never a permission on its own. A wrong code consumes one of 5 attempts (the challenge is invalidated afterwards). Unknown challenge, wrong code, expired, exhausted and old-generation challenges are indistinguishable (400).",
+        "operationId": "confirm_email_challenge",
+        "parameters": [
+          {
+            "name": "challenge_id",
+            "in": "path",
+            "description": "Challenge ID returned by the create endpoint",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmEmailChallengeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Code confirmed; proof issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EmailProofResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request, or the code is invalid or expired"
+          }
+        }
       }
     },
     "/api/v1/reports": {
@@ -2941,6 +4316,7 @@
         "required": [
           "id",
           "name",
+          "profile_id",
           "is_bot",
           "fields",
           "created_at"
@@ -2992,6 +4368,17 @@
           },
           "name": {
             "type": "string"
+          },
+          "profile_id": {
+            "type": "string",
+            "description": "Nanoid of the Profile this Account response describes (display_name, summary, icon_url and\nbanner_url come from the same Profile). A personal Account has exactly one personal\nProfile. An organization Account may own several Profiles (including ones transferred in);\nit is described by the one with the smallest Profile id. After a Profile transfer the value\nfollows the Profile's current owner."
+          },
+          "profile_username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Username of that Profile; null while the Profile has none (set once via\n`POST /api/v1/profiles/{profile_nanoid}/username`, immutable afterwards)."
           },
           "summary": {
             "type": [
@@ -3175,6 +4562,18 @@
           }
         }
       },
+      "ConfirmEmailChallengeRequest": {
+        "type": "object",
+        "required": [
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "メールで届いた code。"
+          }
+        }
+      },
       "ConsentDecision": {
         "type": "object",
         "required": [
@@ -3211,6 +4610,33 @@
           },
           "name": {
             "type": "string"
+          },
+          "profile_username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional Profile username (staged migration: optional until P4, then required).\nNever derived from `name`. Validated against `^[a-z0-9][a-z0-9._-]{0,63}$` and the reserved-word\nlist without trimming or case folding (400 on violation). A valid value is stored on the\ncreated Profile in the same transaction; it is unique across all Profiles (also deleted ones)\nand immutable afterwards (409 if already taken, nothing is created). Omit the field to keep\nthe legacy behaviour.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+          }
+        }
+      },
+      "CreateEmailChallengeRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "flow_id"
+        ],
+        "properties": {
+          "email": {
+            "type": "string",
+            "description": "所有を確認したいメールアドレス (ASCII。trim・小文字化して扱う)。"
+          },
+          "flow_id": {
+            "type": "string",
+            "description": "進行中の registration flow の ID (Kratos の flow.id)。challenge はこの flow に束縛される。"
           }
         }
       },
@@ -3222,6 +4648,32 @@
         "properties": {
           "name": {
             "type": "string"
+          }
+        }
+      },
+      "CreateProfileFollowRequest": {
+        "type": "object",
+        "description": "CONTRACT ONLY: not mounted on the production router (mounted in P4 at the earliest); handlers answer 501.\n\nRequest to follow a target from a Profile.",
+        "required": [
+          "target"
+        ],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "Remote actor URL (e.g. https://remote.example/users/bob), `acct:name@domain`,\nor a local Profile nanoid."
+          }
+        }
+      },
+      "CreateProfileRelationRequest": {
+        "type": "object",
+        "description": "CONTRACT ONLY: not mounted on the production router (mounted in P4 at the earliest); handlers answer 501.\n\nRequest to block or mute one target (individual actor) from a Profile.",
+        "required": [
+          "target"
+        ],
+        "properties": {
+          "target": {
+            "type": "string",
+            "description": "Remote actor URL, `acct:name@domain`, or a local Profile nanoid."
           }
         }
       },
@@ -3239,6 +4691,16 @@
               "string",
               "null"
             ]
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Optional Profile username (staged migration: optional until P4, then required).\nValidated against `^[a-z0-9][a-z0-9._-]{0,63}$` and the reserved-word list without trimming or\ncase folding (400 on violation). A valid value is stored on the created Profile; it is unique\nacross all Profiles (also deleted ones) and immutable afterwards (409 if already taken, nothing\nis created). Usernames cannot be changed through an update API.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
           }
         }
       },
@@ -3271,6 +4733,102 @@
           },
           "target": {
             "type": "string"
+          }
+        }
+      },
+      "DomainControlListResponse": {
+        "type": "object",
+        "description": "CONTRACT ONLY: not mounted on the production router (mounted in P4 at the earliest); implemented by D8P (handlers are real but only mounted in tests).",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DomainControlResponse"
+            }
+          }
+        }
+      },
+      "DomainControlMode": {
+        "type": "string",
+        "description": "CONTRACT ONLY: not mounted on the production router (mounted in P4 at the earliest); implemented by D8P (handlers are real but only mounted in tests).\n\nTreatment applied to every actor whose canonical actor-ID host equals the domain.",
+        "enum": [
+          "mute",
+          "block"
+        ]
+      },
+      "DomainControlResponse": {
+        "type": "object",
+        "description": "CONTRACT ONLY: not mounted on the production router (mounted in P4 at the earliest); implemented by D8P (handlers are real but only mounted in tests).\n\nA Profile x exact-match domain control.\n\nMatching is exact: `example.com` does not cover `sub.example.com`.\nSettings are per Profile and never propagate to other Profiles or Accounts.",
+        "required": [
+          "profile_id",
+          "domain",
+          "mode",
+          "revision",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "domain": {
+            "type": "string",
+            "description": "Normalized domain (lowercase ASCII / IDNA A-label host, no scheme, port or wildcard)."
+          },
+          "mode": {
+            "$ref": "#/components/schemas/DomainControlMode"
+          },
+          "profile_id": {
+            "type": "string",
+            "description": "Owning Profile nanoid."
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Monotonic revision starting at 1, incremented on every change.\nSend it back as `expected_revision` to update or delete safely.",
+            "minimum": 0
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "EmailChallengeResponse": {
+        "type": "object",
+        "required": [
+          "challenge_id",
+          "expires_at"
+        ],
+        "properties": {
+          "challenge_id": {
+            "type": "string",
+            "description": "code 確認 (`/confirm`) に使う opaque な challenge ID。"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "EmailProofResponse": {
+        "type": "object",
+        "required": [
+          "proof",
+          "expires_at"
+        ],
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "proof": {
+            "type": "string",
+            "description": "登録時に `transient_payload.email_proof` として渡す opaque proof (一度だけ表示される)。"
           }
         }
       },
@@ -3362,6 +4920,52 @@
           },
           "role": {
             "$ref": "#/components/schemas/OrganizationRole"
+          }
+        }
+      },
+      "LastCheckResponse": {
+        "type": "object",
+        "required": [
+          "checked_at",
+          "outcome",
+          "reason",
+          "transport",
+          "generation_matches"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "generation_matches": {
+            "type": "boolean",
+            "description": "記録が現在の設定世代のものか。false なら設定変更後で、旧世代の成功は使われない。"
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "outcome": {
+            "type": "string",
+            "description": "最後の検証の business 結果: `business_success` / `accepted` (資格情報・接続は受理されたが\nbusiness success ではない) / `configuration_invalid` / `temporarily_unavailable`。"
+          },
+          "reason": {
+            "type": "string",
+            "description": "secret を含まない固定語彙の理由。"
+          },
+          "success_valid_until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "transport": {
+            "type": "string",
+            "description": "transport の分類 (HTTP status の種別・timeout・SMTP 応答の種別など)。HTTP 200 は business 結果と別。"
           }
         }
       },
@@ -3717,6 +5321,232 @@
           }
         }
       },
+      "PendingChallengeResponse": {
+        "type": "object",
+        "required": [
+          "challenge_id",
+          "expires_at"
+        ],
+        "properties": {
+          "challenge_id": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ProfileActorKind": {
+        "type": "string",
+        "description": "CONTRACT ONLY: not mounted on the production router (mounted in P4 at the earliest); handlers answer 501.\n\nWhether an actor lives on this server or on a remote server.",
+        "enum": [
+          "local",
+          "remote"
+        ]
+      },
+      "ProfileActorRef": {
+        "type": "object",
+        "description": "CONTRACT ONLY: not mounted on the production router (mounted in P4 at the earliest); handlers answer 501.\n\nReference to a follower or target actor, local or remote.",
+        "required": [
+          "kind",
+          "actor_url"
+        ],
+        "properties": {
+          "actor_url": {
+            "type": "string",
+            "description": "Canonical ActivityPub actor ID (URL). Always present, for local and remote actors alike."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ProfileActorKind"
+          },
+          "profile_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Profile nanoid; present only when kind is `local`, absent for remote actors."
+          }
+        }
+      },
+      "ProfileFollowListResponse": {
+        "type": "object",
+        "description": "CONTRACT ONLY: not mounted on the production router (mounted in P4 at the earliest); handlers answer 501.\n\nProfiles/actors followed by a Profile (the \"following\" list).",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileFollowResponse"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor for the next page; absent on the last page."
+          }
+        }
+      },
+      "ProfileFollowResponse": {
+        "type": "object",
+        "description": "CONTRACT ONLY: not mounted on the production router (mounted in P4 at the earliest); handlers answer 501.\n\nA Profile-scoped follow relationship (the Profile is the follower).",
+        "required": [
+          "id",
+          "profile_id",
+          "target",
+          "state",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "description": "Follow relation nanoid."
+          },
+          "profile_id": {
+            "type": "string",
+            "description": "Follower Profile nanoid."
+          },
+          "state": {
+            "$ref": "#/components/schemas/ProfileFollowState"
+          },
+          "target": {
+            "type": "string",
+            "description": "Canonical actor URL of the followed target."
+          }
+        }
+      },
+      "ProfileFollowState": {
+        "type": "string",
+        "description": "CONTRACT ONLY: not mounted on the production router (mounted in P4 at the earliest); handlers answer 501.\n\nLifecycle state of a Profile follow.",
+        "enum": [
+          "pending",
+          "accepted"
+        ]
+      },
+      "ProfileFollowerListResponse": {
+        "type": "object",
+        "description": "CONTRACT ONLY: not mounted on the production router (mounted in P4 at the earliest); handlers answer 501.\n\nActors following a Profile (the \"followers\" list).",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileFollowerResponse"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor for the next page; absent on the last page."
+          }
+        }
+      },
+      "ProfileFollowerResponse": {
+        "type": "object",
+        "description": "CONTRACT ONLY: not mounted on the production router (mounted in P4 at the earliest); handlers answer 501.\n\nA follow relationship in which the Profile is the followed party (the follower is the actor).",
+        "required": [
+          "id",
+          "profile_id",
+          "follower",
+          "state",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "follower": {
+            "$ref": "#/components/schemas/ProfileActorRef",
+            "description": "The follower: a local Profile or a remote actor."
+          },
+          "id": {
+            "type": "string",
+            "description": "Follow relation nanoid."
+          },
+          "profile_id": {
+            "type": "string",
+            "description": "Followed Profile nanoid (the owner of the list)."
+          },
+          "state": {
+            "$ref": "#/components/schemas/ProfileFollowState"
+          }
+        }
+      },
+      "ProfileRelationKind": {
+        "type": "string",
+        "description": "CONTRACT ONLY: not mounted on the production router (mounted in P4 at the earliest); handlers answer 501.\n\nKind of individual (non-domain) relation setting.",
+        "enum": [
+          "mute",
+          "block"
+        ]
+      },
+      "ProfileRelationListResponse": {
+        "type": "object",
+        "description": "CONTRACT ONLY: not mounted on the production router (mounted in P4 at the earliest); handlers answer 501.",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProfileRelationResponse"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Cursor for the next page; absent on the last page."
+          }
+        }
+      },
+      "ProfileRelationResponse": {
+        "type": "object",
+        "description": "CONTRACT ONLY: not mounted on the production router (mounted in P4 at the earliest); handlers answer 501.\n\nAn individual block or mute setting owned by one Profile.",
+        "required": [
+          "id",
+          "profile_id",
+          "kind",
+          "target",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "description": "Relation setting nanoid."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ProfileRelationKind"
+          },
+          "profile_id": {
+            "type": "string",
+            "description": "Owning Profile nanoid."
+          },
+          "target": {
+            "type": "string",
+            "description": "Canonical actor URL of the target."
+          }
+        }
+      },
       "ProfileResponse": {
         "type": "object",
         "required": [
@@ -3753,6 +5583,13 @@
               "string",
               "null"
             ]
+          },
+          "username": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Profile username; null while the Profile has none (legacy Profiles). Set once, immutable."
           }
         }
       },
@@ -3779,6 +5616,20 @@
           }
         }
       },
+      "ProtectionListResponse": {
+        "type": "object",
+        "required": [
+          "protections"
+        ],
+        "properties": {
+          "protections": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProtectionReadinessResponse"
+            }
+          }
+        }
+      },
       "ProtectionObservationResponse": {
         "type": "object",
         "required": [
@@ -3792,6 +5643,93 @@
           "probe": {
             "type": "string",
             "description": "`healthy` / `unhealthy` / `unknown`"
+          }
+        }
+      },
+      "ProtectionReadinessResponse": {
+        "type": "object",
+        "required": [
+          "protection",
+          "provider",
+          "enabled",
+          "generation",
+          "fingerprint",
+          "status",
+          "reason"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "enabled": {
+            "type": "boolean",
+            "description": "設定が有効か (未設定・明示無効は false)。"
+          },
+          "fingerprint": {
+            "type": "string",
+            "description": "secret の逆算できない短い fingerprint (secret 自体は出ない)。"
+          },
+          "generation": {
+            "type": "string",
+            "description": "設定世代。設定 (provider・非 secret 設定値・secret の fingerprint) が変わると変わる。"
+          },
+          "last_check": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/LastCheckResponse"
+              }
+            ]
+          },
+          "protection": {
+            "type": "string",
+            "description": "`email` / `bot`"
+          },
+          "provider": {
+            "type": "string",
+            "description": "`smtp` / `turnstile`"
+          },
+          "reason": {
+            "type": "string",
+            "description": "評価の理由 (secret を含まない固定語彙)。"
+          },
+          "status": {
+            "type": "string",
+            "description": "現在時刻での評価: `configuration_invalid` / `operational` / `temporarily_unavailable` / `unverified`。"
+          },
+          "valid_until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "operational が続く期限 (operational のときだけ)。超過すると unverified になる。"
+          }
+        }
+      },
+      "ProviderResultResponse": {
+        "type": "object",
+        "required": [
+          "outcome",
+          "reason",
+          "transport"
+        ],
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "description": "business 結果: `business_success` / `accepted` / `configuration_invalid` /\n`attempt_rejected` / `temporarily_unavailable`。"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "transport": {
+            "type": "string"
           }
         }
       },
@@ -3831,6 +5769,27 @@
           },
           "publicKeyPem": {
             "type": "string"
+          }
+        }
+      },
+      "PutDomainControlRequest": {
+        "type": "object",
+        "description": "CONTRACT ONLY: not mounted on the production router (mounted in P4 at the earliest); implemented by D8P (handlers are real but only mounted in tests).\n\nCreate or replace the control for one domain.",
+        "required": [
+          "mode"
+        ],
+        "properties": {
+          "expected_revision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Optimistic concurrency token.\nOmit (or null) to create: 409 if a control for the domain already exists.\nSet to the current `revision` to replace: 409 if it no longer matches\n(including when the control was deleted meanwhile).",
+            "minimum": 0
+          },
+          "mode": {
+            "$ref": "#/components/schemas/DomainControlMode"
           }
         }
       },
@@ -3889,7 +5848,7 @@
           },
           "kind": {
             "type": "string",
-            "description": "`outage_started` / `outage_recovered` / `protection_degraded` /\n`protection_lost_stopped` / `override_started` / `override_revoked`"
+            "description": "`outage_started` / `outage_recovered` / `protection_degraded` /\n`protection_lost_stopped` / `override_started` / `override_revoked` /\n`enforcement_lost_stopped` / `enforcement_restored`"
           },
           "observation": {
             "$ref": "#/components/schemas/RegistrationObservationResponse"
@@ -3914,7 +5873,7 @@
       },
       "RegistrationGateResponse": {
         "type": "object",
-        "description": "E15a は control plane のみ。Kratos 遮断 (E15d) が接続されるまで、この状態は実際の登録を\n遮断も許可もしない (実登録はまだ守られない)。",
+        "description": "登録ゲート。`override.active` は enforcement 停止中も保持されるため、\n登録可否は必ず `accepting` / `decision` で判断する。",
         "required": [
           "revision",
           "admin_state",
@@ -3922,6 +5881,7 @@
           "accepting",
           "requires_manual_resume",
           "config_lost_latch",
+          "enforcement_lost_latch",
           "health_episode",
           "enforced_protections",
           "degraded_protections",
@@ -3957,6 +5917,10 @@
               "type": "string"
             },
             "description": "登録時に課す対策 (検証 API が実際に応答した対策のみ)"
+          },
+          "enforcement_lost_latch": {
+            "type": "boolean",
+            "description": "Deployment enforcement was lost; remains latched after restoration until manual resume."
           },
           "health_episode": {
             "type": "string",
@@ -3998,6 +5962,7 @@
       "RegistrationObservationResponse": {
         "type": "object",
         "required": [
+          "enforcement_verified",
           "email",
           "bot"
         ],
@@ -4007,6 +5972,10 @@
           },
           "email": {
             "$ref": "#/components/schemas/ProtectionObservationResponse"
+          },
+          "enforcement_verified": {
+            "type": "boolean",
+            "description": "Current trusted deployment attestation; provider success cannot set this."
           }
         }
       },
@@ -4068,6 +6037,22 @@
                 "$ref": "#/components/schemas/OrganizationContextResponse"
               }
             ]
+          }
+        }
+      },
+      "SetProfileUsernameRequest": {
+        "type": "object",
+        "description": "One-time username assignment for an existing Profile that has no username yet.",
+        "required": [
+          "username"
+        ],
+        "properties": {
+          "username": {
+            "type": "string",
+            "description": "`^[a-z0-9][a-z0-9._-]{0,63}$`, not a reserved word, no trimming or case folding.",
+            "maxLength": 64,
+            "minLength": 1,
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
           }
         }
       },
@@ -4228,6 +6213,67 @@
           }
         }
       },
+      "VerifyProtectionRequest": {
+        "type": "object",
+        "properties": {
+          "challenge_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "email: 先に送った canary challenge の ID。`code` と一緒に指定すると roundtrip を確認する。"
+          },
+          "code": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "email: 承認済み canary mailbox に届いた code。"
+          },
+          "token": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "bot: widget が発行した有効な token (business 検証)。省略すると secret の負の probe だけを行い、\noperational にはならない。"
+          }
+        }
+      },
+      "VerifyProtectionResponse": {
+        "type": "object",
+        "required": [
+          "result",
+          "recorded",
+          "disposition",
+          "readiness"
+        ],
+        "properties": {
+          "disposition": {
+            "type": "string",
+            "description": "`completed` / `pending_confirmation` (canary mailbox に code を送った) /\n`canary_not_configured` (承認済み canary mailbox が未設定で、メールは unverified のまま)。"
+          },
+          "pending_challenge": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PendingChallengeResponse"
+              }
+            ]
+          },
+          "readiness": {
+            "$ref": "#/components/schemas/ProtectionReadinessResponse"
+          },
+          "recorded": {
+            "type": "boolean",
+            "description": "readiness へ記録したか。当該試行だけの拒否 (`attempt_rejected`) は記録しない。"
+          },
+          "result": {
+            "$ref": "#/components/schemas/ProviderResultResponse"
+          }
+        }
+      },
       "WarnAccountRequest": {
         "type": "object",
         "required": [
@@ -4288,6 +6334,228 @@
             "type": "string"
           }
         }
+      },
+      "WebhookDeliveryCountsResponse": {
+        "type": "object",
+        "required": [
+          "pending",
+          "in_flight",
+          "retrying",
+          "delivered",
+          "failed"
+        ],
+        "properties": {
+          "delivered": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "failed": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "in_flight": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "pending": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "retrying": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "WebhookDeliveryResponse": {
+        "type": "object",
+        "required": [
+          "event_id",
+          "event_type",
+          "status",
+          "attempt_count",
+          "created_at"
+        ],
+        "properties": {
+          "attempt_count": {
+            "type": "integer",
+            "format": "int32",
+            "description": "通算の送信試行回数 (管理者の再試行をまたいで増える)。",
+            "minimum": 0
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "delivered_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "event_id": {
+            "type": "string",
+            "description": "通知イベント ID。Webhook の `X-Emumet-Event-Id` ヘッダーと同じ値 (再試行・再送で不変)。"
+          },
+          "event_type": {
+            "type": "string",
+            "description": "`outage_started` / `outage_recovered` / `protection_degraded` /\n`protection_lost_stopped` / `override_started` / `override_revoked`"
+          },
+          "failure_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "failed のときの理由: `permanent_error` / `retries_exhausted`。"
+          },
+          "last_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_http_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "last_result": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "最後の試行結果の分類。secret・宛先 URL・応答本文・内部エラー詳細を含まない固定語彙\n(`delivered` / `timeout` / `connect_failed` / `dns_failed` / `http_request_timeout` /\n`http_too_many_requests` / `http_server_error` / `http_redirect` / `http_client_error` /\n`http_unexpected_status` / `ssrf_blocked` / `config_invalid` / `lease_expired`)。"
+          },
+          "next_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "description": "`pending` / `in_flight` / `retrying` / `delivered` / `failed`"
+          }
+        }
+      },
+      "WebhookRetryRequest": {
+        "type": "object",
+        "properties": {
+          "event_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "再試行する配送の event ID (通知イベント ID)。省略すると failed の配送すべてを再キューする。"
+          }
+        }
+      },
+      "WebhookRetryResponse": {
+        "type": "object",
+        "required": [
+          "requeued"
+        ],
+        "properties": {
+          "requeued": {
+            "type": "integer",
+            "format": "int64",
+            "description": "再キューした failed 配送の件数。同じ event ID が再送される。",
+            "minimum": 0
+          }
+        }
+      },
+      "WebhookStatusResponse": {
+        "type": "object",
+        "required": [
+          "configuration",
+          "counts",
+          "recent_deliveries"
+        ],
+        "properties": {
+          "configuration": {
+            "type": "string",
+            "description": "`not_configured` (未設定 = Webhook 無効。エラーではなく、配送もゲート動作への影響もない) /\n`misconfigured` (設定不備。`issue` を参照。ゲート動作には影響しない) / `configured`"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/WebhookDeliveryCountsResponse"
+          },
+          "destination_host": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "宛先の host 部分のみ (userinfo・port・path・query・secret は出さない)。"
+          },
+          "issue": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`misconfigured` のときの不備の分類 (`invalid_url` / `unsupported_scheme` /\n`credentials_in_url` / `missing_host` / `forbidden_destination` / `missing_secret` /\n`secret_too_short` / `secret_unreadable` / `ambiguous_secret_source` / `missing_url`)。"
+          },
+          "last_failure_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "recent_deliveries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookDeliveryResponse"
+            },
+            "description": "新しい順の直近の配送記録 (本文は含まない)。"
+          }
+        }
+      },
+      "WebhookTestResponse": {
+        "type": "object",
+        "required": [
+          "event_id",
+          "delivered",
+          "result",
+          "attempted_at"
+        ],
+        "properties": {
+          "attempted_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "delivered": {
+            "type": "boolean",
+            "description": "受信側が 2xx を返したら true。"
+          },
+          "event_id": {
+            "type": "string",
+            "description": "テスト用の合成 event ID (`test_` で始まる。通知イベント ID とは衝突しない)。"
+          },
+          "http_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "result": {
+            "type": "string",
+            "description": "結果の分類 (配送記録の `last_result` と同じ語彙)。"
+          }
+        }
       }
     },
     "securitySchemes": {
@@ -4328,6 +6596,14 @@
       "description": "Account moderation reports"
     },
     {
+      "name": "ProfileActor",
+      "description": "Profile ActivityPub actor document and inbox (1 Profile = 1 actor). The actor generation logic (P1) and the inbox (P3i: Follow / Accept / Reject / Undo(Follow)) exist but the routes are NOT MOUNTED on the production router before the P4 cutover."
+    },
+    {
+      "name": "ProfilePolicy",
+      "description": "CONTRACT ONLY, not mounted on the production router (mounted in P4 at the earliest): Profile identity, Profile-scoped follow, individual block/mute and domain-controls. Handlers answer 501 until P3o/D8G/D8R implement them, except domain-controls (D8P: stored, revision-controlled, owner-only) and followers/following (P3i: read from the P2 follow graph, owner-only), which are implemented but stay unmounted on the production router until P4/D8R. Owner-only authorization, revision conflicts (409) and errors are the contract."
+    },
+    {
       "name": "ProfileTransfer",
       "description": "Profile ownership transfer requests"
     },
@@ -4337,7 +6613,15 @@
     },
     {
       "name": "RegistrationGate",
-      "description": "Registration readiness gate control plane (admin only). NOTE: E15a is the control plane only. Until the Kratos enforcement unit (E15d) is connected, opening, closing or overriding the gate does NOT block or allow real Kratos registrations; real registration is not protected yet."
+      "description": "Registration readiness gate (admin only). The authenticated Kratos pre-persist hook enforces gate decisions. Enforcement attestation loss stops registration ahead of override; restoration requires manual resume. Emumet cannot physically block a Kratos deployment with the hook removed; finite canary sampling cannot cover unknown or unselected replicas. Physical containment is the deployment operator's responsibility."
+    },
+    {
+      "name": "RegistrationGateWebhook",
+      "description": "External Webhook delivery of registration gate notification events (admin only; E15w). The endpoint URL and the HMAC-SHA256 signing secret are server configuration only (REGISTRATION_WEBHOOK_URL, REGISTRATION_WEBHOOK_SECRET or REGISTRATION_WEBHOOK_SECRET_FILE). When they are unset the Webhook is disabled: nothing is delivered, the status endpoint reports `not_configured`, and the gate is unaffected (this is not an error). Delivery guarantees: at-least-once, so the same event can be delivered more than once (retries, crash recovery, admin retry) and receivers must de-duplicate by the stable event ID (`X-Emumet-Event-Id`); ordering is not guaranteed (order by `occurred_at` if needed). Retries: 408/429/5xx/timeouts/connection failures are retried with exponential backoff and jitter (Retry-After is honored up to a cap) until the attempt or age limit, then the delivery is `failed`; redirects, other 4xx responses and destination-check (SSRF) rejections fail immediately. Failed deliveries are resent only when an admin requests a retry. Webhook trouble never changes the gate state and never creates a new notification event. HTTPS only, no redirects, destinations are checked at connect time and pinned. Receiver documentation: docs/registration-gate-webhook.md."
+    },
+    {
+      "name": "RegistrationProtection",
+      "description": "Registration protection readiness and pre-registration email proof (E15c). Unauthenticated: POST /api/v1/registration/email-challenges and /confirm (email ownership challenge: code by SMTP, proof only after the code is confirmed; rate limited; bound to flow, email and configuration generation). Admin only: GET /api/v1/admin/registration-gate/protections and POST /api/v1/admin/registration-gate/protections/{protection}/verify (readiness and real verification). Configuration is server-side only (REGISTRATION_TURNSTILE_*, REGISTRATION_SMTP_*, REGISTRATION_EMAIL_*). A protection is operational only while a real verification business success bound to the current configuration generation is fresh; health, HTTP 200 and SMTP 250 alone never make it operational. The authenticated production Kratos pre-persist hook consumes these proofs and tokens; client readiness results never authorize registration by themselves. Operations guide: docs/registration-protection-readiness.md."
     }
   ]
 }

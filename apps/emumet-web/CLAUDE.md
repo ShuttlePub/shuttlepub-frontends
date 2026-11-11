@@ -49,12 +49,14 @@ bff/
   loaders.ts               -- DataLoader: profile + metadata, request-scoped, memoized per request
   resolvers.ts             -- Query/Mutation resolvers
   registration-gate-resolvers.ts -- Registration gate (D15) resolvers + error classification (extensions.code)
+  profile-identity-resolvers.ts -- Profile username resolvers (setProfileUsername / checkProfileUsername / Profile.usernameState) + extensions.code classification (USERNAME_* etc.)
   openapi/                 -- Pinned Emumet OpenAPI (lock verification, contract validation); see README
   emumet/
     client.ts              -- EmumetClient interface + DTOs (camelCase)
     real.ts                -- REST-backed EmumetClient (snake_case ↔ camelCase mapping)
     mock.ts                -- In-memory stateful MockEmumetClient
     registration-gate*.ts  -- Registration gate client contract / real / stateful mock / all-state fixtures (BFF only, no UI)
+    profile-username.ts    -- Profile username rules (format / 17 reserved words; mirrors Emumet, checked against the pinned OpenAPI in tests)
     generated/             -- openapi-typescript output (never hand-edit; `bun run codegen`)
   *.test.ts                -- BFF test files (bun test)
 src/
