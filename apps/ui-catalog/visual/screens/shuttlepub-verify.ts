@@ -279,6 +279,84 @@ async function verifyBreakpointCrossing(page: Page) {
   await expect(visible(page, /投稿用 Profile を切り替え/)).toBeFocused();
 }
 
+/**
+ * D08 設定「ミュート・ブロック」(personal-domain-controls-web-ui) inside the shell: reached
+ * from 設定, the mobile "‹ 設定" goes back to it, the unconnected post-side effects are stated,
+ * and a dialog owns the keyboard: the toast's "元に戻す" outside it is unreachable (inert)
+ * while the dialog is open, Tab stays inside, Esc closes it and returns focus.
+ */
+async function verifyMuteBlock(page: Page, viewport: Viewport) {
+  const content = page.locator("#content");
+  await page.goto("/settings", { waitUntil: "networkidle" });
+  await content.getByTestId("settings-mute-block").click();
+  await expect(page).toHaveURL(/\/settings\/mute-block\/domains$/);
+  const list = page.getByTestId("domain-panel").locator("section");
+  await expect(list).toHaveAttribute("data-state", "loaded");
+  await expect(page.getByTestId("mute-block-scope")).toContainText("投稿の非表示とリアクションの拒否はまだ反映されません");
+  const back = page.getByTestId("mute-block-back");
+  if (viewport.name === "mobile") {
+    await back.click();
+    await expect(page).toHaveURL(/\/settings$/);
+    await expect(content.getByTestId("settings-mute-block")).toBeVisible();
+    await content.getByTestId("settings-mute-block").click();
+    await expect(list).toHaveAttribute("data-state", "loaded");
+  } else {
+    await expect(back).toBeHidden();
+  }
+
+  // Keyboard: immediate unmute with an undo toast.
+  await page.getByRole("button", { name: "ミュート解除（noisy.social）" }).focus();
+  await page.keyboard.press("Enter");
+  const toast = page.getByTestId("toast");
+  await expect(toast).toContainText("noisy.social のミュートを解除しました");
+  await expect(page.getByRole("button", { name: "元に戻す" })).toHaveCount(1);
+
+  // A dialog opened meanwhile owns the keyboard; the toast is outside it and inert.
+  const opener = page.locator("#mb-add-button");
+  await opener.focus();
+  await page.keyboard.press("Enter");
+  const dialog = page.getByTestId("add-dialog");
+  await expect(dialog).toHaveAttribute("aria-modal", "true");
+  await expect(page.locator("#mb-add-input")).toBeFocused();
+  await page.keyboard.type("half-typed.exa");
+  await expect(page.getByTestId("toast-region")).toHaveAttribute("inert", "");
+  await expect(page.getByRole("button", { name: "元に戻す" })).toHaveCount(0);
+  await expectTabStaysInside(page, dialog);
+  await expectScrollLocked(page, true);
+  await expect(page.locator("#mb-add-input")).toHaveValue("half-typed.exa");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(opener).toBeFocused();
+  await expectScrollLocked(page, false);
+
+  // Put the shared stateful mock back (undo if the toast is still there).
+  const undo = page.getByRole("button", { name: "元に戻す" });
+  if (await undo.count()) {
+    await undo.click();
+  } else {
+    await opener.click();
+    await page.locator("#mb-add-input").fill("noisy.social");
+    await dialog.getByRole("button", { name: "ミュート", exact: true }).click();
+    await page.getByTestId("mute-dialog").getByRole("button", { name: "ミュート", exact: true }).click();
+  }
+  await expect(page.locator('li[data-domain="noisy.social"]')).toBeVisible();
+
+  // Our own server is refused; a block that detaches follows needs the acknowledgement.
+  await opener.click();
+  await page.locator("#mb-add-input").fill("https://shuttle.example/@me");
+  await dialog.getByRole("button", { name: "ブロック", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("自分のサーバーは指定できません");
+  await page.locator("#mb-add-input").fill("example.social");
+  await dialog.getByRole("button", { name: "ブロック", exact: true }).click();
+  const block = page.getByTestId("block-dialog");
+  await expect(block.getByTestId("block-impact")).toContainText("フォロー中 3 人・フォロワー 5 人");
+  await expect(block.getByRole("button", { name: "ブロック", exact: true })).toBeDisabled();
+  await expectTabStaysInside(page, block);
+  await page.keyboard.press("Escape");
+  await expect(block).toHaveCount(0);
+  await expect(opener).toBeFocused();
+}
+
 async function verifyMock(browser: Browser, frontendRoot: string, coreURL: string) {
   const server = await startApp(frontendRoot, "ShuttlePub", coreURL);
   try {
@@ -299,6 +377,7 @@ async function verifyMock(browser: Browser, frontendRoot: string, coreURL: strin
         await verifyPostDetail(page);
         await verifyProfileSwitcher(page, viewport);
         if (viewport.name === "desktop") await verifyBreakpointCrossing(page);
+        await verifyMuteBlock(page, viewport);
         expect(errors, `mock ${viewport.name}: browser errors`).toEqual([]);
         console.info(`OK mock mode hydrates and keeps the shell's keyboard/focus rules at ${viewport.name} (${viewport.width}x${viewport.height})`);
       } finally {

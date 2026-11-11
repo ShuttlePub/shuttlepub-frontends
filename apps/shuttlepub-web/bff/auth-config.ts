@@ -9,6 +9,13 @@ export type AuthConfig = {
   clientId: string;
   clientSecret: string;
   cookieSecret: string;
+  /**
+   * The public actor host of this deployment: the host[:port] of Emumet's PUBLIC_BASE_URL
+   * (actor ids, acct). Used to refuse muting/blocking our own server as a domain. Optional at
+   * startup; when it is missing the domain settings cannot add anything (never guessed from
+   * EMUMET_API_URL, which may be an internal host).
+   */
+  emumetPublicHost?: string;
 };
 
 /** Separate app-specific key: never inherit another app's COOKIE_SECRET_BASE64. */
@@ -35,6 +42,10 @@ export function loadAuthConfig(env: Record<string, string | undefined> = process
     if (atob(cookieSecret).length !== 32) throw new Error();
   } catch { throw new ConfigError("SHUTTLEPUB_COOKIE_SECRET_BASE64 must encode exactly 32 bytes"); }
   const hydraPublicUrl = baseUrl("HYDRA_PUBLIC_URL");
+  const publicHost = env["EMUMET_PUBLIC_HOST"]?.trim();
+  if (publicHost && !PUBLIC_HOST.test(publicHost)) {
+    throw new ConfigError("EMUMET_PUBLIC_HOST must be a host[:port] without scheme or path (Emumet PUBLIC_BASE_URL host)");
+  }
   if (env["HYDRA_ISSUER_URL"]) baseUrl("HYDRA_ISSUER_URL");
   return {
     appOrigin: baseUrl("APP_ORIGIN"),
@@ -46,5 +57,8 @@ export function loadAuthConfig(env: Record<string, string | undefined> = process
     clientId: required("HYDRA_CLIENT_ID"),
     clientSecret: required("HYDRA_CLIENT_SECRET"),
     cookieSecret,
+    ...(publicHost ? { emumetPublicHost: publicHost } : {}),
   };
 }
+
+const PUBLIC_HOST = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*|\[[0-9a-f:.]+\])(?::[0-9]{1,5})?$/i;

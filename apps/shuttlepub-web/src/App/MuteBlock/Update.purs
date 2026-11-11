@@ -63,6 +63,7 @@ update model = case _ of
   SetDomainFilter value -> noEffects model { domainFilter = value }
   SetActorFilter value -> noEffects model { actorFilter = value }
   Go _ -> noEffects model
+  OpenSettings -> noEffects model
 
   OpenAdd opener ->
     Tuple model { dialog = Just (AddDomain { input: "", problem: Nothing, pending: false }), opener = Just opener }
@@ -93,6 +94,11 @@ update model = case _ of
     Just (ConfirmBlock state) | state.domain == domain ->
       noEffects model { dialog = Just (ConfirmBlock state { impact = fromResult result }) }
     _ -> noEffects model
+  RetryImpact -> case model.dialog, model.profile of
+    Just (ConfirmBlock state), Just profile | not state.pending ->
+      Tuple model { dialog = Just (ConfirmBlock state { impact = Loading, acknowledged = false }) }
+        [ effect (Api.fetchImpact profile state.domain) (ImpactLoaded state.domain) ]
+    _, _ -> noEffects model
   ToggleAcknowledged value -> case model.dialog of
     Just (ConfirmBlock state) -> noEffects model { dialog = Just (ConfirmBlock state { acknowledged = value }) }
     _ -> noEffects model
@@ -181,15 +187,18 @@ update model = case _ of
         Tuple next (effects <> reloadAfter model write)
   Written write subject (Right change) ->
     let
-      applied = applyChange change (model { writing = false, dialog = Nothing })
-      refocus = if model.dialog == Nothing then [] else [ focus (openerIds model) ]
+      -- Only the dialog that sent this write closes: a row action or "元に戻す"
+      -- finishing later leaves a dialog opened meanwhile (and its input) alone.
+      fromDialog = dialogPending model
+      applied = applyChange change (model { writing = false, dialog = if fromDialog then Nothing else model.dialog })
+      refocus = if fromDialog then [ focus (openerIds model) ] else []
       Tuple next effects = case notice write subject of
         Just toast -> showToast (resetFilter write applied) toast
         Nothing -> noEffects applied { toast = Nothing }
     in
       Tuple next (effects <> refocus <> reloadAfter model write)
   RunUndo -> case model.toast, model.profile of
-    Just { undo: Just undo }, Just profile | not model.writing -> case undo of
+    Just { undo: Just undo }, Just profile | not model.writing && model.dialog == Nothing -> case undo of
       RestoreDomainMute domain ->
         Tuple model { writing = true, toast = Nothing }
           [ effect (Api.setDomainControl profile domain MUTE Nothing) (Written UndoWrite domain <<< map DomainUpserted) ]

@@ -72,8 +72,18 @@ function extractHost(input: string): DomainResult {
 }
 
 /**
+ * The domain of our own actors from a public host[:port] (Emumet PUBLIC_BASE_URL host): the
+ * port is not part of a domain control. null when it is not a domain (e.g. an IP literal).
+ */
+export function ownActorDomain(publicHost: string): string | null {
+  const host = publicHost.startsWith("[") ? publicHost : publicHost.replace(/:\d+$/, "");
+  const result = canonicalDomain(host);
+  return "domain" in result ? result.domain : null;
+}
+
+/**
  * What the settings dialog accepts (ui-spec 1-4 / 1-5). `selfDomains` are this server's own
- * hosts, which cannot be muted or blocked as a domain.
+ * actor domains, which cannot be muted or blocked as a domain.
  */
 export function checkDomainInput(raw: string, selfDomains: readonly string[] = []): DomainResult {
   const input = raw.trim();

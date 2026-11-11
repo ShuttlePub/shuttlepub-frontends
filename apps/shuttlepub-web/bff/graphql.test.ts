@@ -80,7 +80,7 @@ describe("mock mode", () => {
 
   test("lists every mock Profile and selects one without persisting it", async () => {
     const list = await run(app, "{ availableProfiles { id handle displayName } }");
-    expect(list.data!.availableProfiles).toEqual(availableProfilesFixture);
+    expect(list.data!.availableProfiles).toEqual(availableProfilesFixture.map(({ profileId: _, ...visible }) => visible));
     const second = availableProfilesFixture[1]!;
     const selected = await run(app, `mutation { selectProfile(id: "${second.id}") { activeProfile { id } } }`);
     expect(selected.data).toEqual({ selectProfile: { activeProfile: { id: second.id } } });

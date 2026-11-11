@@ -155,6 +155,7 @@ mkUpdate nav model = case _ of
   Logout -> Tuple model [ effect logoutAndReload ]
   MuteBlockMsg (MuteBlock.Go tab) ->
     mkUpdate nav model (Navigate (if tab == MuteBlock.AccountsTab then MuteBlockAccounts else MuteBlockDomains))
+  MuteBlockMsg MuteBlock.OpenSettings -> mkUpdate nav model (Navigate Settings)
   MuteBlockMsg message -> delegate model message
   NoOp -> noMessages model
   where

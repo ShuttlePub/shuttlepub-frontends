@@ -17,6 +17,12 @@
 | `HYDRA_CLIENT_ID` / `HYDRA_CLIENT_SECRET` | このアプリ専用の confidential client、`client_secret_basic` |
 | `SHUTTLEPUB_COOKIE_SECRET_BASE64` | このアプリ専用のランダム32 bytes（base64）。他アプリの `COOKIE_SECRET_BASE64` は継承しない |
 
+任意（ミュート・ブロック設定を使うなら必須）:
+
+| 変数 | 内容 |
+| ---- | ---- |
+| `EMUMET_PUBLIC_HOST` | Emumet の `PUBLIC_BASE_URL` の host（port があれば `host:port`）。ローカル actor の URL に使われる公開ホストで、自分のサーバーをドメインとしてミュート・ブロックさせない判定に使う。`EMUMET_API_URL`（内部ホストでありうる）からは推測しない。未設定ならドメインを追加できない（`INSTANCE_HOST_NOT_CONFIGURED`） |
+
 URL は認証情報・path・query・fragment を含まない origin に限定します。
 内部 API を HTTP にする場合も、信頼されたネットワークに限定してください。
 Hydra client の redirect URI は厳密に `${APP_ORIGIN}/auth/callback`、

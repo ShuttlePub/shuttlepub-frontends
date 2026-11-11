@@ -256,3 +256,24 @@ testMuteBlock = do
     swapped = step (ready { writing = true }) (Written ActorToMute "remote.example/users/zed" (Right (ActorRemoved "rel-1")))
   assertEqual "changing a block into a mute keeps its toast" (map _.rest swapped.next.toast) (Just " をミュートに変更しました")
   assertEqual "and refetches the individual list" swapped.effects 2
+  -- Review round 2: the block waits for what it detaches; a failed lookup is retried, never skipped.
+  let
+    lookupFailed = detaching { dialog = Just (ConfirmBlock { domain: "example.social", current: Nothing, fromInput: true, impact: MuteBlock.Failed (Failure "UPSTREAM_UNAVAILABLE"), acknowledged: true, pending: false, failure: Nothing }) }
+  assertEqual "no block is sent while the detached follows are unknown" (step lookupFailed ConfirmBlockDomain).effects 0
+  let retried = step lookupFailed RetryImpact
+  assertEqual "retry looks the follows up again" retried.effects 1
+  case retried.next.dialog of
+    Just (ConfirmBlock state) -> do
+      assertEqual "retry is loading" state.impact MuteBlock.Loading
+      assertEqual "retry clears the acknowledgement" state.acknowledged false
+    _ -> throw "retry keeps the block confirmation"
+  assertEqual "no block is sent while the lookup is loading" (step retried.next ConfirmBlockDomain).effects 0
+  -- An undo (or row write) finishing while another dialog is open leaves that dialog and its input alone.
+  let
+    typing = AddDomain { input: "half-typed.exa", problem: Nothing, pending: false }
+    undone = step (ready { writing = true, dialog = Just typing }) (Written UndoWrite "noisy.social" (Right (DomainUpserted muted)))
+  assertEqual "a finished undo keeps the open dialog" undone.next.dialog (Just typing)
+  assertEqual "and does not move focus" undone.effects 0
+  let
+    withToast = unmuted.next { dialog = Just typing }
+  assertEqual "undo cannot run behind an open dialog" (step withToast RunUndo).effects 0

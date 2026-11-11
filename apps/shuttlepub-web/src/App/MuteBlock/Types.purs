@@ -141,11 +141,11 @@ type BlockState =
   }
 
 -- | ui-spec 2-2: the block button needs the acknowledgement only when the block
--- | detaches something, or when what it detaches could not be determined.
+-- | detaches something. Until what it detaches is known (loading, or the lookup
+-- | failed and has to be retried) the block cannot be confirmed at all.
 blockReady :: forall r. { impact :: Load Impact, acknowledged :: Boolean | r } -> Boolean
 blockReady state = case state.impact of
   Ready impact -> state.acknowledged || null impact.following && null impact.followers
-  Failed _ -> state.acknowledged
   _ -> false
 
 type DomainUnblockState = { control :: DomainControl, pending :: Boolean, failure :: Maybe Failure }
@@ -277,12 +277,16 @@ data Message
   | SetActorFilter Filter
   -- | Switch sub-page; the app turns it into a navigation.
   | Go Tab
+  -- | "‹ 設定" (mobile): back to the settings page; the app turns it into a navigation.
+  | OpenSettings
   -- | Opening a dialog remembers the element id that gets focus back on close.
   | OpenAdd String
   | AddInput String
   | SubmitAdd PolicyMode
   | AddChecked PolicyMode (Either Failure { domain :: Maybe String, error :: Maybe String })
   | ImpactLoaded String (Either Failure Impact)
+  -- | Look up the follows a block detaches again after a failure.
+  | RetryImpact
   | ToggleAcknowledged Boolean
   | CloseDialog
   | ConfirmMuteDomain

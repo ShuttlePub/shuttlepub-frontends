@@ -35,14 +35,14 @@ view :: Tab -> Model -> Html Message
 view tab model =
   HE.div [ HA.createAttribute "data-testid" "mute-block" ]
     [ HE.div
-        ( [ HA.class' "grid gap-6 sm:grid-cols-[196px_minmax(0,1fr)]" ]
+        ( [ HA.class' "grid gap-6 md:grid-cols-[196px_minmax(0,1fr)]" ]
             <> (if isJust model.dialog then [ HA.createAttribute "inert" "", HA.createAttribute "aria-hidden" "true" ] else [])
         )
         [ subnav
         , HE.div [ HA.class' "min-w-0" ]
-            [ HE.a [ HA.href "/settings", HA.class' (button "text" <> " sm:hidden -ml-2 mb-1") ]
+            [ HE.a [ HA.href "/settings", HA.createRawEvent "click" (navigate OpenSettings), HA.class' (button "text" <> " md:hidden -ml-2 mb-1"), HA.createAttribute "data-testid" "mute-block-back" ]
                 [ chevronLeft, HE.text "設定" ]
-            , HE.h1 [ HA.id "mb-heading", HA.tabindex (-1), HA.class' ("text-xl sm:text-[22px] font-bold tracking-tight mb-1 sm:mb-2 outline-none " <> T.textHeading) ]
+            , HE.h1 [ HA.id "mb-heading", HA.tabindex (-1), HA.class' ("text-xl md:text-[22px] font-bold tracking-tight mb-1 md:mb-2 outline-none " <> T.textHeading) ]
                 [ HE.text "ミュート・ブロック" ]
             , HE.nav [ HA.class' ("flex gap-1 border-b " <> T.borderTheme), HA.createAttribute "aria-label" "対象" ]
                 [ tabLink tab AccountsTab "アカウント"
@@ -51,17 +51,31 @@ view tab model =
             , case tab of
                 DomainsTab -> domainPanel model
                 AccountsTab -> accountPanel model
+            , scopeNote
             ]
         ]
     , dialogLayer model
-    , HE.div [ HA.class' "fixed inset-x-0 bottom-16 sm:bottom-6 z-40 flex justify-center px-4 pointer-events-none", HA.createAttribute "aria-live" "polite" ]
+    -- While a dialog is open the toast (and its "元に戻す") is outside the modal:
+    -- inert, so neither the pointer nor the keyboard reaches it.
+    , HE.div
+        ( [ HA.class' "fixed inset-x-0 bottom-16 md:bottom-6 z-40 flex justify-center px-4 pointer-events-none", HA.createAttribute "aria-live" "polite", HA.createAttribute "data-testid" "toast-region" ]
+            <> (if isJust model.dialog then [ HA.createAttribute "inert" "", HA.createAttribute "aria-hidden" "true" ] else [])
+        )
         (map toastView (Array.fromFoldable model.toast))
     ]
+
+-- | What Emumet applies today is the Follow control of a block. Hiding posts and
+-- | refusing reactions are ShuttlePub's later work, so the page says so once,
+-- | under the list (packet: unconnected parts must not read as applied).
+scopeNote :: Html Message
+scopeNote =
+  HE.p [ HA.class' ("mt-3 text-xs " <> T.textMuted), HA.createAttribute "data-testid" "mute-block-scope" ]
+    [ HE.text "現在反映されるのはブロックによるフォローの制限だけです。投稿の非表示とリアクションの拒否はまだ反映されません。" ]
 
 -- Settings side menu (desktop). Only the page that exists is listed.
 subnav :: Html Message
 subnav =
-  HE.aside [ HA.class' "hidden sm:block text-[13px]", HA.createAttribute "aria-label" "設定メニュー" ]
+  HE.aside [ HA.class' "hidden md:block text-[13px]", HA.createAttribute "aria-label" "設定メニュー" ]
     [ HE.div [ HA.class' ("text-[11px] font-bold tracking-widest mb-1.5 ml-3 " <> T.textMuted) ] [ HE.text "設定" ]
     , HE.a
         [ HA.href (tabPath DomainsTab)
@@ -93,7 +107,7 @@ navigate message event = preventDefault event $> Just message
 domainPanel :: Model -> Html Message
 domainPanel model =
   HE.div [ HA.createAttribute "data-testid" "domain-panel" ]
-    [ HE.div [ HA.class' "flex items-center justify-between gap-3 flex-wrap my-2 sm:mt-3 sm:mb-2 min-h-9" ]
+    [ HE.div [ HA.class' "flex items-center justify-between gap-3 flex-wrap my-2 md:mt-3 md:mb-2 min-h-9" ]
         [ filters model.domainFilter SetDomainFilter
         , HE.button
             [ HA.id "mb-add-button"
@@ -110,7 +124,7 @@ domainPanel model =
 accountPanel :: Model -> Html Message
 accountPanel model =
   HE.div [ HA.createAttribute "data-testid" "account-panel" ]
-    [ HE.div [ HA.class' "flex items-center gap-3 flex-wrap my-2 sm:mt-3 sm:mb-2 min-h-9" ]
+    [ HE.div [ HA.class' "flex items-center gap-3 flex-wrap my-2 md:mt-3 md:mb-2 min-h-9" ]
         [ filters model.actorFilter SetActorFilter ]
     , listSurface model.actors model.actorFilter (\policy -> policy.mode) (actorRow model)
     ]
@@ -165,7 +179,7 @@ failureBlock failure =
     ([ HE.span [ HA.class' T.textError ] [ HE.text (describe failure) ] ] <> map recoveryButton (recovery failure))
 
 entryClass :: String
-entryClass = "flex items-center gap-2.5 px-3 sm:px-4 py-2.5 border-t first:border-t-0 " <> T.borderTheme
+entryClass = "flex items-center gap-2.5 px-3 md:px-4 py-2.5 border-t first:border-t-0 " <> T.borderTheme
 
 domainRow :: Model -> DomainControl -> Html Message
 domainRow model control =
@@ -232,9 +246,9 @@ dialogLayer model = case model.dialog of
   Nothing -> HE.div [ HA.class' "hidden" ] []
   Just dialog ->
     HE.div
-      [ HA.class' "fixed inset-0 z-30 flex items-end sm:items-center justify-center sm:p-6"
-      , HA.onKeydown (\(Tuple key _) -> if key == "Escape" then CloseDialog else NoOp)
-      ]
+      -- Above the shell (header, tab bar) like the compose form. Keys go to the
+      -- app's single keydown handler: Esc -> CloseDialog, Tab stays in the dialog.
+      [ HA.class' "fixed inset-0 z-50 flex items-end md:items-center justify-center md:p-6" ]
       [ HE.div [ HA.class' "absolute inset-0 bg-black/55", HA.onClick CloseDialog, HA.createAttribute "data-testid" "dialog-backdrop" ] []
       , dialogView dialog
       ]
@@ -242,7 +256,7 @@ dialogLayer model = case model.dialog of
 dialogBox :: String -> Array (Html Message) -> Html Message
 dialogBox testId children =
   HE.div
-    [ HA.class' ("relative w-full sm:max-w-[440px] max-h-[92%] sm:max-h-[calc(100%-24px)] overflow-auto bg-bg-primary border border-b-0 sm:border-b " <> T.borderTheme <> " rounded-t-theme-lg sm:rounded-theme-lg shadow-[0_16px_56px_rgba(0,0,0,.45)]")
+    [ HA.class' ("relative w-full md:max-w-[440px] max-h-[92%] md:max-h-[calc(100%-24px)] overflow-auto bg-bg-primary border border-b-0 md:border-b " <> T.borderTheme <> " rounded-t-theme-lg md:rounded-theme-lg shadow-[0_16px_56px_rgba(0,0,0,.45)]")
     , HA.createAttribute "role" "dialog"
     , HA.createAttribute "aria-modal" "true"
     , HA.createAttribute "aria-labelledby" "mb-dialog-title"
@@ -252,7 +266,7 @@ dialogBox testId children =
 
 dialogHead :: Array (Html Message) -> Boolean -> Maybe Message -> Html Message
 dialogHead title scoped close =
-  HE.div [ HA.class' "flex items-start gap-2 px-4 sm:px-5 pt-4" ]
+  HE.div [ HA.class' "flex items-start gap-2 px-4 md:px-5 pt-4" ]
     ( [ HE.div [ HA.class' "flex-1 min-w-0" ]
           ( [ HE.h2 [ HA.id "mb-dialog-title", HA.class' ("text-[17px] font-semibold break-words " <> T.textHeading) ] title ]
               <> (if scoped then [ HE.div [ HA.class' ("text-xs mt-1 " <> T.textMuted) ] [ HE.text "このドメインのみが対象です" ] ] else [])
@@ -272,22 +286,22 @@ dialogHead title scoped close =
     )
 
 dialogBody :: Array (Html Message) -> Html Message
-dialogBody = HE.div [ HA.class' ("px-4 sm:px-5 pt-2 text-sm " <> T.textSecondary) ]
+dialogBody = HE.div [ HA.class' ("px-4 md:px-5 pt-2 text-sm " <> T.textSecondary) ]
 
 dialogFoot :: Array (Html Message) -> Html Message
-dialogFoot = HE.div [ HA.class' "sticky bottom-0 flex flex-col-reverse sm:flex-row sm:flex-wrap sm:justify-end gap-2 px-4 sm:px-5 pt-3 sm:pt-4 pb-4 bg-bg-primary" ]
+dialogFoot = HE.div [ HA.class' "sticky bottom-0 flex flex-col-reverse md:flex-row md:flex-wrap md:justify-end gap-2 px-4 md:px-5 pt-3 md:pt-4 pb-4 bg-bg-primary" ]
 
 footButton :: String -> Boolean -> Message -> String -> Html Message
 footButton kind disabled message label =
   HE.button
-    [ HA.type' "button", HA.disabled disabled, HA.class' (button kind <> " w-full sm:w-auto min-h-10 sm:min-h-9 px-3.5 py-1.5 text-sm"), HA.onClick message ]
+    [ HA.type' "button", HA.disabled disabled, HA.class' (button kind <> " w-full md:w-auto min-h-10 md:min-h-9 px-3.5 py-1.5 text-sm"), HA.onClick message ]
     [ HE.text label ]
 
 -- | The first footer button gets the initial focus (mb-dialog-first).
 firstButton :: String -> Boolean -> Message -> String -> Html Message
 firstButton kind disabled message label =
   HE.button
-    [ HA.id "mb-dialog-first", HA.type' "button", HA.disabled disabled, HA.class' (button kind <> " w-full sm:w-auto min-h-10 sm:min-h-9 px-3.5 py-1.5 text-sm"), HA.onClick message ]
+    [ HA.id "mb-dialog-first", HA.type' "button", HA.disabled disabled, HA.class' (button kind <> " w-full md:w-auto min-h-10 md:min-h-9 px-3.5 py-1.5 text-sm"), HA.onClick message ]
     [ HE.text label ]
 
 mono :: String -> Html Message
@@ -362,7 +376,7 @@ dialogView = case _ of
     dialogBox "unblock-dialog"
       [ dialogHead [ mono state.control.domain, HE.text " のブロックを解除しますか？" ] false Nothing
       , dialogBody
-          ( [ HE.p [ HA.class' "m-0" ] [ mono state.control.domain, HE.text " の人とフォローやリアクションなどができるようになります。" ] ]
+          ( [ HE.p [ HA.class' "m-0" ] [ mono state.control.domain, HE.text " の人とフォローできるようになります。" ] ]
               <> failureLine state.failure
           )
       , dialogFoot
@@ -378,7 +392,7 @@ dialogView = case _ of
       dialogBox "unblock-dialog"
         [ dialogHead [ mono label, HE.text " のブロックを解除しますか？" ] false Nothing
         , dialogBody
-            ( [ HE.p [ HA.class' "m-0" ] [ mono label, HE.text " とフォローやリアクションなどができるようになります。" ] ]
+            ( [ HE.p [ HA.class' "m-0" ] [ mono label, HE.text " とフォローできるようになります。" ] ]
                 <> failureLine state.failure
             )
         , dialogFoot
@@ -425,11 +439,12 @@ impactView load acknowledged pending = case load of
           Tuple true false -> "フォロー中"
           _ -> "フォロワー"
   Failed failure ->
-    [ HE.div [ HA.class' "text-xs text-error", HA.createAttribute "role" "alert", HA.createAttribute "data-error" (code failure) ]
-        [ HE.text "解除される関係を確認できませんでした" ]
-    , acknowledgement
+    [ HE.div [ HA.class' "flex flex-wrap items-center gap-2 text-xs", HA.createAttribute "role" "alert", HA.createAttribute "data-error" (code failure), HA.createAttribute "data-testid" "block-impact-error" ]
+        [ HE.span [ HA.class' "text-error" ] [ HE.text "解除される関係を確認できませんでした" ]
+        , HE.button [ HA.type' "button", HA.disabled pending, HA.class' (button "text"), HA.onClick RetryImpact ] [ HE.text "再取得" ]
+        ]
     ]
-  _ -> []
+  _ -> [ HE.div [ HA.class' ("text-xs " <> T.textMuted), HA.createAttribute "role" "status", HA.createAttribute "data-testid" "block-impact-loading" ] [ HE.text "解除される関係を確認しています…" ] ]
   where
   acknowledgement =
     HE.label [ HA.class' ("flex items-start gap-2 mt-3 text-[13px] cursor-pointer " <> T.textPrimary) ]
@@ -500,6 +515,8 @@ describe (Failure value) = case value of
   "NOT_IMPLEMENTED" -> "サーバーが未対応です"
   "UPSTREAM_UNAVAILABLE" -> "サーバーに接続できません"
   "NETWORK" -> "サーバーに接続できません"
+  "OWN_SERVER" -> "自分のサーバーは指定できません"
+  "INSTANCE_HOST_NOT_CONFIGURED" -> "自分のサーバーのドメインが設定されていません"
   _ -> "エラーが発生しました"
 
 data Recovery = ReloadLists | ReloadWholePage | LogIn
@@ -511,6 +528,8 @@ recovery (Failure value) = case value of
   "PROFILE_UNAVAILABLE" -> [ ReloadWholePage ]
   "PROFILE_REQUIRED" -> []
   "INVALID_DOMAIN" -> []
+  "OWN_SERVER" -> []
+  "INSTANCE_HOST_NOT_CONFIGURED" -> []
   _ -> [ ReloadLists ]
 
 recoveryButton :: Recovery -> Html Message

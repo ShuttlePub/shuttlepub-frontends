@@ -16,8 +16,11 @@ import { PolicyError, type ActorPolicy, type DomainControl, type PolicyMode, typ
 export type PolicyContext = {
   profiles: ProfileContextSource;
   policy: ProfilePolicySource;
-  /** This server's own hosts; they cannot be muted or blocked as a domain. */
-  selfDomains: readonly string[];
+  /**
+   * This server's own actor domain(s) (EMUMET_PUBLIC_HOST); they cannot be muted or blocked.
+   * null: not configured, so nothing can be added (never guessed).
+   */
+  selfDomains: readonly string[] | null;
 };
 
 type GqlMode = "MUTE" | "BLOCK";
@@ -47,6 +50,13 @@ async function activeProfileId(context: PolicyContext, shown: string): Promise<s
   if (!activeProfile) throw new GraphQLError("No active profile is selected", { extensions: { code: "PROFILE_REQUIRED" } });
   if (activeProfile.id !== shown) throw new GraphQLError("The selected profile changed", { extensions: { code: "PROFILE_CHANGED" } });
   return activeProfile.profileId;
+}
+
+function ownDomains(context: PolicyContext): readonly string[] {
+  if (context.selfDomains === null) {
+    throw new GraphQLError("EMUMET_PUBLIC_HOST is not configured", { extensions: { code: "INSTANCE_HOST_NOT_CONFIGURED" } });
+  }
+  return context.selfDomains;
 }
 
 function domainArgument(domain: string): string {
@@ -90,15 +100,22 @@ export const policyResolvers = {
         };
       }),
     checkDomainInput: (_root: unknown, args: { input: string }, context: PolicyContext) => {
-      const result = checkDomainInput(args.input, context.selfDomains);
+      const result = checkDomainInput(args.input, ownDomains(context));
       return "error" in result ? { domain: null, error: result.error } : { domain: result.domain, error: null };
     },
   },
   Mutation: {
     setDomainControl: (_root: unknown, args: { profile: string; domain: string; mode: GqlMode; expectedRevision?: number | null }, context: PolicyContext) =>
-      guarded(async () => domainControlOut(await context.policy.putDomainControl(
-        await activeProfileId(context, args.profile), args.domain, fromGqlMode(args.mode), args.expectedRevision ?? undefined,
-      ))),
+      guarded(async () => {
+        const profile = await activeProfileId(context, args.profile);
+        // The same rule as the dialog, enforced on the write itself.
+        if (ownDomains(context).includes(domainArgument(args.domain))) {
+          throw new GraphQLError("A Profile cannot mute or block its own server", { extensions: { code: "OWN_SERVER" } });
+        }
+        return domainControlOut(await context.policy.putDomainControl(
+          profile, args.domain, fromGqlMode(args.mode), args.expectedRevision ?? undefined,
+        ));
+      }),
     removeDomainControl: (_root: unknown, args: { profile: string; domain: string; expectedRevision: number }, context: PolicyContext) =>
       guarded(async () => {
         await context.policy.deleteDomainControl(await activeProfileId(context, args.profile), args.domain, args.expectedRevision);

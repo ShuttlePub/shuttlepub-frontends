@@ -283,6 +283,12 @@ test("real config requires app-only key and URLs; issuer is exact, not normalize
   expect(() => loadAuthConfig({ ...env, APP_ORIGIN: "http://production.example" })).toThrow();
   expect(() => loadAuthConfig({ ...env, EMUMET_API_URL: "https://user:secret@emumet.example" })).toThrow();
   expect(() => loadAuthConfig({ ...env, SHUTTLEPUB_COOKIE_SECRET_BASE64: "short" })).toThrow();
+  // The public actor host is optional at startup (never derived from EMUMET_API_URL) and must be host[:port].
+  expect(loadAuthConfig(env).emumetPublicHost).toBeUndefined();
+  expect(loadAuthConfig({ ...env, EMUMET_PUBLIC_HOST: "social.example:8443" }).emumetPublicHost).toBe("social.example:8443");
+  for (const bad of ["https://social.example", "social.example/path", "user@social.example"]) {
+    expect(() => loadAuthConfig({ ...env, EMUMET_PUBLIC_HOST: bad })).toThrow();
+  }
 });
 
 test("Kratos bridge uses its CSRF node and forwards only IdP cookies, never credentials or app cookies in responses", async () => {

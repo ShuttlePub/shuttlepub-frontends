@@ -21,8 +21,8 @@ export const profileContextFixture: ProfileContext = {
 /** Every owned Profile in mock mode; the first is the active one (ui-spec L1 switcher). */
 export const availableProfilesFixture: readonly Profile[] = [
   profileContextFixture.activeProfile!,
-  { id: "profile-fixture-2", handle: "fixture_dev", displayName: "Fixture Dev" },
-  { id: "profile-fixture-3", handle: "fixture_art", displayName: "Fixture Art" },
+  { id: "profile-fixture-2", handle: "fixture_dev", displayName: "Fixture Dev", profileId: "pf-fixture-2" },
+  { id: "profile-fixture-3", handle: "fixture_art", displayName: "Fixture Art", profileId: "pf-fixture-3" },
 ];
 /**
  * Mock selection is stateless: it validates and echoes the selected Profile but the

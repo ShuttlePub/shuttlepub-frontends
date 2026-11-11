@@ -4,7 +4,7 @@ import type { ViewerSession } from "../auth.ts";
 import { emumetContract } from "../openapi/contract.ts";
 import type { ProfileContextSource } from "../profile.ts";
 import { createMockApi } from "../rest/mock.ts";
-import { canonicalDomain, checkDomainInput } from "./domain.ts";
+import { canonicalDomain, checkDomainInput, ownActorDomain } from "./domain.ts";
 import { fakeEmumetFetch } from "./fake-emumet.ts";
 import { defaultPolicySeed, MOCK_PROFILE_ID } from "./fixtures.ts";
 import { createMockProfilePolicy } from "./mock.ts";
@@ -66,6 +66,11 @@ describe("domain input normalization (ui-spec 1-4)", () => {
   for (const [input, error] of refused) {
     test(`${JSON.stringify(input)} is refused as ${error}`, () => expect(checkDomainInput(input, self)).toEqual({ error } as never));
   }
+  test("our own actor domain comes from the public host without its port", () => {
+    expect(ownActorDomain("Emumet.Example.com:8443")).toBe("emumet.example.com");
+    expect(ownActorDomain("shuttle.example")).toBe("shuttle.example");
+    expect(ownActorDomain("127.0.0.1:8080")).toBeNull();
+  });
   test("Emumet's canonical form keeps one trailing dot rule and rejects URL syntax with 422 semantics", () => {
     expect(canonicalDomain("Example.COM.")).toEqual({ domain: "example.com" });
     expect(canonicalDomain("example.com..")).toEqual({ error: "INVALID" });
@@ -240,7 +245,7 @@ describe("real adapter against Emumet wire format", () => {
 
 describe("GraphQL policy API", () => {
   const profileOf = (id: string, profileId: string) => ({ id, handle: id, displayName: id, profileId });
-  function app(options: { policy?: ProfilePolicySource; active?: ReturnType<typeof profileOf> | null } = {}) {
+  function app(options: { policy?: ProfilePolicySource; active?: ReturnType<typeof profileOf> | null; selfDomains?: readonly string[] | null } = {}) {
     let active = options.active === undefined ? profileOf("account-a", P) : options.active;
     const profiles: ProfileContextSource = {
       mode: "mock",
@@ -249,7 +254,7 @@ describe("GraphQL policy API", () => {
       async selectProfile() { return { activeProfile: active }; },
     };
     const policy = options.policy ?? createMockProfilePolicy({ seed: { [P]: { domainControls: [], actorPolicies: [], following: ["https://example.social/users/alice", "https://example.social/users/bob", "https://sub.example.social/users/c"], followers: ["https://example.social/users/alice", "https://example.social/users/hana"] } } });
-    const handler = createGraphqlHandler({ api: createMockApi(), profiles, policy, selfDomains: ["shuttle.example"] });
+    const handler = createGraphqlHandler({ api: createMockApi(), profiles, policy, selfDomains: options.selfDomains === undefined ? ["shuttle.example"] : options.selfDomains });
     const run = async (query: string, variables: Record<string, unknown> = {}) => {
       const response = await handler(new Request("http://localhost/graphql", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query, variables }) }));
       return await response.json() as { data?: Record<string, unknown> | null; errors?: { extensions?: { code?: string } }[] };
@@ -304,6 +309,17 @@ describe("GraphQL policy API", () => {
     expect(await check("*.example.social")).toEqual({ domain: null, error: "WILDCARD" });
     expect(await check("shuttle.example")).toEqual({ domain: null, error: "OWN_SERVER" });
     expect((await run(LIST, { p: "account-a" })).data!.domainControls).toEqual([]);
+  });
+
+  test("our own actor domain is refused on input and on the write itself; unconfigured refuses both", async () => {
+    const { run } = app();
+    expect((await run(SET, { p: "account-a", d: "Shuttle.Example.", m: "BLOCK" })).errors![0]!.extensions!.code).toBe("OWN_SERVER");
+    expect((await run(LIST, { p: "account-a" })).data!.domainControls).toEqual([]);
+    expect((await run(SET, { p: "account-a", d: "sub.shuttle.example", m: "MUTE" })).data!.setDomainControl).toMatchObject({ domain: "sub.shuttle.example" });
+    const unconfigured = app({ selfDomains: null });
+    const check = await unconfigured.run("query($i: String!) { checkDomainInput(input: $i) { domain error } }", { i: "example.social" });
+    expect(check.errors![0]!.extensions!.code).toBe("INSTANCE_HOST_NOT_CONFIGURED");
+    expect((await unconfigured.run(SET, { p: "account-a", d: "example.social", m: "MUTE" })).errors![0]!.extensions!.code).toBe("INSTANCE_HOST_NOT_CONFIGURED");
   });
 
   test("individual mutes/blocks: list, remove and re-add (undo)", async () => {

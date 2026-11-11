@@ -11,8 +11,8 @@ export type GraphQLContext = {
   profiles: ProfileContextSource;
   /** Emumet Profile mute/block settings (mock or real, fixed at startup like api). */
   policy: ProfilePolicySource;
-  /** This server's own hosts (refused as a muted/blocked domain). */
-  selfDomains: readonly string[];
+  /** This server's own actor domain(s) (EMUMET_PUBLIC_HOST), refused as a muted/blocked domain; null = not configured. */
+  selfDomains: readonly string[] | null;
 };
 
 export const ERROR_CODES: Record<ShuttlePubApiErrorKind, string> = {

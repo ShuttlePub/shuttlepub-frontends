@@ -2,6 +2,7 @@ import type { AppConfig } from "./config.ts";
 import type { AuthConfig } from "./auth-config.ts";
 import { AuthError } from "./auth-error.ts";
 import { checkOrigin, createAuth, privateResponse, withCookies, type Auth, type FetchLike, type ViewerSession } from "./auth.ts";
+import { ownActorDomain } from "./policy/domain.ts";
 import { createMockProfilePolicy } from "./policy/mock.ts";
 import { createRealProfilePolicy } from "./policy/real.ts";
 import type { ProfilePolicySource } from "./policy/source.ts";
@@ -27,9 +28,14 @@ export type AppDeps = {
   mockPolicy?: ProfilePolicySource;
 };
 
-/** Hosts of this deployment; a person cannot mute or block their own server as a domain. */
-function selfDomainsOf(...origins: string[]): string[] {
-  return [...new Set(origins.map((origin) => new URL(origin).hostname))];
+/** The mock deployment's actor domain (the agreed D08 mock's own server). */
+export const MOCK_OWN_DOMAIN = "shuttle.example";
+
+/** Our own actor domain from EMUMET_PUBLIC_HOST; null when not configured (nothing guessed). */
+function selfDomainsOf(publicHost: string | undefined): string[] | null {
+  if (!publicHost) return null;
+  const domain = ownActorDomain(publicHost);
+  return domain === null ? null : [domain];
 }
 
 export function createApp(config: AppConfig, deps: AppDeps = {}): App {
@@ -41,15 +47,8 @@ export function createApp(config: AppConfig, deps: AppDeps = {}): App {
   // session (no auth config) must never reach mock data: every call is UNAUTHENTICATED.
   const mockPolicy = config.mode === "mock" ? deps.mockPolicy ?? createMockProfilePolicy()
     : createRealProfilePolicy({ baseUrl: "http://unconfigured.invalid", session: () => Promise.reject(new AuthError("UNAUTHENTICATED", 401)) });
-  const handlers = new Map<string, (request: Request) => Promise<Response>>();
-  // The own host in mock mode is the one serving the page.
-  const mockHandler = (request: Request) => {
-    const selfDomains = selfDomainsOf(request.url);
-    const key = selfDomains.join(",");
-    let handler = handlers.get(key);
-    if (!handler) handlers.set(key, handler = createGraphqlHandler({ api, profiles, policy: mockPolicy, selfDomains }));
-    return handler(request);
-  };
+  const mockHandler = createGraphqlHandler({ api, profiles, policy: mockPolicy,
+    selfDomains: config.mode === "mock" ? [MOCK_OWN_DOMAIN] : null });
   return { config, api, profiles, ...(auth ? { auth } : {}),
     async handleGraphql(request) {
       if (config.mode === "mock") return mockHandler(request);
@@ -77,7 +76,7 @@ export function createApp(config: AppConfig, deps: AppDeps = {}): App {
         fetch: deps.emumetFetch,
         async invalidated() { cookies.push(await auth.clearSession()); },
       });
-      const selfDomains = selfDomainsOf(auth.config.appOrigin, auth.config.emumetApiUrl);
+      const selfDomains = selfDomainsOf(auth.config.emumetPublicHost);
       try {
         const response = await createGraphqlHandler({ api, profiles: requestProfiles, policy, selfDomains })(request);
         return privateResponse(withCookies(response, cookies));
