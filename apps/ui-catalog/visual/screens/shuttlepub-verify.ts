@@ -610,22 +610,33 @@ async function verifyQuickReactionTiming(page: Page, viewport: Viewport) {
   await expect(toast).toContainText("取り消せませんでした");
   await expect(toast).toHaveAttribute("data-error", /.+/);
 
-  // pagehide sends with keepalive; pageshow (persisted) ends the undo and reloads.
+  // Restore BEFORE the keepalive completes. No GET or interaction may race it.
   await expect(toast).toHaveCount(0, { timeout: 10_000 });
   await soraMine.click();
   await expect(toast).toContainText("取り消しました");
   const before = removals();
-  const keepalive = page.waitForResponse((response) => response.url().endsWith("/graphql")
-    && /^\s*mutation\s+RemoveNoteReaction\b/.test(String(response.request().postDataJSON()?.query ?? "")));
+  const finishKeepalive = await gateOperation(page, "RemoveNoteReaction", "pass");
+  let restoresReads = 0;
+  const observeRestoreReads = (request: import("@playwright/test").Request) => {
+    if (!request.url().endsWith("/graphql")) return;
+    const query = String(request.postDataJSON()?.query ?? "");
+    if (/PostReactions|QuickReactionSettings/.test(query)) restoresReads++;
+  };
+  page.on("request", observeRestoreReads);
   await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true })));
-  await keepalive;
-  expect(removals()).toBe(before + 1);
+  await expect.poll(removals).toBe(before + 1);
   await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })));
   await expect(toast).toHaveCount(0);
-  await expect(soraButton).toBeVisible();
+  await expect(soraButton).toHaveAttribute("aria-disabled", "true");
+  await page.waitForTimeout(200);
+  expect(restoresReads, "no revalidation while keepalive is unresolved").toBe(0);
+  await finishKeepalive();
+  await expect.poll(() => restoresReads).toBeGreaterThan(0);
+  await expect(soraButton).not.toHaveAttribute("aria-disabled", "true");
   await page.waitForTimeout(7_000);
   expect(removals(), "nothing resent after the restore").toBe(before + 1);
   await expect(soraMine).toHaveCount(0);
+  page.off("request", observeRestoreReads);
 
   // S2: deleting a favourite while its save is slow keeps the undo waiting.
   await page.goto("/settings", { waitUntil: "networkidle" });

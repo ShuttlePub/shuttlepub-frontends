@@ -75,10 +75,10 @@ step model message = fst (QR.update model message)
 
 -- | The request id in flight for a Note (what its answer carries).
 requestOf :: Model -> String -> Int
-requestOf model noteId = maybe 0 _.request (Array.find (\entry -> entry.noteId == noteId) model.reaction.inFlight)
+requestOf model noteId = maybe 0 _.request (Array.find (\entry -> entry.post.noteId == noteId && entry.started) model.reactionWrites.notes)
 
 busyOn :: Model -> String -> Boolean
-busyOn model noteId = Array.any (\entry -> entry.noteId == noteId) model.reaction.inFlight
+busyOn model noteId = Array.any (\entry -> entry.post.noteId == noteId && entry.started) model.reactionWrites.notes
 
 saved :: Model -> { postId :: String, noteId :: String } -> Either ApiError (Maybe Emoji) -> Model
 saved model post result = step model (ReactionSaved model.reaction.epoch (requestOf model post.noteId) post Nothing result)
@@ -111,6 +111,12 @@ testReaction = do
   testToastHoldReasons
   testProfileRoundTrip
   testRemovalFailureClosesPicker
+  testCompletedDeleteRejectsOldGet
+  testFailedReselectAfterSwitch
+  testQueuedProfileRoundTrip
+  testSettingsLaneRoundTrip
+  testRestoreWaits
+  testConflictRefetchFailureRetry
 
 testRules :: Effect Unit
 testRules = do
@@ -205,7 +211,7 @@ testDoubleSubmitAndFailure = do
     first = step ready (ReactWithChip mika thumbs)
     second = step first (ReactWithChip mika party)
   assertEqual "second submit ignored" (mineOn second mika.noteId) (Just thumbs)
-  assertEqual "one request in flight" (Array.length (Array.filter (\entry -> entry.noteId == mika.noteId) second.reaction.inFlight)) 1
+  assertEqual "one request in flight" (Array.length (Array.filter (\entry -> entry.post.noteId == mika.noteId) second.reactionWrites.notes)) 1
   assertTrue "removal ignored while in flight" (isNothing (step first (RemoveMine mika)).reaction.pendingRemoval)
   let
     failed = saved first mika (Left (NotImplemented "501"))
@@ -262,7 +268,7 @@ testProfileSwitch = do
   assertTrue "pending removal sent (not kept)" (isNothing switched.reaction.pendingRemoval)
   -- Late answers for the previous Profile are not mixed in.
   let
-    late = step switched (PostReactionsLoaded busy.reaction.epoch (Right reactions))
+    late = step switched (PostReactionsLoaded busy.reaction.epoch (map (\entry -> { noteId: entry.noteId, sequence: 0 }) reactions) (Right reactions))
   assertEqual "late reactions ignored" (length late.reaction.posts) 0
   assertTrue "late settings ignored" ((step switched (SettingsLoaded busy.reaction.epoch busy.reaction.settingsRequest (Right { profileId: me.id, revision: 3, favorites: [ thumbs ] }))).reaction.settings == Loading)
   let
@@ -358,7 +364,7 @@ testToastReplacementConfirmsRemoval = do
   -- The toast going away sends it (only once).
   let
     expired = expire first
-  assertEqual "sent once" (Array.length (Array.filter (\entry -> entry.noteId == sora.noteId) expired.reaction.inFlight)) 1
+  assertEqual "sent once" (Array.length (Array.filter (\entry -> entry.post.noteId == sora.noteId) expired.reactionWrites.notes)) 1
   assertTrue "undo after confirmation does nothing" (mineOn (step expired ToastUndo) sora.noteId == Nothing)
 
 -- | Review #2: a DELETE in flight is the request of its Note; nothing else is sent for
@@ -371,11 +377,11 @@ testDeleteSerializesWithPut = do
   assertTrue "no picker while DELETE in flight" (isNothing (step sent (OpenPicker (ReactTo sora) "x")).reaction.picker)
   assertEqual "no PUT while DELETE in flight" (mineOn (step sent (ReactWithChip sora thumbs)) sora.noteId) Nothing
   let
-    stale = step sent (PostReactionsLoaded sent.reaction.epoch (Right reactions))
+    stale = step sent (PostReactionsLoaded sent.reaction.epoch (map (\entry -> { noteId: entry.noteId, sequence: 0 }) reactions) (Right reactions))
   assertEqual "fetch keeps the removal in flight" (mineOn stale sora.noteId) Nothing
   let
     pending = step ready (RemoveMine sora)
-    staleBeforeSend = step pending (PostReactionsLoaded pending.reaction.epoch (Right reactions))
+    staleBeforeSend = step pending (PostReactionsLoaded pending.reaction.epoch (map (\entry -> { noteId: entry.noteId, sequence: 0 }) reactions) (Right reactions))
   assertEqual "fetch keeps the unsent removal" (mineOn staleBeforeSend sora.noteId) Nothing
   case sent.reaction.toast, (step ready (RemoveMine sora)).reaction.pendingRemoval of
     _, Just removal -> do
@@ -504,13 +510,13 @@ testProfileRoundTrip = do
   assertTrue "new generation" (back.reaction.epoch /= first.reaction.epoch)
   let
     lateSave = step back (ReactionSaved first.reaction.epoch (requestOf first mika.noteId) mika Nothing (Right (Just thumbs)))
-    lateList = step back (PostReactionsLoaded first.reaction.epoch (Right reactions))
+    lateList = step back (PostReactionsLoaded first.reaction.epoch (map (\entry -> { noteId: entry.noteId, sequence: 0 }) reactions) (Right reactions))
     lateSettings = step back (SettingsLoaded first.reaction.epoch first.reaction.settingsRequest (Right { profileId: me.id, revision: 1, favorites: [] }))
   assertEqual "late PUT answer dropped" (mineOn lateSave mika.noteId) Nothing
   assertEqual "late list dropped" (length lateList.reaction.posts) 0
   assertTrue "late settings dropped" (lateSettings.reaction.settings == Loading)
   let
-    current = step back (PostReactionsLoaded back.reaction.epoch (Right reactions))
+    current = step lateSave (PostReactionsLoaded back.reaction.epoch (readSnapshot lateSave) (Right reactions))
   assertEqual "current answer taken" (length current.reaction.posts) (length reactions)
 
 -- | Review #9 (注意 2 / 6): a removal that fails brings my chip back and closes the
@@ -536,3 +542,145 @@ testRemovalFailureClosesPicker = do
 
 setMineIn :: String -> Maybe Emoji -> Array PostReactions -> Array PostReactions
 setMineIn noteId mine = map (\entry -> if entry.noteId == noteId then entry { mine = mine } else entry)
+
+-- | Snapshot exactly what loadPosts captures when its GET starts.
+readSnapshot :: Model -> Array { noteId :: String, sequence :: Int }
+readSnapshot model = map
+  ( \entry ->
+      { noteId: entry.noteId
+      , sequence: maybe 0 _.sequence (Array.find (\version -> Just version.profileId == model.reaction.profileId && version.noteId == entry.noteId) model.reactionWrites.versions)
+      }
+  )
+  reactions
+
+-- F1: the GET starts first, but arrives AFTER the DELETE is completely settled.
+testCompletedDeleteRejectsOldGet :: Effect Unit
+testCompletedDeleteRejectsOldGet = do
+  let
+    snapshot = readSnapshot ready
+    removed = step ready (RemoveMine sora)
+    sent = expire removed
+  case removed.reaction.pendingRemoval of
+    Nothing -> throw "expected removal"
+    Just removal -> do
+      let
+        done = step sent (RemovalSent sent.reaction.epoch (requestOf sent sora.noteId) removal (Right unit))
+        late = step done (PostReactionsLoaded done.reaction.epoch snapshot (Right reactions))
+      assertTrue "DELETE completed before old GET arrives" (not (busyOn done sora.noteId))
+      assertEqual "old GET never resurrects completed removal" (mineOn late sora.noteId) Nothing
+      assertEqual "unmodified keys from old GET still apply" (length late.reaction.posts) 2
+      let
+        fresh = step done (PostReactionsLoaded done.reaction.epoch (readSnapshot done) (Right (setMineIn sora.noteId Nothing reactions)))
+      assertEqual "GET started after DELETE is accepted" (mineOn fresh sora.noteId) Nothing
+
+-- F2: cleanup is executed against A despite the screen now showing B.
+testFailedReselectAfterSwitch :: Effect Unit
+testFailedReselectAfterSwitch = do
+  let
+    removed = step ready (RemoveMine sora)
+    put = step removed (ReactWithChip sora thumbs)
+    switched = fst (QR.syncProfile (put { profileContext = Loaded { activeProfile: Just other } }))
+    Tuple failed effects = QR.update switched (ReactionSaved put.reaction.epoch (requestOf put sora.noteId) sora Nothing (Left (UpstreamError "failed")))
+  assertEqual "B remains visible" failed.reaction.profileId (Just other.id)
+  assertTrue "no A data or failure toast mixed into B" (Array.null failed.reaction.posts && isNothing failed.reaction.toast)
+  assertTrue "cleanup effect issued even after switch" (length effects > 0)
+  case Array.head failed.reactionWrites.notes of
+    Just cleanup -> do
+      assertEqual "cleanup targets original Profile A" cleanup.profileId me.id
+      assertTrue "cleanup is a started DELETE with original removal" (cleanup.started && isNothing cleanup.mine && isJust cleanup.removal)
+      case cleanup.removal of
+        Just removal -> do
+          let done = step failed (RemovalSent cleanup.epoch cleanup.request removal (Right unit))
+          assertTrue "cleanup drains original lane" (Array.null done.reactionWrites.notes)
+        Nothing -> throw "expected cleanup"
+    Nothing -> throw "cleanup lost"
+
+-- F3: A PUT1 is deliberately unresolved through A -> B -> A -> PUT2.
+testQueuedProfileRoundTrip :: Effect Unit
+testQueuedProfileRoundTrip = do
+  let
+    first = step ready (ReactWithChip mika thumbs)
+    toB = fst (QR.syncProfile (first { profileContext = Loaded { activeProfile: Just other } }))
+    back = fst (QR.syncProfile (toB { profileContext = Loaded { activeProfile: Just me } }))
+    Tuple second effects = QR.update back (ReactWithChip mika party)
+    writes = Array.filter (\write -> write.post.noteId == mika.noteId) second.reactionWrites.notes
+    independent = step toB (ReactWithChip mika party)
+  assertEqual "both intents retained FIFO" (map _.mine writes) [ Just thumbs, Just party ]
+  assertEqual "another Profile has an independent lane" (map _.started independent.reactionWrites.notes) [ true, true ]
+  assertEqual "PUT2 has not been sent before PUT1 answers" (map _.started writes) [ true, false ]
+  assertEqual "only focus effect before PUT1 answers" (length effects) 1
+  let
+    Tuple afterFirst sent = QR.update second (ReactionSaved first.reaction.epoch (requestOf first mika.noteId) mika Nothing (Right (Just thumbs)))
+  assertEqual "PUT1 response cannot replace PUT2 optimistic state" (mineOn afterFirst mika.noteId) (Just party)
+  assertEqual "PUT2 issued only after PUT1 completion" (map _.started afterFirst.reactionWrites.notes) [ true ]
+  assertEqual "one network effect for PUT2" (length sent) 1
+  let
+    Tuple duplicate duplicateEffects = QR.update afterFirst (ReactionSaved first.reaction.epoch (requestOf first mika.noteId) mika Nothing (Right (Just thumbs)))
+  assertEqual "duplicate completion cannot issue PUT2 twice" (length duplicateEffects) 0
+  assertEqual "duplicate completion leaves PUT2 intact" (map _.request duplicate.reactionWrites.notes) (map _.request afterFirst.reactionWrites.notes)
+  let
+    done = saved afterFirst mika (Right (Just party))
+  assertTrue "lane drained" (Array.null done.reactionWrites.notes)
+  assertEqual "final server response is PUT2" (mineOn done mika.noteId) (Just party)
+  -- Failure cleanup is also before PUT2, even after A -> B -> A.
+  let
+    reselected = step (step ready (RemoveMine sora)) (ReactWithChip sora thumbs)
+    b = fst (QR.syncProfile (reselected { profileContext = Loaded { activeProfile: Just other } }))
+    a = fst (QR.syncProfile (b { profileContext = Loaded { activeProfile: Just me } }))
+    queued = step a (ReactWithChip sora party)
+    cleanup = step queued (ReactionSaved reselected.reaction.epoch (requestOf reselected sora.noteId) sora Nothing (Left (UpstreamError "failed")))
+  assertEqual "cleanup precedes PUT2" (map _.mine cleanup.reactionWrites.notes) [ Nothing, Just party ]
+  assertEqual "PUT2 waits for cleanup" (map _.started cleanup.reactionWrites.notes) [ true, false ]
+
+-- Common settings use the same lifetime rule, with a Profile-wide busy lane.
+testSettingsLaneRoundTrip :: Effect Unit
+testSettingsLaneRoundTrip = do
+  let
+    previous = { profileId: me.id, revision: 3, favorites: [ thumbs, party, oldBlob ] }
+    first = step ready (MoveFavorite 1 0)
+    b = fst (QR.syncProfile (first { profileContext = Loaded { activeProfile: Just other } }))
+    a = fst (QR.syncProfile (b { profileContext = Loaded { activeProfile: Just me } }))
+  assertTrue "A settings editor waits for old save" (a.reaction.savingSettings && a.reaction.settings == Loading)
+  assertEqual "no overlapping settings mutation" (length (step a (RemoveFavorite 0)).reactionWrites.settings) 1
+  let
+    Tuple completed effects = QR.update a (SettingsSaved first.reaction.epoch first.reaction.settingsRequest previous [ party, thumbs, oldBlob ] (Right previous { revision = 4, favorites = [ party, thumbs, oldBlob ] }))
+  assertTrue "save settled independent of epoch" (Array.null completed.reactionWrites.settings)
+  assertTrue "fresh revision fetched after old save" (length effects == 1 && completed.reaction.settings == Loading)
+
+-- F4 model half: no reads or actions while keepalive is unresolved.
+testRestoreWaits :: Effect Unit
+testRestoreWaits = do
+  let
+    removed = step ready (RemoveMine sora)
+    Tuple waiting effects = QR.update removed PageRestoring
+  assertTrue "waiting with undo ended" (waiting.reaction.restoring && isNothing waiting.reaction.pendingRemoval && isNothing waiting.reaction.toast)
+  assertEqual "only DOM cleanup, no early GET" (length effects) 1
+  assertEqual "PUT blocked during restore" (length (step waiting (ReactWithChip mika thumbs)).reactionWrites.notes) 0
+  assertEqual "settings save blocked during restore" (length (step waiting (RemoveFavorite 0)).reactionWrites.settings) 0
+  let
+    Tuple restored reads = QR.update waiting PageRestored
+  assertTrue "after keepalive settled revalidation starts" (not restored.reaction.restoring && restored.reaction.settings == Loading && length reads >= 2)
+
+-- F5: 409 -> refetch fails -> retry obtains a revision -> saves retained intent.
+testConflictRefetchFailureRetry :: Effect Unit
+testConflictRefetchFailureRetry = do
+  let
+    previous = { profileId: me.id, revision: 3, favorites: [ thumbs, party, oldBlob ] }
+    intended = [ party, thumbs, oldBlob ]
+    saving = step ready (MoveFavorite 1 0)
+    conflict = settingsSaved saving previous intended (Left (RevisionConflict "stale"))
+    failed = step conflict (SettingsLoaded conflict.reaction.epoch conflict.reaction.settingsRequest (Left (UpstreamError "offline")))
+    Tuple retry effects = QR.update failed RetrySettings
+  assertTrue "refetch really failed"
+    ( case failed.reaction.settings of
+        Failed _ -> true
+        _ -> false
+    )
+  assertTrue "retry launches GET and disables duplicate retry" (retry.reaction.settings == Loading && retry.reaction.savingSettings && length effects == 1)
+  let
+    againFailed = step retry (SettingsLoaded retry.reaction.epoch retry.reaction.settingsRequest (Left (UpstreamError "still offline")))
+  assertTrue "another GET failure releases retry" (not againFailed.reaction.savingSettings && isJust againFailed.reaction.settingsProblem)
+  let
+    reloaded = step retry (SettingsLoaded retry.reaction.epoch retry.reaction.settingsRequest (Right previous { revision = 5, favorites = [ party ] }))
+  assertEqual "retained intent saved after successful refetch" (favorites reloaded) (map emojiKey intended)
+  assertTrue "fresh-revision PUT now started" (reloaded.reaction.savingSettings && length reloaded.reactionWrites.settings == 1)

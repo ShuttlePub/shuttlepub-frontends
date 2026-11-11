@@ -21,6 +21,8 @@ module App.Reaction
   , noHolds
   , held
   , PendingRemoval
+  , NoteWrite
+  , NoteRead
   , SettingsProblem
   , DetailFilter(..)
   , ReactionMsg(..)
@@ -67,6 +69,21 @@ type PostReactions = { noteId :: String, mine :: Maybe Emoji, others :: Array Re
 type QuickSettings = { profileId :: String, revision :: Int, favorites :: Array Emoji }
 
 type PostRef = { postId :: String, noteId :: String }
+
+-- | Durable FIFO entry. Only the first entry of each Profile x Note may start.
+-- | mine = Nothing is DELETE; removal also remembers the undo a PUT replaced.
+type NoteWrite =
+  { profileId :: String
+  , epoch :: Int
+  , request :: Int
+  , post :: PostRef
+  , mine :: Maybe Emoji
+  , removal :: Maybe PendingRemoval
+  , started :: Boolean
+  }
+
+-- | A GET is valid only while its keys retain their starting write sequence.
+type NoteRead = { noteId :: String, sequence :: Int }
 
 -- | What a pick does: react to a post, or add / replace a favourite (settings, S6 / S4).
 data PickerTarget = ReactTo PostRef | AddFavorite | ReplaceFavorite Int
@@ -155,10 +172,10 @@ instance DecodeJson DetailFilter where
   decodeJson = genericDecodeJson
 
 data ReactionMsg
-  -- Answers carry the Profile context generation (epoch) they were asked in, and
-  -- requests of one Note / of the settings their request id: anything older is dropped.
+  -- Answers carry epoch + request id. Old reads cannot update the screen, but old
+  -- writes must still settle their transport lane and run any required cleanup.
   = SettingsLoaded Int Int (Either ApiError QuickSettings)
-  | PostReactionsLoaded Int (Either ApiError (Array PostReactions))
+  | PostReactionsLoaded Int (Array NoteRead) (Either ApiError (Array PostReactions))
   | CustomEmojisLoaded (Either ApiError (Array Emoji))
   | OpenPicker PickerTarget String
   | ClosePicker
@@ -186,8 +203,9 @@ data ReactionMsg
   | DragDrop Int
   | DragEnd
   | SelectDetailFilter DetailFilter
-  -- | The page came back from the back/forward cache: what was pending when it was
-  -- | hidden was handed to keepalive (unconfirmed), so the screen is read again.
+  -- | BFCache restore has two phases: end undo/freeze, then reload once pagehide's
+  -- | keepalive promises settle (success or failure).
+  | PageRestoring
   | PageRestored
 
 maxFavorites :: Int

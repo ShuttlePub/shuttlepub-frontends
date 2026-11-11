@@ -184,3 +184,22 @@ SSR → hydration の mobile / desktop 確認、シェルのキーボード・�
 クイックリアクション (キーボードでの反応・解除・「元に戻す」でピッカーが閉じること・トースト消滅後の DELETE・
 常用絵文字の設定・2 セッションでの共有と 409)、real モード (501 / 500) の表示確認は visual CI 経路で実行します
 (`apps/ui-catalog/visual/screens/shuttlepub-verify.ts`、画面撮影は `visual/screens/cases.ts` の `ShuttlePub-*`)。
+
+### クイックリアクションの通信寿命
+
+画面用の `reaction` (Profile / epoch) と通信用の `reactionWrites` は別管理です。
+Profile×Note の PUT / DELETE は FIFO で送り、Profile 切替・往復・BFCache 復帰でも
+未完了の送信と失敗時の後始末を失いません。再選択失敗後の解除も元 Profile の
+同じキューで、後続 PUT より先に送ります。画面への応答適用だけを epoch で制限します。
+同じ画面の二重押下は無視し、旧 epoch の送信中に戻ってきた画面の操作はキューへ積みます。
+常用設定は Profile 単位の送信を保持し、往復時は送信完了後の最新 revision 取得まで編集を待ちます。
+
+投稿 GET は開始時のキー別 write sequence と照合し、途中で書き込みが入ったキーを
+応答時に破棄します (すでに DELETE が完了していても古い GET で復活させません)。
+BFCache 復帰は同期的に操作・Undo を止め、pagehide keepalive の応答本文読み取りまで
+決着してから再取得します。失敗時も DELETE を重送せず、再取得で正します。
+409 の再取得が失敗しても「もう一度保存」は再取得→取得した revision で再保存に進みます。
+
+回帰テスト: `test/Test/Reaction.purs` が上記の順序を固定し、
+`bff/reaction-dom.test.js` が未完了 keepalive のまま復帰・通信失敗・同期例外を検証します。
+verify の desktop/mobile も keepalive を保留したまま pageshow を発火し、早過ぎる GET と操作再開を検査します。

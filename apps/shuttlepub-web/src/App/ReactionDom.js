@@ -3,6 +3,9 @@
 
 let pendingRemoval = null;
 let pageHideRegistered = false;
+// Retain settled outcomes as well as pending Promises until the restore barrier.
+const keepalives = new Set();
+let restoreSerial = 0;
 
 const REMOVE_MUTATION =
   "mutation RemoveNoteReaction($profileId: ID!, $noteId: ID!) { removeNoteReaction(profileId: $profileId, noteId: $noteId) { noteId } }";
@@ -13,17 +16,24 @@ const sendPendingOnPageHide = () => {
   if (pendingRemoval === null) return;
   const { profileId, noteId } = pendingRemoval;
   pendingRemoval = null;
+  // Start immediately on pagehide (not in a deferred microtask). Even synchronous
+  // fetch errors become a settled failure, and restoration always revalidates.
+  let sent;
   try {
-    fetch("/graphql", {
+    sent = fetch("/graphql", {
       method: "POST",
       keepalive: true,
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ query: REMOVE_MUTATION, variables: { profileId, noteId } }),
-    }).catch(() => undefined);
+    });
   } catch {
-    // Nothing else can be done while the page is unloading.
+    sent = Promise.reject(new Error("keepalive did not start"));
   }
+  const outcome = Promise.resolve(sent)
+    .then(async (response) => response.ok && !(await response.json()).errors?.length)
+    .catch(() => false);
+  keepalives.add(outcome);
 };
 
 export const setPendingRemoval = (profileId) => (noteId) => () => {
@@ -75,11 +85,18 @@ export const focusIfLost = (id) => () => {
   else setTimeout(run, 0);
 };
 
-// A page restored from the back/forward cache keeps its in-memory state, including a
-// removal that pagehide already handed to keepalive: tell the app so it can drop it.
-export const onPageRestored = (callback) => () => {
+// Freeze interaction synchronously, but do not refetch until all pagehide writes
+// settle. A failed / ambiguous keepalive is not retried: GET corrects local truth.
+export const onPageRestored = (begin) => (complete) => () => {
   if (typeof window === "undefined") return;
   window.addEventListener("pageshow", (event) => {
-    if (event.persisted) callback();
+    if (!event.persisted) return;
+    const serial = ++restoreSerial;
+    const waiting = [...keepalives];
+    begin();
+    Promise.all(waiting).then(() => {
+      for (const request of waiting) keepalives.delete(request);
+      if (serial === restoreSerial) complete();
+    });
   });
 };

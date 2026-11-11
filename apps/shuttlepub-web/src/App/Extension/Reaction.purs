@@ -92,7 +92,7 @@ reactionsOf :: Model -> Post -> Maybe PostReactions
 reactionsOf model post = postReactionsFor model.reaction.posts post.noteId
 
 inFlight :: Model -> Post -> Boolean
-inFlight model post = any (\entry -> entry.noteId == post.noteId) model.reaction.inFlight
+inFlight model post = model.reaction.restoring || any (\entry -> Just entry.profileId == model.reaction.profileId && entry.epoch == model.reaction.epoch && entry.post.noteId == post.noteId) model.reactionWrites.notes
 
 -- | The emoji itself: a character, the custom emoji image, or a placeholder once the
 -- | image is gone (deleted). Decorative: the control around it carries the name.
@@ -402,7 +402,7 @@ settingsProfileRows model _ =
           Just problem -> HE.p [ HA.class' "sp-fav-problem", attr "role" "alert", attr "data-error" (Error.tag problem.error), testId "favorites-problem" ]
             ( [ HE.text (problemText problem.error) ]
                 <> case problem.retry of
-                  Just _ -> [ HE.button [ HA.type' "button", HA.class' "sp-text-btn", HA.onClick (reaction RetrySettings), HA.disabled model.reaction.savingSettings ] [ HE.text "もう一度保存" ] ]
+                  Just _ -> [ HE.button [ HA.type' "button", HA.class' "sp-text-btn", HA.onClick (reaction RetrySettings), HA.disabled (model.reaction.savingSettings || model.reaction.restoring) ] [ HE.text "もう一度保存" ] ]
                   Nothing -> []
             )
           Nothing -> emptySlot
@@ -432,7 +432,7 @@ favoriteChips model favorites = HE.ul
         else []
   )
   where
-  saving = model.reaction.savingSettings
+  saving = model.reaction.savingSettings || model.reaction.restoring
   enabled message = if saving then [ attr "aria-disabled" "true" ] else [ HA.onClick (reaction message) ]
   chip index emoji =
     let

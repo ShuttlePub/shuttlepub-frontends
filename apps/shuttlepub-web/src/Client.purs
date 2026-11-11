@@ -38,7 +38,7 @@ main = do
   isMobile <- isMobileViewport
   send appId (Hydrated now isMobile)
   onViewportChange \mobile -> send appId (ViewportChanged mobile)
-  onPageRestored (send appId (Reaction PageRestored))
+  onPageRestored (send appId (Reaction PageRestoring)) (send appId (Reaction PageRestored))
 
   void $ paths handlePath nav
   where

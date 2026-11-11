@@ -6,7 +6,7 @@ import App.Api.Error (ApiError)
 import App.Emoji (Emoji)
 import App.Post (Post, TimelineTab(..), Visibility(..))
 import App.Profile (Profile, ProfileContext)
-import App.Reaction (DetailFilter(..), PendingRemoval, PickerState, PostReactions, QuickSettings, SettingsProblem, Toast)
+import App.Reaction (DetailFilter(..), NoteWrite, PendingRemoval, PickerState, PostReactions, QuickSettings, SettingsProblem, Toast)
 import App.Route (Route)
 import Data.Argonaut.Decode.Class (class DecodeJson)
 import Data.Argonaut.Decode.Generic (genericDecodeJson)
@@ -105,6 +105,14 @@ type Model =
   , compose :: Maybe ComposeState
   , profileMenu :: Maybe ProfileMenuState
   , reaction :: ReactionModel
+  -- Transport lifetime is independent of the visible Profile/epoch.
+  , reactionWrites :: ReactionWrites
+  }
+
+type ReactionWrites =
+  { notes :: Array NoteWrite
+  , versions :: Array { profileId :: String, noteId :: String, sequence :: Int }
+  , settings :: Array { profileId :: String, epoch :: Int, request :: Int }
   }
 
 -- | Quick reaction (D03, App.Reaction) for the acting Profile `profileId`. Everything
@@ -120,12 +128,11 @@ type ReactionModel =
   , settingsRequest :: Int
   , settings :: RemoteData QuickSettings
   , savingSettings :: Boolean
+  , retryAfterLoad :: Boolean
+  , restoring :: Boolean
   , settingsProblem :: Maybe SettingsProblem
   , posts :: Array PostReactions
   , postsError :: Maybe ApiError
-  -- Notes with a PUT or DELETE in flight and its request id: one request per Note
-  -- at a time (double-submit guard; a DELETE and a later PUT never overlap).
-  , inFlight :: Array { noteId :: String, request :: Int }
   , pendingRemoval :: Maybe PendingRemoval
   , picker :: Maybe PickerState
   , chipMenu :: Maybe Int
@@ -144,10 +151,11 @@ initialReactionModel =
   , settingsRequest: 0
   , settings: NotAsked
   , savingSettings: false
+  , retryAfterLoad: false
+  , restoring: false
   , settingsProblem: Nothing
   , posts: []
   , postsError: Nothing
-  , inFlight: []
   , pendingRemoval: Nothing
   , picker: Nothing
   , chipMenu: Nothing
@@ -177,6 +185,7 @@ initialModel route =
   , compose: Nothing
   , profileMenu: Nothing
   , reaction: initialReactionModel
+  , reactionWrites: { notes: [], versions: [], settings: [] }
   }
 
 emptyCompose :: String -> ComposeState

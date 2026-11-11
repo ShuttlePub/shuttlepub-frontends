@@ -11,12 +11,12 @@
 -- |    undo toast expires, is replaced or dropped, the screen changes or the page is
 -- |    hidden. Undo sends nothing (D03 q09). The pending removal and the undo toast
 -- |    always come and go together (setToast).
--- |  - One request per Note at a time, PUT and DELETE alike (inFlight); one settings
--- |    request at a time (savingSettings). Fetched state never overwrites a Note that
--- |    has an unsent removal or a request in flight.
--- |  - Requests carry the Profile context generation (epoch) and a request id; answers
--- |    of another generation or an older request are dropped. A Profile change (also
--- |    A -> B -> A) or a restore from the back/forward cache starts a new generation.
+-- |  - Transport lives in Model.reactionWrites, outside the screen generation:
+-- |    FIFO per Profile x Note (PUT, DELETE and failure cleanup alike), one settings
+-- |    save per Profile. Switching / restoring never discards outstanding writes.
+-- |  - Every write is settled, but only the current epoch may change visible UI.
+-- |    GETs carry starting write sequences; a changed / busy key is discarded even
+-- |    if the mutation has already completed by the time the GET arrives.
 module Client.Reaction
   ( update
   , syncProfile
@@ -39,10 +39,10 @@ import App.Extension.Reaction (chipMenuId, favoriteAddId, favoriteChipId, mineCh
 import App.Message (Message(..))
 import App.Model (Model, ReactionModel, RemoteData(..), activeProfile, fromEither, initialReactionModel)
 import App.Post (Post)
-import App.Reaction (DetailFilter(..), HoldReason(..), PendingRemoval, PickerTarget(..), PostReactions, PostRef, ReactionMsg(..), ToastKind(..), held, maxFavorites, moveItem, noHolds, postReactionsFor, removeAt, replaceAt)
+import App.Reaction (DetailFilter(..), HoldReason(..), NoteRead, NoteWrite, PendingRemoval, PickerTarget(..), PostReactions, PostRef, ReactionMsg(..), ToastKind(..), held, maxFavorites, moveItem, noHolds, postReactionsFor, removeAt, replaceAt)
 import App.ReactionDom (clearPendingRemoval, focusIfLost, setPendingRemoval)
 import App.Route (Route(..))
-import Data.Array (any, cons, filter, index, insertAt, length, nub, null, snoc)
+import Data.Array (any, cons, filter, find, index, insertAt, length, nub, null, snoc)
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..), fromMaybe, isJust, isNothing, maybe)
 import Data.Time.Duration (Milliseconds(..))
@@ -112,14 +112,18 @@ confirmPending model = case model.reaction.pendingRemoval of
     sendRemoval removal (withReaction model _ { pendingRemoval = Nothing })
       # andThen \next -> Tuple next [ effect clearPendingRemoval ]
 
--- | DELETE, counted as the request in flight of its Note.
+-- | DELETE joins the same durable lane as PUT. Cleanup uses its original epoch.
 sendRemoval :: PendingRemoval -> Model -> Step
-sendRemoval removal model =
+sendRemoval removal model = queueRemoval false model.reaction.epoch removal model
+
+queueRemoval :: Boolean -> Int -> PendingRemoval -> Model -> Step
+queueRemoval priority epoch removal model =
   let
     Tuple numbered request = nextRequest model
   in
-    Tuple (withReaction numbered \reaction -> reaction { inFlight = cons { noteId: removal.post.noteId, request } reaction.inFlight })
-      [ send (RemovalSent model.reaction.epoch request removal) (removeNoteReaction removal.profileId removal.post.noteId) ]
+    enqueueNote priority
+      { profileId: removal.profileId, epoch, request, post: removal.post, mine: Nothing, removal: Just removal, started: false }
+      numbered
 
 -- | Undo / re-react: the removal is never sent.
 cancelPending :: Model -> Step
@@ -149,18 +153,22 @@ restart profileId model =
     fresh = initialReactionModel
       { profileId = profileId
       , epoch = epoch
+      , restoring = reaction.restoring
       , requestSeq = settingsRequest
       , settingsRequest = settingsRequest
       , settings = if isJust profileId then Loading else NotAsked
-      , customEmojis = if needEmojis then Loading else reaction.customEmojis
+      , savingSettings = maybe false (settingsBusy model) profileId
+      , customEmojis = if needEmojis && not reaction.restoring then Loading else reaction.customEmojis
       , toastSeq = reaction.toastSeq
       }
-    loads = case profileId of
-      Just id ->
-        [ send (SettingsLoaded epoch settingsRequest) (fetchQuickSettings id) ]
-          <> loadPosts epoch id (shownNoteIds model)
-          <> if needEmojis then [ send CustomEmojisLoaded fetchCustomEmojis ] else []
-      Nothing -> []
+    loads =
+      if reaction.restoring then []
+      else case profileId of
+        Just id ->
+          (if settingsBusy model id then [] else [ send (SettingsLoaded epoch settingsRequest) (fetchQuickSettings id) ])
+            <> loadPosts epoch id (shownNoteIds model) model
+            <> if needEmojis then [ send CustomEmojisLoaded fetchCustomEmojis ] else []
+        Nothing -> []
   in
     Tuple (model { reaction = fresh }) loads
 
@@ -171,16 +179,20 @@ syncProfile model
   | map _.id (activeProfile model) == model.reaction.profileId = Tuple model []
   | otherwise = confirmPending model # andThen (restart (map _.id (activeProfile model)))
 
-loadPosts :: Int -> String -> Array String -> Effects
-loadPosts epoch profileId noteIds
-  | null noteIds = []
-  | otherwise = [ send (PostReactionsLoaded epoch) (fetchPostReactions profileId noteIds) ]
+loadPosts :: Int -> String -> Array String -> Model -> Effects
+loadPosts epoch profileId noteIds model =
+  let
+    noteIdsToRead = filter (not <<< noteBusy model profileId) noteIds
+    reads = map (\noteId -> { noteId, sequence: writeSequence model profileId noteId }) noteIdsToRead
+  in
+    if null noteIdsToRead then []
+    else [ send (PostReactionsLoaded epoch reads) (fetchPostReactions profileId noteIdsToRead) ]
 
 -- | Posts appeared (timeline / detail loaded): load their reactions for the acting Profile.
 postsShown :: Array Post -> Model -> Step
 postsShown posts model = case model.reaction.profileId of
-  Just profileId -> Tuple model (loadPosts model.reaction.epoch profileId (map _.noteId posts))
-  Nothing -> Tuple model []
+  Just profileId | not model.reaction.restoring -> Tuple model (loadPosts model.reaction.epoch profileId (map _.noteId posts) model)
+  _ -> Tuple model []
 
 -- | Navigation confirms a pending removal at once (D03 q09) and closes every layer.
 leaveScreen :: Model -> Step
@@ -243,30 +255,98 @@ closePickerOf postId reaction = case reaction.picker of
 mineOf :: Model -> String -> Maybe Emoji
 mineOf model noteId = postReactionsFor model.reaction.posts noteId >>= _.mine
 
+-- | The screen rejects repeated clicks of its own request. A request from a prior
+-- | epoch instead lets the new intent queue behind it (A -> B -> A).
 busy :: Model -> String -> Boolean
-busy model noteId = any (\entry -> entry.noteId == noteId) model.reaction.inFlight
+busy model noteId = model.reaction.restoring || any
+  (\write -> Just write.profileId == model.reaction.profileId && write.epoch == model.reaction.epoch && write.post.noteId == noteId)
+  model.reactionWrites.notes
 
-settle :: String -> Int -> ReactionModel -> ReactionModel
-settle noteId request reaction = reaction { inFlight = filter (\entry -> not (entry.noteId == noteId && entry.request == request)) reaction.inFlight }
+noteBusy :: Model -> String -> String -> Boolean
+noteBusy model profileId noteId = any (\write -> write.profileId == profileId && write.post.noteId == noteId) model.reactionWrites.notes
 
-current :: Model -> Int -> String -> Int -> Boolean
-current model epoch noteId request =
-  epoch == model.reaction.epoch && any (\entry -> entry.noteId == noteId && entry.request == request) model.reaction.inFlight
+writeSequence :: Model -> String -> String -> Int
+writeSequence model profileId noteId = maybe 0 _.sequence
+  (find (\version -> version.profileId == profileId && version.noteId == noteId) model.reactionWrites.versions)
+
+bumpWrite :: String -> String -> Model -> Model
+bumpWrite profileId noteId model = model
+  { reactionWrites = model.reactionWrites
+      { versions = cons { profileId, noteId, sequence: writeSequence model profileId noteId + 1 }
+          (filter (\version -> not (version.profileId == profileId && version.noteId == noteId)) model.reactionWrites.versions)
+      }
+  }
+
+-- | Register first, then issue only the head of this key. A failed replacement's
+-- | cleanup has priority over already queued later intents, on the same Profile.
+enqueueNote :: Boolean -> NoteWrite -> Model -> Step
+enqueueNote priority write model = startNextNote write.profileId write.post.noteId registered
+  where
+  registered = bumpWrite write.profileId write.post.noteId
+    ( model
+        { reactionWrites = model.reactionWrites
+            { notes = (if priority then cons write else flip snoc write) model.reactionWrites.notes }
+        }
+    )
+
+startNextNote :: String -> String -> Model -> Step
+startNextNote profileId noteId model = case find (\write -> write.profileId == profileId && write.post.noteId == noteId) model.reactionWrites.notes of
+  Just write | not write.started ->
+    let
+      started = bumpWrite profileId noteId
+        ( model
+            { reactionWrites = model.reactionWrites
+                { notes = map (\entry -> if entry.request == write.request then entry { started = true } else entry) model.reactionWrites.notes }
+            }
+        )
+      request = case write.mine, write.removal of
+        Just emoji, _ -> [ send (ReactionSaved write.epoch write.request write.post write.removal) (setNoteReaction profileId noteId emoji) ]
+        Nothing, Just removal -> [ send (RemovalSent write.epoch write.request removal) (removeNoteReaction profileId noteId) ]
+        _, _ -> []
+    in
+      Tuple started request
+  _ -> Tuple model []
+
+noteAnswer :: Model -> Int -> Int -> String -> Maybe NoteWrite
+noteAnswer model epoch request noteId = find
+  (\write -> write.started && write.epoch == epoch && write.request == request && write.post.noteId == noteId)
+  model.reactionWrites.notes
+
+settleNote :: NoteWrite -> Model -> Model
+settleNote write model = bumpWrite write.profileId write.post.noteId
+  ( model
+      { reactionWrites = model.reactionWrites { notes = filter (\entry -> entry.request /= write.request) model.reactionWrites.notes } }
+  )
+
+visibleWrite :: Model -> NoteWrite -> Boolean
+visibleWrite model write = Just write.profileId == model.reaction.profileId && write.epoch == model.reaction.epoch && not model.reaction.restoring
+
+-- | Once an old epoch's lane drains, re-read the new screen. Reads while a lane is
+-- | busy are suppressed, so returning to A never races A's still outstanding PUT.
+finishNote :: NoteWrite -> Model -> Step
+finishNote write model = startNextNote write.profileId write.post.noteId model # andThen \next ->
+  if Just write.profileId == next.reaction.profileId && write.epoch /= next.reaction.epoch && not next.reaction.restoring then
+    Tuple next (loadPosts next.reaction.epoch write.profileId [ write.post.noteId ] next)
+  else Tuple next []
 
 setMine :: String -> Maybe Emoji -> Array PostReactions -> Array PostReactions
 setMine noteId mine posts
   | any (\entry -> entry.noteId == noteId) posts = map (\entry -> if entry.noteId == noteId then entry { mine = mine } else entry) posts
   | otherwise = snoc posts { noteId, mine, others: [] }
 
--- | Keeps local truth for Notes with an unsent removal or a request in flight.
-mergePosts :: ReactionModel -> Array PostReactions -> Array PostReactions
-mergePosts reaction fetched =
-  map keepLocal fetched <> filter (\entry -> not (any (\new -> new.noteId == entry.noteId) fetched)) reaction.posts
+readable :: Model -> NoteRead -> Boolean
+readable model read = case model.reaction.profileId of
+  Just profileId -> read.sequence == writeSequence model profileId read.noteId
+    && not (noteBusy model profileId read.noteId)
+    && map (_.post.noteId) model.reaction.pendingRemoval /= Just read.noteId
+  Nothing -> false
+
+-- | Discard an entire stale key, not just mine: it must not resurrect a completed
+-- | DELETE, nor clobber a queued optimistic intent. Other fetched keys still apply.
+mergePosts :: Model -> Array NoteRead -> Array PostReactions -> Array PostReactions
+mergePosts model reads fetched = accepted <> filter (\entry -> not (any (\new -> new.noteId == entry.noteId) accepted)) model.reaction.posts
   where
-  local noteId = any (\entry -> entry.noteId == noteId) reaction.inFlight || map (_.post.noteId) reaction.pendingRemoval == Just noteId
-  keepLocal entry
-    | local entry.noteId = entry { mine = postReactionsFor reaction.posts entry.noteId >>= _.mine }
-    | otherwise = entry
+  accepted = filter (\entry -> any (\read -> read.noteId == entry.noteId && readable model read) reads) fetched
 
 -- | Become reacted (picker / someone's chip): optimistic, one request per Note.
 react :: PostRef -> Emoji -> Model -> Step
@@ -286,16 +366,13 @@ react post emoji model = case model.reaction.profileId of
           Tuple numbered request = nextRequest cancelled
           next = withReaction numbered \reaction -> reaction
             { posts = setMine post.noteId (Just emoji) reaction.posts
-            , inFlight = cons { noteId: post.noteId, request } reaction.inFlight
             , picker = Nothing
             }
         in
-          Tuple next
-            ( cancelEffects <>
-                [ effect (focusById (mineChipId post.postId))
-                , send (ReactionSaved model.reaction.epoch request post replacing) (setNoteReaction profileId post.noteId emoji)
-                ]
-            )
+          enqueueNote false
+            { profileId, epoch: model.reaction.epoch, request, post, mine: Just emoji, removal: replacing, started: false }
+            next
+            # andThen \queued -> Tuple queued (cancelEffects <> [ effect (focusById (mineChipId post.postId)) ])
   _ -> Tuple model []
 
 -- | My chip pressed: removed on screen now, DELETE when the undo opportunity ends.
@@ -315,16 +392,41 @@ removeMine post model = case model.reaction.profileId, mineOf model post.noteId 
 
 -- Favourites ---------------------------------------------------------------------------
 
--- | Settings are saved operation by operation (S2), never two at once.
+-- | Settings use a Profile-wide lane. On returning to a Profile with a save in
+-- | flight, its editor waits for completion and a fresh revision before reopening.
+settingsBusy :: Model -> String -> Boolean
+settingsBusy model profileId = any (\write -> write.profileId == profileId) model.reactionWrites.settings
+
+requestSettings :: Boolean -> Boolean -> Model -> Step
+requestSettings retry showLoading model = case model.reaction.profileId of
+  Just profileId | not (settingsBusy model profileId) && not model.reaction.restoring ->
+    let
+      Tuple numbered request = nextRequest model
+    in
+      Tuple
+        ( withReaction numbered _
+            { settings = if showLoading then Loading else model.reaction.settings
+            , settingsRequest = request
+            , savingSettings = retry || model.reaction.savingSettings
+            , retryAfterLoad = retry
+            }
+        )
+        [ send (SettingsLoaded model.reaction.epoch request) (fetchQuickSettings profileId) ]
+  _ -> Tuple model []
+
 saveFavorites :: Array Emoji -> String -> Model -> Step
 saveFavorites favorites focusId model = case model.reaction.profileId, model.reaction.settings of
   Just profileId, Loaded settings
-    | not model.reaction.savingSettings && length favorites <= maxFavorites ->
+    | not model.reaction.savingSettings && not model.reaction.restoring && not (settingsBusy model profileId) && length favorites <= maxFavorites ->
         let
           Tuple numbered request = nextRequest model
+          registered = numbered
+            { reactionWrites = numbered.reactionWrites
+                { settings = snoc numbered.reactionWrites.settings { profileId, epoch: model.reaction.epoch, request } }
+            }
         in
           Tuple
-            ( withReaction numbered _
+            ( withReaction registered _
                 { settings = Loaded settings { favorites = favorites }
                 , savingSettings = true
                 , settingsProblem = Nothing
@@ -342,7 +444,7 @@ favoritesOf model = case model.reaction.settings of
   _ -> Nothing
 
 canEditFavorites :: Model -> Boolean
-canEditFavorites model = isJust (favoritesOf model) && not model.reaction.savingSettings
+canEditFavorites model = isJust (favoritesOf model) && not model.reaction.savingSettings && not model.reaction.restoring
 
 dropFavoriteUndo :: Model -> Model
 dropFavoriteUndo model = case model.reaction.toast of
@@ -351,7 +453,7 @@ dropFavoriteUndo model = case model.reaction.toast of
   _ -> model
 
 settingsAnswer :: Model -> Int -> Int -> Boolean
-settingsAnswer model epoch request = epoch == model.reaction.epoch && request == model.reaction.settingsRequest
+settingsAnswer model epoch request = epoch == model.reaction.epoch && request == model.reaction.settingsRequest && not model.reaction.restoring
 
 -- Update -------------------------------------------------------------------------------
 
@@ -359,13 +461,19 @@ update :: Model -> ReactionMsg -> Step
 update model = case _ of
   SettingsLoaded epoch request result
     | settingsAnswer model epoch request ->
-        Tuple (withReaction model _ { settings = fromEither result, savingSettings = false }) []
+        let
+          loaded = withReaction model _ { settings = fromEither result, savingSettings = false, retryAfterLoad = false }
+        in
+          case result, model.reaction.settingsProblem of
+            Right _, Just { retry: Just intended } | model.reaction.retryAfterLoad -> saveFavorites intended favoriteAddId loaded
+            _, _ -> Tuple loaded []
     | otherwise -> Tuple model []
 
-  PostReactionsLoaded epoch result
-    | epoch == model.reaction.epoch -> case result of
-        Right fetched -> Tuple (withReaction model \reaction -> reaction { posts = mergePosts reaction fetched, postsError = Nothing }) []
-        Left error -> Tuple (withReaction model _ { postsError = Just error }) []
+  PostReactionsLoaded epoch reads result
+    | epoch == model.reaction.epoch && not model.reaction.restoring -> case result of
+        Right fetched -> Tuple (withReaction model \reaction -> reaction { posts = mergePosts model reads fetched, postsError = Nothing }) []
+        Left error | any (readable model) reads -> Tuple (withReaction model _ { postsError = Just error }) []
+        _ -> Tuple model []
     | otherwise -> Tuple model []
 
   CustomEmojisLoaded result -> Tuple (withReaction model _ { customEmojis = fromEither result }) []
@@ -418,40 +526,44 @@ update model = case _ of
 
   RemoveMine post -> removeMine post model
 
-  ReactionSaved epoch request post replaced result
-    | not (current model epoch post.noteId request) -> Tuple model []
-    | otherwise ->
-        let
-          settled = withReaction model (settle post.noteId request)
-        in
-          case result of
-            Right mine -> Tuple (withReaction settled \reaction -> reaction { posts = setMine post.noteId mine reaction.posts }) []
-            -- Back to not reacted. If the PUT replaced an unsent removal, that removal is
-            -- sent now: whatever the failed PUT did, the post ends without a reaction,
-            -- as shown. Focus follows only if it was lost with the chip (注意 6).
-            Left error ->
-              setToast (Just (ReactionFailed "リアクションできませんでした" error))
-                (withReaction settled \reaction -> reaction { posts = setMine post.noteId Nothing reaction.posts })
-                # andThen (\next -> maybe (Tuple next []) (\removal -> sendRemoval removal next) replaced)
-                # andThen \next -> Tuple next [ effect (focusIfLost (reactionButtonOf post.postId)) ]
+  ReactionSaved epoch request post _ result -> case noteAnswer model epoch request post.noteId of
+    Nothing -> Tuple model []
+    Just write ->
+      Tuple (settleNote write model) []
+        # andThen
+            ( \settled ->
+                if not (visibleWrite settled write) then Tuple settled []
+                else case result of
+                  Right mine -> Tuple (withReaction settled \reaction -> reaction { posts = setMine post.noteId mine reaction.posts }) []
+                  Left error ->
+                    setToast (Just (ReactionFailed "リアクションできませんでした" error))
+                      (withReaction settled \reaction -> reaction { posts = setMine post.noteId Nothing reaction.posts })
+                      # andThen \next -> Tuple next [ effect (focusIfLost (reactionButtonOf post.postId)) ]
+            )
+        -- Cleanup is transport, not presentation: it runs even if A changed to B,
+        -- and before A's next queued intent. Never send it as the acting Profile B.
+        # andThen
+            ( \next -> case result, write.removal of
+                Left _, Just removal -> queueRemoval true write.epoch removal next
+                _, _ -> Tuple next []
+            )
+        # andThen (finishNote write)
 
-  RemovalSent epoch request removal result
-    | not (current model epoch removal.post.noteId request) -> case result of
-        -- The Profile changed meanwhile: nothing to restore, but a failure is still shown.
-        Left error | epoch /= model.reaction.epoch -> setToast (Just (ReactionFailed "リアクションを取り消せませんでした" error)) model
-        _ -> Tuple model []
-    | otherwise ->
-        let
-          settled = withReaction model (settle removal.post.noteId request)
-        in
-          case result of
-            Right _ -> Tuple settled []
-            -- The reaction is still there: show it again, close what was anchored on
-            -- the reaction button and keep focus (注意 2 / 6).
-            Left error ->
-              setToast (Just (ReactionFailed "リアクションを取り消せませんでした" error))
-                (withReaction settled \reaction -> closePickerOf removal.post.postId reaction { posts = setMine removal.post.noteId (Just removal.emoji) reaction.posts })
-                # andThen \next -> Tuple next [ effect (focusIfLost (mineChipId removal.post.postId)) ]
+  RemovalSent epoch request removal result -> case noteAnswer model epoch request removal.post.noteId of
+    Nothing -> Tuple model []
+    Just write ->
+      Tuple (settleNote write model) []
+        # andThen
+            ( \settled ->
+                if not (visibleWrite settled write) then Tuple settled []
+                else case result of
+                  Right _ -> Tuple settled []
+                  Left error ->
+                    setToast (Just (ReactionFailed "リアクションを取り消せませんでした" error))
+                      (withReaction settled \reaction -> closePickerOf removal.post.postId reaction { posts = setMine removal.post.noteId (Just removal.emoji) reaction.posts })
+                      # andThen \next -> Tuple next [ effect (focusIfLost (mineChipId removal.post.postId)) ]
+            )
+        # andThen (finishNote write)
 
   ToastExpired id generation -> case model.reaction.toast of
     Just toast | toast.id == id && toast.armed == generation && not (held toast.holds) -> case toast.kind of
@@ -535,27 +647,44 @@ update model = case _ of
   StartReplaceFavorite at ->
     update (withReaction model _ { chipMenu = Nothing }) (OpenPicker (ReplaceFavorite at) (favoriteChipId at))
 
-  SettingsSaved epoch request previous intended result
-    | not (settingsAnswer model epoch request) -> Tuple model []
-    | otherwise -> case result of
-        Right settings -> Tuple (withReaction model _ { settings = Loaded settings, savingSettings = false }) []
-        -- A failed save also ends the undo of a deletion that did not happen.
-        -- 409: another device saved first. Show the stored list and offer ours again.
-        Left error@(RevisionConflict _) ->
-          let
-            Tuple numbered refetch = nextRequest (dropFavoriteUndo model)
-          in
-            Tuple
-              (withReaction numbered _ { settings = Loaded previous, settingsProblem = Just { error, retry: Just intended }, settingsRequest = refetch })
-              [ send (SettingsLoaded epoch refetch) (fetchQuickSettings previous.profileId) ]
-        Left error@(EmojiUnavailable _) ->
-          Tuple (withReaction (dropFavoriteUndo model) _ { settings = Loaded previous, savingSettings = false, settingsProblem = Just { error, retry: Nothing } }) []
-        Left error ->
-          Tuple (withReaction (dropFavoriteUndo model) _ { settings = Loaded previous, savingSettings = false, settingsProblem = Just { error, retry: Just intended } }) []
+  SettingsSaved epoch request previous intended result ->
+    case
+      find
+        (\write -> write.profileId == previous.profileId && write.epoch == epoch && write.request == request)
+        model.reactionWrites.settings
+      of
+      Nothing -> Tuple model []
+      Just write ->
+        let
+          settled = model
+            { reactionWrites = model.reactionWrites
+                { settings = filter (\entry -> entry.request /= request) model.reactionWrites.settings }
+            }
+        in
+          if not (settingsAnswer model epoch request) then
+            if Just write.profileId == model.reaction.profileId then
+              requestSettings false true (withReaction settled _ { savingSettings = false })
+            else Tuple settled []
+          else case result of
+            Right settings -> Tuple (withReaction settled _ { settings = Loaded settings, savingSettings = false }) []
+            -- 409: first show the stored list/revision, retaining the intended list.
+            Left error@(RevisionConflict _) ->
+              requestSettings false false
+                (withReaction (dropFavoriteUndo settled) _ { settings = Loaded previous, settingsProblem = Just { error, retry: Just intended } })
+            Left error@(EmojiUnavailable _) ->
+              Tuple (withReaction (dropFavoriteUndo settled) _ { settings = Loaded previous, savingSettings = false, settingsProblem = Just { error, retry: Nothing } }) []
+            Left error ->
+              Tuple (withReaction (dropFavoriteUndo settled) _ { settings = Loaded previous, savingSettings = false, settingsProblem = Just { error, retry: Just intended } }) []
 
-  RetrySettings -> case model.reaction.settingsProblem of
-    Just { retry: Just intended } -> saveFavorites intended favoriteAddId model
-    _ -> Tuple model []
+  RetrySettings
+    | model.reaction.savingSettings || model.reaction.restoring -> Tuple model []
+    | otherwise -> case model.reaction.settingsProblem of
+        Just { retry: Just intended } -> case model.reaction.settings of
+          Loaded _ -> saveFavorites intended favoriteAddId model
+          -- The conflict's GET may itself fail. Retry must obtain a revision and
+          -- then save, rather than silently calling saveFavorites on Failed.
+          _ -> requestSettings true true model
+        _ -> Tuple model []
 
   DragStart at -> Tuple (withReaction model _ { dragFrom = Just at, chipMenu = Nothing }) []
 
@@ -569,9 +698,21 @@ update model = case _ of
   SelectDetailFilter wanted ->
     Tuple (withReaction model _ { detailFilter = if model.reaction.detailFilter == wanted then ListClosed else wanted }) []
 
-  -- Back from the back/forward cache: pagehide already handed the pending removal to
-  -- keepalive (not confirmed), so its undo is over and nothing is resent. Every answer
-  -- still in flight belongs to the old generation; read the screen again.
+  -- pageshow starts synchronously: undo ends and interaction stops immediately.
+  -- No GET or mutation resumes until the pagehide keepalive Promise has settled.
+  PageRestoring ->
+    Tuple
+      ( withReaction model _
+          { pendingRemoval = Nothing
+          , toast = Nothing
+          , picker = Nothing
+          , chipMenu = Nothing
+          , restoring = true
+          , epoch = model.reaction.epoch + 1
+          }
+      )
+      [ effect clearPendingRemoval ]
+
   PageRestored ->
-    restart model.reaction.profileId (withReaction model _ { pendingRemoval = Nothing, toast = Nothing, picker = Nothing, chipMenu = Nothing })
+    restart model.reaction.profileId (withReaction model _ { pendingRemoval = Nothing, toast = Nothing, picker = Nothing, chipMenu = Nothing, restoring = false })
       # andThen \next -> Tuple next [ effect clearPendingRemoval ]

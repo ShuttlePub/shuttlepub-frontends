@@ -21,4 +21,4 @@ foreign import leavesClosest :: String -> Event -> Effect Boolean
 foreign import startDrag :: Event -> Effect Unit
 foreign import blurTarget :: Event -> Effect Unit
 foreign import focusIfLost :: String -> Effect Unit
-foreign import onPageRestored :: Effect Unit -> Effect Unit
+foreign import onPageRestored :: Effect Unit -> Effect Unit -> Effect Unit
