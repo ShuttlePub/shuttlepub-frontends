@@ -204,20 +204,24 @@ newtype Mutation = Mutation
       { accountId :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
       , input :: NotNull (AsGql "UpsertMetadataInput" UpsertMetadataInput)
       }
-      -> AsGql "Metadata" Metadata
+      ->
+      -- | 実 Emumet 接続時は未対応 (UNSUPPORTED): fields の項目 ID・revision が Emumet に無く安全に書けない (後続課題)
+      AsGql "Metadata" Metadata
   , deleteMetadata ::
       { accountId :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
       , nanoid :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
       }
       ->
-      -- | 実 Emumet 接続時は未対応 (UNSUPPORTED): nanoid が fields 内の位置のため、画面が削除後に位置を振り直すまで安全に削除できない
+      -- | 実 Emumet 接続時は未対応 (UNSUPPORTED): fields の項目 ID・revision が Emumet に無く安全に書けない (後続課題)
       AsGql "Boolean" Boolean
   , updateMetadata ::
       { accountId :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
       , input :: NotNull (AsGql "UpsertMetadataInput" UpsertMetadataInput)
       , nanoid :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
       }
-      -> AsGql "Metadata" Metadata
+      ->
+      -- | 実 Emumet 接続時は未対応 (UNSUPPORTED): fields の項目 ID・revision が Emumet に無く安全に書けない (後続課題)
+      AsGql "Metadata" Metadata
   , markRegistrationGateNotificationsRead ::
       { eventIds :: NotNull (Array (NotNull (AsGql "ID" GraphQL.Client.ID.ID))) }
       ->

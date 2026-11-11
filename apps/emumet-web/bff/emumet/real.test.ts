@@ -268,59 +268,27 @@ describe("(c) upsertProfile — Tristate 変換 (PATCH)", () => {
   });
 });
 
-describe("(d) Metadata の書込み — fields の読み出し → 加工 → PATCH (配列ごと置換)", () => {
-  const twoFields = [
-    { label: "Website", content: "https://alice.example.com" },
-    { label: "Pronouns", content: "she/her" },
-  ];
-
-  /** GET は現在の fields、PATCH は送られた fields を反映した AccountResponse を返す */
-  function stubAccountWithFields(current: { label: string; content: string }[]): { calls: FetchCall[] } {
-    return stubFetch((call) => {
-      if (call.method === "GET") return jsonResponse(200, { items: [{ ...wireAccount1, fields: current }], first: null, last: null });
-      if (call.method === "PATCH") return jsonResponse(200, { ...wireAccount1, fields: (JSON.parse(call.body ?? "{}") as { fields: unknown }).fields });
-      return unexpected(call);
-    });
-  }
-
-  test("createMetadata: 末尾に追加した fields を PATCH し、追加した 1 件 (nanoid = 末尾の index) を返す", async () => {
-    const { calls } = stubAccountWithFields(twoFields);
-    const result = await makeClient().createMetadata("acc_01", { label: "Blog", content: "https://blog.example.com" });
-    expect(calls.map((c) => `${c.method} ${new URL(c.url).pathname}`)).toEqual(["GET /api/v1/accounts", "PATCH /api/v1/accounts/acc_01"]);
-    expect(JSON.parse(calls[1]?.body ?? "")).toEqual({ fields: [...twoFields, { label: "Blog", content: "https://blog.example.com" }] });
-    expect(result).toEqual({ nanoid: "2", accountId: "acc_01", label: "Blog", content: "https://blog.example.com" });
-  });
-
-  test("updateMetadata: 指定 index だけ置換した fields を PATCH し、同じ nanoid で返す (他の項目は不変)", async () => {
-    const { calls } = stubAccountWithFields(twoFields);
-    const result = await makeClient().updateMetadata("acc_01", "1", { label: "Pronouns", content: "they/them" });
-    expect(JSON.parse(calls[1]?.body ?? "")).toEqual({ fields: [twoFields[0], { label: "Pronouns", content: "they/them" }] });
-    expect(result).toEqual({ nanoid: "1", accountId: "acc_01", label: "Pronouns", content: "they/them" });
-  });
-
-  test("deleteMetadata は未対応 (EmumetUnsupportedError)。位置 ID が繰り上がり別の項目を書き換えうるため、何も送らない", async () => {
-    const { calls } = stubAccountWithFields(twoFields);
-    await expect(makeClient().deleteMetadata("acc_01", "0")).rejects.toBeInstanceOf(EmumetUnsupportedError);
+describe("(d) Metadata の書込みはすべて未対応 (上流 PATCH に項目 ID・revision が無く、位置指定の配列置換は安全でない)", () => {
+  test("create / update / delete はどれも EmumetUnsupportedError で、上流へ一切リクエストしない (GET も PATCH も)", async () => {
+    const { calls } = stubFetch(unexpected);
+    const client = makeClient();
+    await expect(client.createMetadata("acc_01", { label: "Blog", content: "https://blog.example.com" })).rejects.toBeInstanceOf(EmumetUnsupportedError);
+    await expect(client.updateMetadata("acc_01", "0", { label: "Web", content: "w" })).rejects.toBeInstanceOf(EmumetUnsupportedError);
+    await expect(client.updateMetadata("acc_01", "meta_01", { label: "Web", content: "w" })).rejects.toBeInstanceOf(EmumetUnsupportedError);
+    await expect(client.deleteMetadata("acc_01", "0")).rejects.toBeInstanceOf(EmumetUnsupportedError);
     expect(calls).toHaveLength(0);
   });
 
-  test("範囲外・非整数の nanoid (旧形式 meta_xx を含む) は書込みせず EmumetNotFoundError", async () => {
-    for (const nanoid of ["2", "-1", "01", "1.5", "meta_01", ""]) {
-      const { calls } = stubAccountWithFields(twoFields);
-      await expect(makeClient().updateMetadata("acc_01", nanoid, { label: "L", content: "C" })).rejects.toBeInstanceOf(EmumetNotFoundError);
-      expect(calls.every((c) => c.method === "GET"), JSON.stringify(nanoid)).toBe(true);
-    }
-  });
-
-  test("Account が見えない (一覧に無い) 場合の書込みは EmumetNotFoundError で PATCH しない", async () => {
-    const { calls } = stubFetch(() => new Response("No accounts found", { status: 404 }));
-    await expect(makeClient().createMetadata("nope", { label: "L", content: "C" })).rejects.toBeInstanceOf(EmumetNotFoundError);
-    expect(calls.every((c) => c.method === "GET")).toBe(true);
-  });
-
-  test("PATCH が 400 なら EmumetApiError (握りつぶさない)", async () => {
-    stubFetch((call) => (call.method === "GET" ? jsonResponse(200, { items: [wireAccount1], first: null, last: null }) : new Response("bad", { status: 400 })));
-    await expect(makeClient().createMetadata("acc_01", { label: "L", content: "C" })).rejects.toBeInstanceOf(EmumetApiError);
+  test("updateProfile (PATCH) は Profile 属性だけを送り、fields を含めない (Metadata を上書きしない)", async () => {
+    const { calls } = stubFetch(() => jsonResponse(200, wireAccount1));
+    await makeClient().upsertProfile("acc_01", { displayName: "A", summary: null, iconUrl: "https://i.example.com/x", bannerUrl: null });
+    expect(calls).toHaveLength(1);
+    const body = JSON.parse(calls[0]?.body ?? "") as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(["banner_url", "display_name", "icon_url", "summary"]);
+    expect("fields" in body).toBe(false);
+    const empty = stubFetch(() => jsonResponse(200, wireAccount1));
+    await makeClient().upsertProfile("acc_01", {});
+    expect(JSON.parse(empty.calls[0]?.body ?? "")).toEqual({});
   });
 });
 

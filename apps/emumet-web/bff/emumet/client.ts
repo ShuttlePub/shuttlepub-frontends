@@ -158,8 +158,9 @@ export class EmumetAccountRestrictedError extends Error {
 
 /**
  * Metadata (Account の fields) の nanoid は配列内の位置 (0 始まりの index の文字列)。Emumet の fields には
- * 識別子が無く、書込みは配列ごとの置換のため、削除すると後続の位置が繰り上がる。画面側が位置を振り直すまで
- * 安全に削除できないため、real の deleteMetadata は EmumetUnsupportedError を投げる。
+ * 識別子が無く、書込みは配列ごとの置換のため、削除すると後続の位置が繰り上がる。上流 PATCH には項目 ID も
+ * revision (CAS) も無く、位置指定の配列置換は lost update や位置ずれによる誤更新を防げないため、real の
+ * createMetadata / updateMetadata / deleteMetadata はすべて EmumetUnsupportedError を投げる (読取のみ)。
  *
  * バッチ契約: listProfiles / listMetadata は複数 accountId を 1 リクエストで取得する
  * 基本操作 (DataLoader の batchFn からそのまま呼ばれる)。getProfile は

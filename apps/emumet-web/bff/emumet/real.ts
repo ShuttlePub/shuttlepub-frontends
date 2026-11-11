@@ -5,8 +5,8 @@
 // Account / Profile / Metadata はすべて AccountResponse (`/api/v1/accounts`) から作る:
 //   Account   id / name / is_bot / created_at / moderation (Account 単位の鍵は返らないため publicKey は常に空文字)
 //   Profile   profile_id (= nanoid)・display_name・summary・icon_url・banner_url・profile_username
-//   Metadata  fields (label / content の配列。nanoid は無いため配列内の位置 (0 始まりの index) を nanoid にする)
-// 書込みは PATCH /api/v1/accounts/{id} だけ (Profile 属性は個別、fields は配列ごと置換。Metadata の削除は未対応)。
+//   Metadata  fields (label / content の配列。nanoid は無いため配列内の位置 (0 始まりの index) を nanoid にする。読取のみ)
+// 書込みは Profile 属性の PATCH /api/v1/accounts/{id} だけ (fields は送らない)。Metadata の書込みは未対応 (項目 ID・revision が無く安全に書けない)。
 // 旧 /profiles・/metadata・/accounts/{id}/profile 系は実 Emumet に存在しないため使わない。
 // ============================================================
 
@@ -44,6 +44,8 @@ export type RealEmumetConfig = {
   /** 登録ゲート API の接続・応答待ち上限 (ms)。省略時は registration-gate-real.ts の既定値 */
   readonly registrationGateTimeoutMs?: number;
 };
+
+const METADATA_WRITE_UNSUPPORTED = "writing metadata is not supported: Emumet has no per-field id or revision to make it safe";
 
 /** Account の list / get / create / update (OpenAPI: `/api/v1/accounts`)。Profile の一回限り設定は `/api/v1/profiles/...` */
 const ACCOUNTS_PATH = "/api/v1/accounts";
@@ -160,13 +162,6 @@ function toMetadata(accountId: string, field: WireField, index: number): Metadat
 
 function toMetadataList(wire: WireAccount): Metadata[] {
   return wire.fields.map((field, index) => toMetadata(wire.id, field, index));
-}
-
-/** Metadata の nanoid (位置) → fields の index。範囲外・非整数は null */
-function parseFieldIndex(nanoid: string, length: number): number | null {
-  if (!/^(0|[1-9][0-9]*)$/.test(nanoid)) return null;
-  const index = Number(nanoid);
-  return index < length ? index : null;
 }
 
 /** Tristate → JSON body: undefined → フィールド省略 / null → JSON null / 値 → 値 */
@@ -346,40 +341,29 @@ export function createRealEmumetClient(config: RealEmumetConfig, accessToken: st
 
     listMetadata,
 
-    // Metadata の書込みは fields 配列の読み出し → 加工 → 配列ごと置換 (PATCH)。同じ Account への同時書込みは後勝ち
-
+    /**
+     * Metadata の書込み (作成・更新・削除) はすべて未対応で、何も送らない。上流の PATCH /api/v1/accounts/{id} は
+     * fields を配列ごと置換するだけで、項目 ID も revision (CAS) も無い。位置指定の読み出し → 置換では
+     * 並行する 2 更新の lost update や、他クライアントが fields を置換した後の古い画面からの誤更新
+     * (位置のずれ) を防げない。安全な書込みには Emumet 側の項目 ID または fields の revision が必要 (後続課題)
+     */
     async createMetadata(accountId: string, input: MetadataInput): Promise<Metadata> {
-      const current = await fetchWireAccount(accountId);
-      if (!current) throw new EmumetNotFoundError(`account not found: accountId=${accountId}`);
-      const fields = [...current.fields, { label: input.label, content: input.content }];
-      const updated = await patchAccount(accountId, { fields });
-      const index = updated.fields.length - 1;
-      const created = updated.fields[index];
-      if (!created) throw new EmumetApiError(500, `fields missing after create: accountId=${accountId}`);
-      return toMetadata(accountId, created, index);
+      void accountId;
+      void input;
+      throw new EmumetUnsupportedError(METADATA_WRITE_UNSUPPORTED);
     },
 
     async updateMetadata(accountId: string, nanoid: string, input: MetadataInput): Promise<Metadata> {
-      const current = await fetchWireAccount(accountId);
-      if (!current) throw new EmumetNotFoundError(`account not found: accountId=${accountId}`);
-      const index = parseFieldIndex(nanoid, current.fields.length);
-      if (index === null) throw new EmumetNotFoundError(`metadata not found: accountId=${accountId} nanoid=${nanoid}`);
-      const fields = current.fields.map((field, i) => (i === index ? { label: input.label, content: input.content } : field));
-      const updated = await patchAccount(accountId, { fields });
-      const field = updated.fields[index];
-      if (!field) throw new EmumetNotFoundError(`metadata not found after update: accountId=${accountId} nanoid=${nanoid}`);
-      return toMetadata(accountId, field, index);
+      void accountId;
+      void nanoid;
+      void input;
+      throw new EmumetUnsupportedError(METADATA_WRITE_UNSUPPORTED);
     },
 
-    /**
-     * 未対応: nanoid は fields 内の位置のため、削除すると後続の位置が繰り上がるが、現行の画面は削除後に
-     * 残りの nanoid を振り直さない (同じ画面で次に編集・削除すると別の項目を変更する)。画面側の対応 (画面 PR) まで、
-     * 誤った項目を書き換えないよう削除は明示的なエラーにする (何も書き換えない)
-     */
     async deleteMetadata(accountId: string, nanoid: string): Promise<void> {
       void accountId;
       void nanoid;
-      throw new EmumetUnsupportedError("deleting metadata is not supported until the screen renumbers positional ids");
+      throw new EmumetUnsupportedError(METADATA_WRITE_UNSUPPORTED);
     },
   };
 }

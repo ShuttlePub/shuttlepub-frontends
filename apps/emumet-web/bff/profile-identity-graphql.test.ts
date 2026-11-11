@@ -343,33 +343,36 @@ describe("(f) 現行 UI と同じ選択項目が実 Emumet の AccountResponse (
     expect(calls.every((call) => new URL(call.url).pathname === "/api/v1/accounts")).toBe(true);
   });
 
-  test("updateProfile / createMetadata / updateMetadata は PATCH /api/v1/accounts/{id} で書き込まれる", async () => {
-    const { calls } = stubFetch((call) => {
-      if (call.method === "GET") return jsonResponse(200, { items: [wireAccount], first: null, last: null });
-      const body = JSON.parse(call.body ?? "{}") as { fields?: unknown; display_name?: string };
-      return jsonResponse(200, { ...wireAccount, ...(body.display_name === undefined ? {} : { display_name: body.display_name }), fields: body.fields ?? wireAccount.fields });
-    });
+  test("updateProfile は PATCH /api/v1/accounts/{id} で Profile 属性だけを書き込む (fields は送らない)", async () => {
+    const { calls } = stubFetch((call) => jsonResponse(200, { ...wireAccount, display_name: (JSON.parse(call.body ?? "{}") as { display_name?: string }).display_name ?? wireAccount.display_name }));
     const context = await realContext();
     const profile = await run('mutation { updateProfile(accountId: "acc_r1", input: { displayName: "New" }) { nanoid displayName } }', context);
     expect(profile.data?.["updateProfile"]).toEqual({ nanoid: "prof_r1", displayName: "New" });
-    const created = await run('mutation { createMetadata(accountId: "acc_r1", input: { label: "Blog", content: "b" }) { nanoid label content } }', context);
-    expect(created.data?.["createMetadata"]).toEqual({ nanoid: "1", label: "Blog", content: "b" });
-    const updated = await run('mutation { updateMetadata(accountId: "acc_r1", nanoid: "0", input: { label: "Web", content: "w" }) { nanoid label content } }', context);
-    expect(updated.data?.["updateMetadata"]).toEqual({ nanoid: "0", label: "Web", content: "w" });
-    expect(calls.filter((c) => c.method === "PATCH").every((c) => new URL(c.url).pathname === "/api/v1/accounts/acc_r1")).toBe(true);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.method).toBe("PATCH");
+    expect(new URL(calls[0]?.url ?? "").pathname).toBe("/api/v1/accounts/acc_r1");
+    expect(JSON.parse(calls[0]?.body ?? "")).toEqual({ display_name: "New" });
   });
 
-  test("deleteMetadata は UNSUPPORTED (何も書き換えず、HTTP 経路でもコードが保たれる)", async () => {
+  test("createMetadata / updateMetadata / deleteMetadata は UNSUPPORTED (何も書き換えず、HTTP 経路でもコードが保たれる)", async () => {
     const { calls } = stubFetch(() => jsonResponse(200, { items: [wireAccount], first: null, last: null }));
-    const result = await run('mutation { deleteMetadata(accountId: "acc_r1", nanoid: "0") }', await realContext());
-    expect(code(result)).toBe("UNSUPPORTED");
+    const context = await realContext();
+    for (const source of [
+      'mutation { createMetadata(accountId: "acc_r1", input: { label: "Blog", content: "b" }) { nanoid } }',
+      'mutation { updateMetadata(accountId: "acc_r1", nanoid: "0", input: { label: "Web", content: "w" }) { nanoid } }',
+      'mutation { deleteMetadata(accountId: "acc_r1", nanoid: "0") }',
+    ]) {
+      const result = await run(source, context);
+      expect(code(result), source).toBe("UNSUPPORTED");
+      expect(result.data, source).toBeNull();
+    }
     expect(calls).toHaveLength(0);
     const handler = createYogaHandler(createMockSessionAdapter("ratcap_session", false), (token) => createRealEmumetClient({ baseUrl: "http://emumet.test" }, token));
     const response = await handler(
       new Request("http://localhost/graphql", {
         method: "POST",
         headers: { "content-type": "application/json", cookie: `ratcap_session=${encodeMockCookie({ token: "t", username: "u" })}` },
-        body: JSON.stringify({ query: 'mutation { deleteMetadata(accountId: "acc_r1", nanoid: "0") }' }),
+        body: JSON.stringify({ query: 'mutation { updateMetadata(accountId: "acc_r1", nanoid: "0", input: { label: "Web", content: "w" }) { nanoid } }' }),
       }),
     );
     const body = (await response.json()) as { errors?: { extensions: Record<string, unknown> }[] };
