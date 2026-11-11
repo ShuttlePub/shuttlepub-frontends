@@ -25,9 +25,11 @@
             "routing",
             "routing-duplex",
             "shuttlepub-ui",
+            "strings",
             "tuples",
             "type-equality",
-            "web-dom"
+            "web-dom",
+            "web-events"
           ]
         },
         "test": {

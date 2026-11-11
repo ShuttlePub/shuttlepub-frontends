@@ -15,14 +15,26 @@ export interface ProfileContextSource {
 export const profileContextFixture: ProfileContext = {
   activeProfile: { id: "profile-fixture-1", handle: "fixture", displayName: "Fixture Profile" },
 };
+/** Every owned Profile in mock mode; the first is the active one (ui-spec L1 switcher). */
+export const availableProfilesFixture: readonly Profile[] = [
+  profileContextFixture.activeProfile!,
+  { id: "profile-fixture-2", handle: "fixture_dev", displayName: "Fixture Dev" },
+  { id: "profile-fixture-3", handle: "fixture_art", displayName: "Fixture Art" },
+];
+/**
+ * Mock selection is stateless: it validates and echoes the selected Profile but the
+ * next profileContext read is the fixture again (no process-wide state shared by
+ * concurrent browser sessions or visual captures).
+ */
 export function createMockProfileContext(): ProfileContextSource {
   return {
     mode: "mock",
     async getProfileContext() { return structuredClone(profileContextFixture); },
-    async availableProfiles() { return [structuredClone(profileContextFixture.activeProfile!)]; },
+    async availableProfiles() { return structuredClone([...availableProfilesFixture]); },
     async selectProfile(id) {
-      if (id !== profileContextFixture.activeProfile!.id) throw new AuthError("PROFILE_UNAVAILABLE", 403);
-      return structuredClone(profileContextFixture);
+      const activeProfile = availableProfilesFixture.find(profile => profile.id === id);
+      if (!activeProfile) throw new AuthError("PROFILE_UNAVAILABLE", 403);
+      return { activeProfile: structuredClone(activeProfile) };
     },
   };
 }
