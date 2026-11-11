@@ -117,6 +117,7 @@ testReaction = do
   testSettingsLaneRoundTrip
   testRestoreWaits
   testConflictRefetchFailureRetry
+  testFetchedReactionRestoresUi
 
 testRules :: Effect Unit
 testRules = do
@@ -689,3 +690,48 @@ testConflictRefetchFailureRetry = do
     reloaded = step retry (SettingsLoaded retry.reaction.epoch retry.reaction.settingsRequest (Right previous { revision = 5, favorites = [ party ] }))
   assertEqual "retained intent saved after successful refetch" (favorites reloaded) (map emojiKey intended)
   assertTrue "fresh-revision PUT now started" (reloaded.reaction.savingSettings && length reloaded.reactionWrites.settings == 1)
+
+-- F6: a PUT was stored but its reply failed; GET restores the server reaction.
+-- The same transition owns picker closure, not only direct PUT/undo responses.
+testFetchedReactionRestoresUi :: Effect Unit
+testFetchedReactionRestoresUi = do
+  let
+    shown = ready
+      { timeline = Loaded
+          ( map
+              ( \post ->
+                  { id: post.postId
+                  , noteId: post.noteId
+                  , author: me
+                  , text: "fixture"
+                  , createdAt: "2026-11-11T00:00:00Z"
+                  , replyCount: 0
+                  , repostCount: 0
+                  , repostedBy: Nothing
+                  , inReplyToId: Nothing
+                  }
+              )
+              [ sora, mika ]
+          )
+      }
+    put = step shown (ReactWithChip mika thumbs)
+    failed = saved put mika (Left (UpstreamError "reply lost after save"))
+    reopened = step failed (OpenPicker (ReactTo mika) "react-post-mika-picker")
+    server = setMineIn mika.noteId (Just thumbs) reactions
+    Tuple restored focusEffects = QR.update reopened (PostReactionsLoaded reopened.reaction.epoch (readSnapshot reopened) (Right server))
+  assertTrue "picker opened while revalidation waited" (isJust reopened.reaction.picker)
+  assertEqual "GET restores stored reaction" (mineOn restored mika.noteId) (Just thumbs)
+  assertTrue "GET closes restored post's picker" (isNothing restored.reaction.picker)
+  assertEqual "source-aware focus repair scheduled once" (length focusEffects) 1
+  let
+    unrelated = step failed (OpenPicker AddFavorite "sp-fav-add")
+    Tuple other _ = QR.update unrelated (PostReactionsLoaded unrelated.reaction.epoch (readSnapshot unrelated) (Right server))
+  assertEqual "unrelated picker remains open" (map _.target other.reaction.picker) (Just AddFavorite)
+  let
+    Tuple stale staleEffects = QR.update reopened (PostReactionsLoaded reopened.reaction.epoch (readSnapshot shown) (Right server))
+  assertEqual "stale GET cannot restore reaction" (mineOn stale mika.noteId) Nothing
+  assertTrue "stale GET cannot close picker or move focus" (isJust stale.reaction.picker && length staleEffects == 0)
+  let
+    Tuple duplicate duplicateEffects = QR.update restored (PostReactionsLoaded restored.reaction.epoch (readSnapshot restored) (Right server))
+  assertEqual "unchanged response has no focus effect" (length duplicateEffects) 0
+  assertTrue "unchanged response leaves picker closed" (isNothing duplicate.reaction.picker)

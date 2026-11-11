@@ -40,10 +40,11 @@ import App.Message (Message(..))
 import App.Model (Model, ReactionModel, RemoteData(..), activeProfile, fromEither, initialReactionModel)
 import App.Post (Post)
 import App.Reaction (DetailFilter(..), HoldReason(..), NoteRead, NoteWrite, PendingRemoval, PickerTarget(..), PostReactions, PostRef, ReactionMsg(..), ToastKind(..), held, maxFavorites, moveItem, noHolds, postReactionsFor, removeAt, replaceAt)
-import App.ReactionDom (clearPendingRemoval, focusIfLost, setPendingRemoval)
+import App.ReactionDom (clearPendingRemoval, focusIfLost, focusRestoredReaction, setPendingRemoval)
 import App.Route (Route(..))
 import Data.Array (any, cons, filter, find, index, insertAt, length, nub, null, snoc)
 import Data.Either (Either(..))
+import Data.Foldable (foldl)
 import Data.Maybe (Maybe(..), fromMaybe, isJust, isNothing, maybe)
 import Data.Time.Duration (Milliseconds(..))
 import Data.Tuple (Tuple(..))
@@ -131,16 +132,20 @@ cancelPending model = Tuple (withReaction model _ { pendingRemoval = Nothing }) 
 
 -- Profile context --------------------------------------------------------------------
 
--- | Notes of the posts on screen (timeline, or the detail post and its replies).
-shownNoteIds :: Model -> Array String
-shownNoteIds model = nub (timeline <> detail)
+-- | Keep the PostRef as well as the Note key: GET can restore a server-side
+-- | reaction after an ambiguous PUT, removing its button and any anchored picker.
+shownPosts :: Model -> Array Post
+shownPosts model = timeline <> detail
   where
   timeline = case model.timeline of
-    Loaded posts | model.route == Just Home -> map _.noteId posts
+    Loaded posts | model.route == Just Home -> posts
     _ -> []
   detail = case model.detail of
-    Loaded { post: Just post, replies } -> map _.noteId (cons post replies)
+    Loaded { post: Just post, replies } -> cons post replies
     _ -> []
+
+shownNoteIds :: Model -> Array String
+shownNoteIds = nub <<< map _.noteId <<< shownPosts
 
 -- | Start a new generation for `profileId` and (re)load everything it shows.
 restart :: Maybe String -> Model -> Step
@@ -471,7 +476,28 @@ update model = case _ of
 
   PostReactionsLoaded epoch reads result
     | epoch == model.reaction.epoch && not model.reaction.restoring -> case result of
-        Right fetched -> Tuple (withReaction model \reaction -> reaction { posts = mergePosts model reads fetched, postsError = Nothing }) []
+        Right fetched ->
+          let
+            posts = mergePosts model reads fetched
+            restored = nub
+              ( map (\post -> { postId: post.id, noteId: post.noteId })
+                  ( filter
+                      (\post -> isNothing (mineOf model post.noteId) && isJust (postReactionsFor posts post.noteId >>= _.mine))
+                      (shownPosts model)
+                  )
+              )
+            next = withReaction model \reaction -> foldl (\state post -> closePickerOf post.postId state)
+              (reaction { posts = posts, postsError = Nothing })
+              restored
+            restoreFocus post =
+              let
+                closedPicker = case model.reaction.picker of
+                  Just { target: ReactTo target } | target.postId == post.postId -> pickerId
+                  _ -> ""
+              in
+                effect (focusRestoredReaction (reactionButtonOf post.postId) (mineChipId post.postId) closedPicker)
+          in
+            Tuple next (map restoreFocus restored)
         Left error | any (readable model) reads -> Tuple (withReaction model _ { postsError = Just error }) []
         _ -> Tuple model []
     | otherwise -> Tuple model []

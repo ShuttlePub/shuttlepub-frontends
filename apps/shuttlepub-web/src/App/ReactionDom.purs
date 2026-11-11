@@ -6,6 +6,8 @@ module App.ReactionDom
   , startDrag
   , blurTarget
   , focusIfLost
+  , trackFocus
+  , focusRestoredReaction
   , onPageRestored
   ) where
 
@@ -21,4 +23,6 @@ foreign import leavesClosest :: String -> Event -> Effect Boolean
 foreign import startDrag :: Event -> Effect Unit
 foreign import blurTarget :: Event -> Effect Unit
 foreign import focusIfLost :: String -> Effect Unit
+foreign import trackFocus :: Effect Unit
+foreign import focusRestoredReaction :: String -> String -> String -> Effect Unit
 foreign import onPageRestored :: Effect Unit -> Effect Unit -> Effect Unit

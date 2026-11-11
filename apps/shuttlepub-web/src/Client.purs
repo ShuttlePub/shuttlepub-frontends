@@ -5,7 +5,7 @@ import Prelude
 import App.Dom (isMobileViewport, nowMillis, onViewportChange)
 import App.Message (Message(..))
 import App.Reaction (ReactionMsg(..))
-import App.ReactionDom (onPageRestored)
+import App.ReactionDom (onPageRestored, trackFocus)
 import App.Route (routeCodec)
 import App.View (view)
 import Client.Update (mkUpdate)
@@ -34,6 +34,7 @@ main = do
     , subscribe: [ Document.onKeydown \key -> if key == "Escape" then DocumentEscape else NoOp ]
     }
 
+  trackFocus
   now <- nowMillis
   isMobile <- isMobileViewport
   send appId (Hydrated now isMobile)

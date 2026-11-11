@@ -20,7 +20,7 @@
 //    the login button runs the real BFF authorize/callback against a simulated provider
 //    denial and lands on /login?error=denied, and a stale session shows as expired once.
 import { isAbsolute, resolve } from "node:path";
-import { chromium, expect, type Browser, type Locator, type Page } from "@playwright/test";
+import { chromium, expect, type Browser, type Locator, type Page, type Route } from "@playwright/test";
 import { startBooskiffStub } from "./booskiff-stub.ts";
 import { appExists, startApp, type AppServer } from "./servers.ts";
 import { SHUTTLEPUB_LOOPBACK_SESSION_COOKIE, startShuttlePubStub } from "./shuttlepub-stub.ts";
@@ -730,6 +730,84 @@ async function verifySharedAcrossSessions(browser: Browser, server: AppServer) {
   }
 }
 
+// F6: persist the PUT in the real stateful mock, lose only its reply, and hold
+// revalidation while the user focuses the button, opens a picker, or moves away.
+async function verifyAmbiguousReactionRestore(page: Page, viewport: Viewport, server: AppServer) {
+  for (const mode of ["button", "picker", "other-control"] as const) {
+    await resetMock(server);
+    await page.goto("/", { waitUntil: "networkidle" });
+    await expect(page.locator("body"), "initial reaction GET must not acquire focus").toBeFocused();
+    const button = page.locator("#react-post-mika-picker");
+    const mine = page.locator("#react-mine-post-mika-picker");
+    const picker = page.getByTestId("picker");
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let releaseReply!: () => void;
+    const replyGate = new Promise<void>((resolve) => { releaseReply = resolve; });
+    const handled: Promise<void>[] = [];
+    let saved = false;
+    let readsHeld = 0;
+    const intercept = (route: Route) => {
+      const handling = (async () => {
+        const query = String(route.request().postDataJSON()?.query ?? "");
+        if (/^\s*mutation\s+SetNoteReaction\b/.test(query)) {
+          const stored = await route.fetch();
+          expect(stored.status()).toBe(200);
+          expect((await stored.json()).errors, "the PUT really saved before its reply was lost").toBeUndefined();
+          saved = true;
+          await replyGate;
+          await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({
+            data: null, errors: [{ message: "reply lost after save", extensions: { code: "UPSTREAM_ERROR" } }],
+          }) });
+        } else if (saved && /^\s*query\s+PostReactions\b/.test(query)) {
+          readsHeld++;
+          await gate;
+          await route.continue();
+        } else await route.continue();
+      })();
+      handled.push(handling);
+      return handling;
+    };
+    await page.route("**/graphql", intercept);
+    try {
+      await button.focus();
+      await page.keyboard.press("Enter");
+      await expect(viewport.name === "mobile" ? picker : page.locator("#sp-picker-search")).toBeFocused();
+      await picker.getByTestId("picker-favorites").getByRole("button", { name: "いいね" }).focus();
+      await page.keyboard.press("Enter");
+      await expect(mine).toBeFocused();
+      await expect.poll(() => saved).toBe(true);
+      releaseReply();
+      await expect(page.getByTestId("reaction-toast")).toContainText("リアクションできませんでした");
+      // The optimistic chip may become another live chip after rollback; place
+      // focus on the retry origin before exercising its later removal by GET.
+      await button.focus();
+      await expect(button).toBeFocused();
+      await expect.poll(() => readsHeld).toBe(1);
+      if (mode === "picker") {
+        await page.keyboard.press("Enter");
+        await expect(viewport.name === "mobile" ? picker : page.locator("#sp-picker-search")).toBeFocused();
+      } else if (mode === "other-control") {
+        await visible(page, "投稿する").focus();
+      }
+      release();
+      await expect(mine).toBeVisible();
+      await expect(button).toHaveCount(0);
+      await expect(picker, "server restoration closes the anchored picker").toHaveCount(0);
+      await expect(page.locator(".sp-reaction-layer .sp-clickaway, .sp-reaction-layer .sp-sheet-backdrop, .sp-reaction-layer .sp-modal-backdrop")).toHaveCount(0);
+      await expectScrollLocked(page, false);
+      if (mode === "other-control") await expect(visible(page, "投稿する"), "unrelated focus is not stolen").toBeFocused();
+      else await expect(mine, "focus lost from the removed button / picker follows my chip").toBeFocused();
+    } finally {
+      releaseReply();
+      release();
+      await Promise.all(handled);
+      await page.unroute("**/graphql", intercept);
+    }
+  }
+  console.info(`OK saved PUT with failed reply / delayed GET restores picker and focus at ${viewport.name}`);
+}
+
 async function verifyMock(browser: Browser, frontendRoot: string, coreURL: string) {
   const server = await startApp(frontendRoot, "ShuttlePub", coreURL);
   try {
@@ -755,6 +833,7 @@ async function verifyMock(browser: Browser, frontendRoot: string, coreURL: strin
         await verifyFavoritesSettings(page, viewport);
         await resetMock(server);
         await verifyQuickReactionTiming(page, viewport);
+        await verifyAmbiguousReactionRestore(page, viewport, server);
         expect(errors, `mock ${viewport.name}: browser errors`).toEqual([]);
         console.info(`OK mock mode hydrates and keeps the shell's keyboard/focus rules at ${viewport.name} (${viewport.width}x${viewport.height})`);
       } finally {
