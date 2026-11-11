@@ -7,10 +7,11 @@ import Data.Argonaut.Decode.Generic (genericDecodeJson)
 import Data.Argonaut.Encode.Class (class EncodeJson)
 import Data.Argonaut.Encode.Generic (genericEncodeJson)
 import Data.Generic.Rep (class Generic)
+import Data.Maybe (Maybe)
 import Data.Show.Generic (genericShow)
-import Routing.Duplex (RouteDuplex', root, segment)
+import Routing.Duplex (RouteDuplex', optional, root, segment, string)
 import Routing.Duplex.Generic (noArgs, sum)
-import Routing.Duplex.Generic.Syntax ((/))
+import Routing.Duplex.Generic.Syntax ((/), (?))
 
 -- | Screens of the SNS shell (ui-spec L3 navigation + L4 post detail).
 -- | Notifications / Search / Bookmarks exist as navigation targets only; their
@@ -22,6 +23,9 @@ data Route
   | Bookmarks
   | Settings
   | PostDetail String
+  -- | The login entry (FA). The credentials form itself is the IdP's (Emumet);
+  -- | `error` is the BFF callback's fixed failure reason (bff/auth.ts LOGIN_ERROR_PATHS).
+  | Login { error :: Maybe String }
 
 derive instance Generic Route _
 derive instance Eq Route
@@ -44,4 +48,5 @@ routeCodec = root $ sum
   , "Bookmarks": "bookmarks" / noArgs
   , "Settings": "settings" / noArgs
   , "PostDetail": "posts" / segment
+  , "Login": "login" ? { error: optional <<< string }
   }

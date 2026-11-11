@@ -13,8 +13,19 @@ export type DataState = "populated" | "empty";
  * as a New image. On the branch side a missing feature fails the capture.
  *  - sns-shell: the ShuttlePub SNS layout (ui-spec v6), detected by the SSR marker
  *    data-testid="app-shell".
+ *  - sns-login: the ShuttlePub login screen (FA), detected by the /login SSR marker
+ *    data-testid="login-page".
  */
-export type ScreenFeature = "sns-shell";
+export type ScreenFeature = "sns-shell" | "sns-login";
+
+/**
+ * ShuttlePub only. A case with a viewer is captured against the real-mode BFF (stub
+ * ShuttlePub backend, no IdP is ever contacted) instead of the mock fixtures, as a
+ * browser that has no session (signed-out) or sends a session cookie the BFF can no
+ * longer use (session-expired). Signed-in real states need a real IdP: see the BFF
+ * tests and the real-stack E2E.
+ */
+export type ScreenViewer = "signed-out" | "session-expired";
 
 const routes = [
   { app: "Booskiff", id: "login", path: "/login", authenticated: false, data: "populated" },
@@ -41,8 +52,15 @@ const routes = [
   { app: "ShuttlePub", id: "profile-menu", path: "/", authenticated: false, data: "populated", requires: "sns-shell" },
   { app: "ShuttlePub", id: "settings", path: "/settings", authenticated: false, data: "populated", requires: "sns-shell" },
   { app: "ShuttlePub", id: "not-found", path: "/visual-route-not-found", authenticated: false, data: "populated" },
+  // FA login UI (no ui-spec entry; built from the shell's parts): the login screen,
+  // the callback's fixed failure reasons and the session notice above the home screen.
+  { app: "ShuttlePub", id: "login", path: "/login", authenticated: false, data: "populated", requires: "sns-login", viewer: "signed-out" },
+  { app: "ShuttlePub", id: "login-denied", path: "/login?error=denied", authenticated: false, data: "populated", requires: "sns-login", viewer: "signed-out" },
+  { app: "ShuttlePub", id: "login-failed", path: "/login?error=failed", authenticated: false, data: "populated", requires: "sns-login", viewer: "signed-out" },
+  { app: "ShuttlePub", id: "home-signed-out", path: "/", authenticated: false, data: "populated", requires: "sns-login", viewer: "signed-out" },
+  { app: "ShuttlePub", id: "home-session-expired", path: "/", authenticated: false, data: "populated", requires: "sns-login", viewer: "session-expired" },
 ] as const satisfies readonly {
-  app: ScreenApp; id: string; path: string; authenticated: boolean; data: DataState; requires?: ScreenFeature;
+  app: ScreenApp; id: string; path: string; authenticated: boolean; data: DataState; requires?: ScreenFeature; viewer?: ScreenViewer;
 }[];
 
 const viewports = [

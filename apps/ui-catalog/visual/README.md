@@ -9,12 +9,13 @@ R2 や公開画像バケットは不要です。
 - UI catalog: 各 revision の JSON manifest にある全ストーリーを色 × 形状テーマで撮影。
   現在 13 × 4 = 52 枚。各 `#story-*` 要素を切り出し、追加・削除も検出します。
 - Booskiff / Emumet / ShuttlePub: `visual/screens/cases.ts` の代表画面・状態を desktop / mobile で撮影。
-  ShuttlePub は SNS 本体の基本レイアウト (ホーム TL・投稿詳細・投稿フォーム・公開範囲メニュー・Profile 切替・設定・404)。
+  ShuttlePub は SNS 本体の基本レイアウト (ホーム TL・投稿詳細・投稿フォーム・公開範囲メニュー・Profile 切替・設定・404) と、
+  real モードの BFF (stub backend、IdP なし) で撮るログイン UI (`/login`・同意拒否・失敗・未ログインと期限切れのホーム)。
   全アプリを main と比較します。アプリが欠けていればスキップせず撮影を失敗させます。
   main にまだ無い画面機能に依存する case (`requires`) だけは、ベースライン撮影 (`CAPTURE_SIDE=baseline`) で
   スキップし New として報告します (ブランチ側で機能が欠ければ失敗)。
   追加で `visual/screens/shuttlepub-verify.ts` が hydration (desktop / mobile)、シェルのキーボード・フォーカス操作、
-  real モード (501 / 500) の表示を検証します。
+  real モード (501 / 500) の表示と、ログイン UI (戻り先付きログイン導線・実 callback を通る拒否→`/login?error=denied`・期限切れ) を検証します。
   実際の SSR とクライアントハイドレーションを使用します。
   Emumet は組み込み mock、Booskiff は撮影専用の固定 REST fixture を使用し、
   backend checkout、Docker、本番認証情報には依存しません。

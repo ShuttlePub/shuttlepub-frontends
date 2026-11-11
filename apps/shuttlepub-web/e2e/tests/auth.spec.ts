@@ -1,6 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 
-const origin = "http://127.0.0.1:3231";
+const origin = process.env.SHUTTLEPUB_E2E_ORIGIN ?? "http://127.0.0.1:3231";
 const tokenPattern = /eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+|"(?:access_token|refresh_token|id_token)"\s*:/;
 
 async function submitCredentials(page: Page, identifier = "testuser@example.com", password = "testuser") {
@@ -72,11 +72,15 @@ test("Kratos login -> Hydra PKCE -> real Emumet owned-account read -> logout (no
   await signedOut(page);
 });
 
-test("real Hydra consent denial never creates an app session", async ({ page }) => {
+test("real Hydra consent denial never creates an app session and lands on the login screen", async ({ page }) => {
   await enterCredentials(page);
   const callback = page.waitForResponse(response => new URL(response.url()).pathname === "/auth/callback");
   await page.getByRole("button", { name: "Deny", exact: true }).click();
-  expect((await callback).status()).toBe(401);
+  // A browser navigation gets the fixed reason, never the provider's error text.
+  const response = await callback;
+  expect(response.status()).toBe(302);
+  expect(response.headers()["location"]).toBe("/login?error=denied");
+  await expect(page).toHaveURL(origin + "/login?error=denied");
   await signedOut(page);
 });
 
@@ -84,6 +88,9 @@ test("state mismatch and a real Hydra invalid-code response fail closed", async 
   await page.request.get("/auth/oauth/start", { maxRedirects: 0 });
   const wrongState = await page.request.get("/auth/callback?code=bad-code&state=wrong-state");
   expect(wrongState.status()).toBe(401);
+  // The same failure as a browser navigation: the login screen with the generic reason.
+  await page.goto("/auth/callback?code=bad-code&state=wrong-state");
+  await expect(page).toHaveURL(origin + "/login?error=failed");
   const start = await page.request.get("/auth/oauth/start", { maxRedirects: 0 });
   const state = new URL(start.headers()["location"]!).searchParams.get("state");
   const invalidCode = await page.request.get("/auth/callback?code=invalid-code&state=" + encodeURIComponent(state!));
