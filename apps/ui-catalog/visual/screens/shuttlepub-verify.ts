@@ -379,6 +379,9 @@ async function verifyQuickReaction(page: Page, viewport: Viewport) {
 
   // P2: an unavailable favourite is not picked; the toast says why and offers 入れ替える.
   await page.keyboard.press("Enter");
+  // Opening schedules focus after render. Wait for it before choosing a different
+  // target, or the pending focus effect can steal the following Enter on CI.
+  await expect(viewport.name === "mobile" ? picker : page.locator("#sp-picker-search")).toBeFocused();
   // aria-disabled (not disabled): it stays focusable so the reason can be announced.
   await favorites.getByRole("button", { name: ":old_blob:（利用不可）" }).focus();
   await page.keyboard.press("Enter");
@@ -589,6 +592,7 @@ async function verifyQuickReactionTiming(page: Page, viewport: Viewport) {
   await soraButton.focus();
   await page.keyboard.press("Enter");
   const picker = page.getByTestId("picker");
+  await expect(viewport.name === "mobile" ? picker : page.locator("#sp-picker-search")).toBeFocused();
   await picker.getByTestId("picker-favorites").getByRole("button", { name: ":old_blob:（利用不可）" }).focus();
   await page.keyboard.press("Enter");
   await expect(toast).toContainText("利用できません");
