@@ -73,8 +73,13 @@ testButton :: String -> String -> Boolean -> Message -> Array (Html Message) -> 
 testButton testId classes disabled message children =
   HE.button [ HA.type' "button", HA.id testId, attr "data-testid" testId, HA.class' classes, HA.disabled disabled, HA.onClick message ] children
 
-spinner :: Html Message
-spinner = HE.span [ HA.class' "inline-block w-3 h-3 border-2 border-current border-r-transparent rounded-full animate-spin", attr "aria-hidden" "true" ] []
+-- | 処理中の印と文言。子要素の数を変えずに印だけを出し入れする
+-- | (印を足し引きすると、Flame の差分適用で文言のテキストノードが消えることがある)
+busyLabel :: Boolean -> String -> Array (Html Message)
+busyLabel busy label =
+  [ HE.span [ HA.class' (if busy then "inline-block w-3 h-3 border-2 border-current border-r-transparent rounded-full animate-spin" else "hidden"), attr "aria-hidden" "true" ] []
+  , HE.text label
+  ]
 
 chip :: Tone -> String -> String -> Html Message
 chip tone size label =
@@ -291,7 +296,7 @@ protectionRow model p =
           ( if p.enabled then
               [ timeText' p.checkedAt
               , button (btnSmall <> " " <> outline) verifying (admin (Verify p.protection))
-                  ((if verifying then [ spinner ] else []) <> [ HE.text Text.buttonVerify ])
+                  (busyLabel verifying Text.buttonVerify)
               ]
             else []
           )
@@ -359,7 +364,7 @@ destinations model webhook =
             <> maybe [] (\text -> [ HE.span [ HA.class' ("text-xs " <> Text.toneClass Text.Warning) ] [ HE.text text ] ]) (Text.endpointReason { failingReasons: e.failingReasons, configIssue: e.configIssue })
             <>
               [ button (btnSmall <> " " <> outline) testing (admin (TestWebhook e.id))
-                  ((if testing then [ spinner ] else []) <> [ HE.text Text.buttonTest ])
+                  (busyLabel testing Text.buttonTest)
               ]
             -- 環境変数の送信先は編集・削除できない
             <> (if e.editable then [ testButton editId (btnSmall <> " " <> outline) false (admin (OpenWebhookModal (Just e.id) editId)) [ HE.text Text.buttonEdit ] ] else [])
@@ -385,13 +390,13 @@ failedSection model =
         [ timeText f.failedAt
         , HE.span [ HA.class' ("flex-1 min-w-0 font-medium " <> T.textPrimary) ] [ HE.text (Text.eventTitle f.eventType Nothing) ]
         , button (btnSmall <> " " <> outline) retrying (admin (RetryDelivery f.endpointId f.eventId))
-            ((if retrying then [ spinner ] else []) <> [ HE.text Text.buttonRetry ])
+            (busyLabel retrying Text.buttonRetry)
         ]
   loadMore = case model.failuresCursor of
     Just _ ->
       [ HE.div [ HA.class' "p-2 text-center" ]
           [ testButton "webhook-failures-more" (btnSmall <> " " <> outline) model.loadingMoreFailures (admin LoadMoreFailures)
-              ((if model.loadingMoreFailures then [ spinner ] else []) <> [ HE.text Text.buttonLoadMore ])
+              (busyLabel model.loadingMoreFailures Text.buttonLoadMore)
           ]
       ]
     Nothing -> []
@@ -438,7 +443,7 @@ webhookModalBody model =
           <>
             [ button (btnNormal <> " " <> outline) false (admin CloseModal) [ HE.text Text.buttonCancel ]
             , testButton "webhook-save" (btnNormal <> " " <> primary) (model.pending || not (webhookFormSavable form)) (admin SaveWebhook)
-                ((if model.pending then [ spinner ] else []) <> [ HE.text Text.buttonSave ])
+                (busyLabel model.pending Text.buttonSave)
             ]
       )
   ]
@@ -515,7 +520,7 @@ bellItem model =
     Just _ ->
       [ HE.div [ HA.class' "p-2 text-center" ]
           [ testButton "notifications-more" (btnSmall <> " " <> outline) model.loadingMore (admin LoadMoreNotifications)
-              ((if model.loadingMore then [ spinner ] else []) <> [ HE.text Text.buttonLoadMore ])
+              (busyLabel model.loadingMore Text.buttonLoadMore)
           ]
       ]
     Nothing -> []
