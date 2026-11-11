@@ -17,6 +17,7 @@ data Route
   | Settings
   | AccountNew
   | AccountDetail String
+  | UsernameHelp
   -- 管理画面 (管理者のみ。導線は管理者にだけ出し、非管理者には 404 を表示する)
   | AdminRegistration
   | AdminWebhook
@@ -37,6 +38,7 @@ routeCodec = root $ sum
   , "Settings": prefix "settings" noArgs
   , "AccountNew": "accounts" / prefix "new" noArgs
   , "AccountDetail": "accounts" / segment
+  , "UsernameHelp": "help" / prefix "username" noArgs
   , "AdminRegistration": "admin" / prefix "registration" noArgs
   , "AdminWebhook": "admin" / prefix "webhook" noArgs
   }

@@ -39,7 +39,18 @@ is captured at 1280×900 and 390×844, at device scale 1, with a full-page scree
   the login flow up to a stub provider's denial.
 - Booskiff: login, populated Drive, empty Drive, selected folder, file detail, 404.
 - Emumet: login, populated accounts, new account, filled bot account form,
-  account detail, profile edit form, settings, 404.
+  account detail, profile edit form, settings, 404. The username screens
+  (cases with `requires: "emumet-username-ui"` in `cases.ts`: invalid / reserved / too long / taken input,
+  create confirmation, unset profile notice, one-time set dialog with its
+  invalid / taken / confirmation / already-set states, and the help page) exist only on
+  revisions whose SSR page carries the username dialog (`data-username-dialog`, see
+  `features.ts`); the baseline skips them (`CAPTURE_SIDE=baseline`, reported as New) and the
+  branch fails if they are missing or do not render.
+  `emumet-verify.ts` (run from the same CI job) additionally checks behaviour a screenshot cannot prove:
+  every state of `App.Fixtures` is served as the SSR page and must be resumed by the browser without any DOM
+  change or error, and the dialogs are driven with the keyboard (focus in, Tab wrap, Escape, focus restored, (?) link).
+  Cases that write to the mock Emumet (`MUTATES_SERVER`) make the driver restart that app afterwards;
+  GraphQL errors a case is meant to provoke are listed in `EXPECTED_GRAPHQL_CODES`.
 - Emumet registration gate admin (`admin-*`): every gate state of ui-spec "mock A v5" (not opened, open,
   open with one protection unresponsive, temporarily suspended, auto-stopped with and without recovered
   protection, admin-stopped, override with and without a ready protection, enforcement lost), the override and

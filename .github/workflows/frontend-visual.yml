@@ -77,6 +77,11 @@ jobs:
         working-directory: current/apps/ui-catalog
         env:
           FRONTEND_ROOT: ${{ github.workspace }}/current
+      - name: Verify Emumet username screens (hydration of every state, dialog keyboard behaviour)
+        run: bun visual/screens/emumet-verify.ts
+        working-directory: current/apps/ui-catalog
+        env:
+          FRONTEND_ROOT: ${{ github.workspace }}/current
       - name: Capture components in the same browser environment
         working-directory: current/apps/ui-catalog
         env:

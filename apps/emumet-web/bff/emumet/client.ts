@@ -23,9 +23,9 @@ export type Account = {
   readonly isBot: boolean;
   /**
    * Account 単位の公開鍵。Emumet の AccountResponse には無く (Profile モデル移行で Account 単位の鍵が無くなる。
-   * 旧鍵 API は P4 で廃止)、real は値を持たず常に空文字を返す。画面側の Maybe 化・非表示は画面 PR で行う
+   * 旧鍵 API は P4 で廃止)、値を持たないので常に null (画面は非表示にする)
    */
-  readonly publicKey: string;
+  readonly publicKey: string | null;
   readonly createdAt: string;
   readonly moderation: Moderation | null;
   /**
@@ -149,6 +149,24 @@ export class EmumetUsernameConflictError extends Error {
   }
 }
 
+/**
+ * username の空き確認 (GET /api/v1/profiles/username-availability) の結果。参考値で、確保 (hold) はしない:
+ * 最終判定は作成 / 設定時の 400 / 409。`taken` は使用中と削除済み Profile の使用を区別しない。
+ */
+export type UsernameAvailability =
+  | { readonly available: true }
+  | { readonly available: false; readonly reason: "invalid_format" | "reserved" | "taken" };
+
+/** 空き確認の上限超過 (429)。retryAfterSeconds は Retry-After (秒)。読めなければ null */
+export class EmumetRateLimitedError extends Error {
+  readonly retryAfterSeconds: number | null;
+  constructor(retryAfterSeconds: number | null) {
+    super("Emumet rate limit exceeded");
+    this.name = "EmumetRateLimitedError";
+    this.retryAfterSeconds = retryAfterSeconds;
+  }
+}
+
 export class EmumetAccountRestrictedError extends Error {
   constructor() {
     super("owning account is suspended or banned");
@@ -180,6 +198,12 @@ export interface EmumetClient extends RegistrationGateClient {
    * EmumetNotFoundError / EmumetApiError (401・403 等) のいずれか。
    */
   setProfileUsername(profileId: string, username: string): Promise<Profile>;
+  /**
+   * 入力中検証用の空き確認 (GET /api/v1/profiles/username-availability。認証必須・呼び出し主体ごとに 60 回/分)。
+   * 形式・予約語は上流も同じ規則で判定する。失敗は EmumetRateLimitedError (429) / EmumetApiError (401 等) /
+   * EmumetUnavailableError (接続不可・時間切れ) / EmumetInvalidResponseError (契約違反)。
+   */
+  checkUsernameAvailability(username: string): Promise<UsernameAvailability>;
   listMetadata(accountIds: readonly string[]): Promise<readonly Metadata[]>;
   createMetadata(accountId: string, input: MetadataInput): Promise<Metadata>;
   updateMetadata(accountId: string, nanoid: string, input: MetadataInput): Promise<Metadata>;

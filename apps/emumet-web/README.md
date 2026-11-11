@@ -72,6 +72,7 @@ bun scripts/sync-graphql.ts  # SDL → PureScript 型生成 (bff/schema.graphql 
 | `KRATOS_PUBLIC_URL` | `http://localhost:4433` | Kratos Public API |
 | `HYDRA_PUBLIC_URL` | `http://localhost:4444` | Hydra Public API |
 | `EMUMET_API_URL` | `http://localhost:8080` | Emumet バックエンドの **origin** (パスを含めない)。API は `{origin}/api/v1/...`、OAuth2 consent は `{origin}/oauth2/consent` |
+| `EMUMET_PUBLIC_HOST` | (real では必須。mock は `emumet.example`) | acct の `@host` に表示するホスト。**Emumet の `PUBLIC_BASE_URL` の host (port があれば port も) と同じ値**を明示する (acct:name@host・webfinger・inbox の Host 照合に使われる値)。`EMUMET_API_URL` は内部ホストでありうるため暗黙には使わない。未設定・不正 (scheme や path を含む等) だと `Query.instanceHost` が `INSTANCE_HOST_NOT_CONFIGURED` を返し、画面は確認へ進めず「再取得」を出す。BFF から Emumet の公開ホストを確かめる API は無く、形式だけ検査する |
 
 #### OAuth2 クライアント設定（Real モードのみ）
 

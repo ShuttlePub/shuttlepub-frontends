@@ -55,7 +55,7 @@ describe("(a) resolvers with MockEmumetClient", () => {
     // Then: connection shape, 3 seed items, moderation null
     expect(result.errors).toBeUndefined();
     const accounts = result.data?.accounts as {
-      items: { id: string; name: string; isBot: boolean; publicKey: string; createdAt: string; moderation: unknown }[];
+      items: { id: string; name: string; isBot: boolean; publicKey: string | null; createdAt: string; moderation: unknown }[];
       first: string | null;
       last: string | null;
     };
@@ -64,7 +64,7 @@ describe("(a) resolvers with MockEmumetClient", () => {
     expect(accounts.items.map((a) => a.id)).toEqual(["acc_01", "acc_02", "acc_03"]);
     expect(accounts.items.map((a) => a.name)).toEqual(["alice", "bob", "bot-news"]);
     expect(accounts.items[2]?.isBot).toBe(true);
-    expect(accounts.items[0]?.publicKey).toBe("ed25519:AAAA");
+    expect(accounts.items[0]?.publicKey).toBeNull();
     expect(accounts.items[0]?.moderation).toBeNull();
   });
 
@@ -103,16 +103,16 @@ describe("(a) resolvers with MockEmumetClient", () => {
     // Given / When: createAccount
     const context = await authenticatedContext(createMockEmumetClient());
     const result = await run(
-      'mutation { createAccount(input: { name: "carol" }) { id name isBot publicKey moderation { type } } }',
+      'mutation { createAccount(input: { name: "carol", username: "carol" }) { id name isBot publicKey moderation { type } } }',
       context,
     );
     // Then: id acc_100 (counter starts at 100), isBot defaults false
     expect(result.errors).toBeUndefined();
-    const account = result.data?.createAccount as { id: string; name: string; isBot: boolean; publicKey: string; moderation: unknown };
+    const account = result.data?.createAccount as { id: string; name: string; isBot: boolean; publicKey: string | null; moderation: unknown };
     expect(account.id).toBe("acc_100");
     expect(account.name).toBe("carol");
     expect(account.isBot).toBe(false);
-    expect(account.publicKey).toBe("ed25519:MOCK_acc_100");
+    expect(account.publicKey).toBeNull();
     expect(account.moderation).toBeNull();
   });
 
@@ -137,7 +137,7 @@ describe("(a) resolvers with MockEmumetClient", () => {
     // Given: fresh account without profile
     const emumet = createMockEmumetClient();
     const context = await authenticatedContext(emumet);
-    await run('mutation { createAccount(input: { name: "carol" }) { id } }', context);
+    await run('mutation { createAccount(input: { name: "carol", username: "carol" }) { id } }', context);
     // When: updateProfile on the new account
     const result = await run(
       'mutation { updateProfile(accountId: "acc_100", input: { displayName: "Carol" }) { nanoid accountId displayName summary } }',
@@ -226,7 +226,7 @@ describe("(b) UNAUTHENTICATED branch", () => {
   test("Mutation.createAccount with null emumet yields UNAUTHENTICATED", async () => {
     // Given / When
     const context = await unauthenticatedContext();
-    const result = await run('mutation { createAccount(input: { name: "x" }) { id } }', context);
+    const result = await run('mutation { createAccount(input: { name: "x", username: "x" }) { id } }', context);
     // Then
     expect(result.data).toBeNull();
     expect(result.errors?.[0]?.extensions?.code).toBe("UNAUTHENTICATED");

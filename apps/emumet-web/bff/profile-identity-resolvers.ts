@@ -44,7 +44,8 @@ export type ProfileIdentityErrorCode =
   | "NOT_FOUND"
   | "BAD_REQUEST"
   | "TEMPORARILY_UNAVAILABLE"
-  | "INVALID_UPSTREAM_RESPONSE";
+  | "INVALID_UPSTREAM_RESPONSE"
+  | "INSTANCE_HOST_NOT_CONFIGURED";
 
 function identityError(code: ProfileIdentityErrorCode, message: string, extensions: Record<string, unknown> = {}): GraphQLError {
   return new GraphQLError(message, { extensions: { code, ...extensions } });
@@ -107,12 +108,62 @@ async function withIdentityErrors<T>(call: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * acct の `@host` に使うホスト。**公開ホストの明示設定が契約**で、Emumet の `PUBLIC_BASE_URL` の host (port があれば port も)
+ * と一致させる (acct:name@host・webfinger・inbox の Host 照合に使われる値)。BFF から Emumet の公開ホストを確かめる API は
+ * 無いので一致までは検証できず、形式 (host[:port]・scheme や path を含まない) だけ検査する。
+ * API 接続先 (`EMUMET_API_URL`) は内部ホストでありうるため、暗黙のフォールバックはしない: 未設定・不正は null (= 取得失敗)。
+ * mock (`USE_MOCK` が "false" 以外。index.ts の既定と同じ) は設定が無ければ固定の例示ホスト。
+ */
+export function resolveInstanceHost(env: Record<string, string | undefined>): string | null {
+  const configured = env["EMUMET_PUBLIC_HOST"]?.trim();
+  if (configured) return isValidPublicHost(configured) ? configured : null;
+  return env["USE_MOCK"] !== "false" ? "emumet.example" : null;
+}
+
+const PUBLIC_HOST = /^(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*|\[[0-9a-f:.]+\])(?::[0-9]{1,5})?$/i;
+
+export function isValidPublicHost(host: string): boolean {
+  return PUBLIC_HOST.test(host);
+}
+
 export const profileIdentityResolvers = {
   Query: {
-    /** 規則だけの判定 (Emumet は呼ばない)。重複は書き込み時にしか判明しないため含まない */
-    checkProfileUsername: (_parent: unknown, args: { username: string }, context: GraphQLContext) => {
+    /** acct の @host 部分 (画面の ID 表示用)。設定が無ければ INSTANCE_HOST_NOT_CONFIGURED (画面は確認へ進めず再取得を促す)。Emumet は呼ばない */
+    instanceHost: (_parent: unknown, _args: unknown, context: GraphQLContext) => {
       requireEmumet(context);
-      return checkProfileUsername(args.username) ?? "VALID";
+      const host = resolveInstanceHost(process.env);
+      if (host === null) {
+        throw identityError("INSTANCE_HOST_NOT_CONFIGURED", "EMUMET_PUBLIC_HOST is not configured (or is not a host[:port])");
+      }
+      return host;
+    },
+    /**
+     * 入力中の検証。形式・予約語は BFF で判定 (Emumet は呼ばない)、設定できそうなときだけ Emumet の空き確認 API で重複を見る。
+     * 確認できなかった (接続不可・時間切れ・429・契約違反・未接続) ときは VALID ではなく UNKNOWN を返す。
+     * 認証・権限の失敗だけはエラー。結果は参考値で、最終判定は作成 / 設定時の 400 / 409
+     */
+    checkProfileUsername: async (_parent: unknown, args: { username: string }, context: GraphQLContext) => {
+      const emumet = requireEmumet(context);
+      const violation = checkProfileUsername(args.username);
+      if (violation !== null) return violation;
+      try {
+        const result = await emumet.checkUsernameAvailability(args.username);
+        if (result.available) return "VALID";
+        switch (result.reason) {
+          case "taken":
+            return "TAKEN";
+          case "invalid_format":
+            return "FORMAT";
+          case "reserved":
+            return "RESERVED";
+        }
+      } catch (error) {
+        const classified = classifyProfileIdentityError(error);
+        const code = classified?.extensions["code"];
+        if (code === "UNAUTHENTICATED" || code === "FORBIDDEN") throw classified;
+        return "UNKNOWN";
+      }
     },
   },
   Profile: {

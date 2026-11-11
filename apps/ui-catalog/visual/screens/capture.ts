@@ -2,9 +2,9 @@ import { mkdir } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { chromium, expect, type Browser, type Page } from "@playwright/test";
 import { startBooskiffStub } from "./booskiff-stub.ts";
-import { FIXED_TIME, MOCK_IDENTIFIER, MOCK_PASSWORD, SCREEN_CASES, type ScreenApp, type ScreenCase, type ScreenViewer } from "./cases.ts";
+import { EXPECTED_GRAPHQL_CODES, FIXED_TIME, MOCK_IDENTIFIER, MOCK_PASSWORD, MUTATES_SERVER, SCREEN_CASES, type ScreenApp, type ScreenCase, type ScreenViewer } from "./cases.ts";
 import { localImage } from "./fixtures.ts";
-import { captureSide, featuresInShuttlePubHtml, selectCases, type CaptureSide } from "./features.ts";
+import { captureSide, featuresInEmumetHtml, featuresInShuttlePubHtml, selectCases, type CaptureSide } from "./features.ts";
 import { startApp, type AppServer } from "./servers.ts";
 import { SHUTTLEPUB_LOOPBACK_SESSION_COOKIE, startShuttlePubStub } from "./shuttlepub-stub.ts";
 
@@ -77,16 +77,92 @@ async function prepareScreen(page: Page, item: ScreenCase) {
         await expect(page.locator(`main a[href="/accounts/${id}"]`)).toBeVisible();
       }
     } else if (item.id === "account-new") {
-      await expect(content.locator('input[type="text"]')).toBeVisible();
+      // main: a form page with one disabled submit button; username UI: a modal over the list
+      await expect(content.locator('input[type="text"]').first()).toBeVisible();
       await expect(content.getByRole("checkbox")).toBeVisible();
-      await expect(content.getByRole("button")).toBeDisabled();
+      await expect(content.getByRole("button", { name: /^(Create Account|作成)$/ })).toBeDisabled();
     } else if (item.id === "account-new-filled") {
-      await content.locator('input[type="text"]').fill("release-bot");
+      const fields = content.locator('input[type="text"]');
+      await fields.first().fill("release-bot");
       await content.getByRole("checkbox").check();
-      await expect(content.getByRole("button")).toBeEnabled();
+      if (await fields.count() > 1) {
+        await fields.nth(1).fill("release-bot");
+        await expect(content.getByText("利用できます")).toBeVisible();
+      }
+      await expect(content.getByRole("button", { name: /^(Create Account|作成)$/ })).toBeEnabled();
+    } else if (item.id === "account-new-invalid") {
+      await content.locator('input[type="text"]').first().fill("Release Bot");
+      await content.locator("#new-username").fill("Alice");
+      await expect(content.getByText("先頭は a〜z か 0〜9")).toBeVisible();
+      await expect(content.locator("#new-username")).toHaveValue("Alice");
+      await expect(content.getByRole("dialog").getByRole("button", { name: "作成" })).toBeDisabled();
+    } else if (item.id === "account-new-reserved" || item.id === "account-new-too-long") {
+      await content.locator('input[type="text"]').first().fill("Release Bot");
+      await content.locator("#new-username").fill(item.id === "account-new-reserved" ? "admin" : "a".repeat(65));
+      await expect(content.getByText(item.id === "account-new-reserved" ? "利用できません" : "長すぎます")).toBeVisible();
+      await expect(content.getByRole("dialog").getByRole("button", { name: "作成" })).toBeDisabled();
+    } else if (item.id === "account-new-taken") {
+      await content.locator('input[type="text"]').first().fill("Release Bot");
+      await content.locator("#new-username").fill("alice");
+      await expect(content.getByText("利用できません")).toBeVisible();
+      await expect(content.getByRole("dialog").getByRole("button", { name: "作成" })).toBeDisabled();
+      await expect(content.locator("#new-username")).toHaveValue("alice");
+    } else if (item.id === "account-new-confirm") {
+      await content.locator('input[type="text"]').first().fill("release-bot");
+      await content.locator("#new-username").fill("release-bot");
+      await expect(content.getByText("利用できます")).toBeVisible();
+      await content.getByRole("dialog").getByRole("button", { name: "作成" }).click();
+      await expect(content.getByText("後から変更できません。")).toBeVisible();
+      await expect(content.locator("#username-confirm-id")).toContainText("@release-bot");
+    } else if (item.id === "account-detail-unset") {
+      await expect(content.locator("h1")).toContainText("Bob Builder");
+      await expect(content.getByText("ユーザー名が未設定です")).toBeVisible();
+    } else if (item.id === "username-help") {
+      await expect(content.getByRole("heading", { name: "ユーザー名について" })).toBeVisible();
+      await expect(content.getByText("ユーザー名は後から変更できません。")).toBeVisible();
+    } else if (item.id === "account-detail-set-invalid") {
+      await expect(content.locator("h1")).toContainText("Bob Builder");
+      await content.getByRole("button", { name: "設定する" }).click();
+      await content.locator("#set-username").fill("Bob");
+      await expect(content.getByText("先頭は a〜z か 0〜9")).toBeVisible();
+      await expect(content.getByRole("dialog").getByRole("button", { name: "設定", exact: true })).toBeDisabled();
+    } else if (item.id === "account-detail-set-taken") {
+      await expect(content.locator("h1")).toContainText("Bob Builder");
+      await content.getByRole("button", { name: "設定する" }).click();
+      await content.locator("#set-username").fill("alice");
+      await expect(content.getByText("利用できません")).toBeVisible();
+      await expect(content.getByRole("dialog").getByRole("button", { name: "設定", exact: true })).toBeDisabled();
+      await expect(content.locator("#set-username")).toHaveValue("alice");
+    } else if (item.id === "account-detail-already-set") {
+      await expect(content.locator("h1")).toContainText("Bob Builder");
+      await content.getByRole("button", { name: "設定する" }).click();
+      await content.locator("#set-username").fill("bob");
+      await expect(content.getByText("利用できます")).toBeVisible();
+      await content.getByRole("dialog").getByRole("button", { name: "設定", exact: true }).click();
+      await expect(content.getByText("後から変更できません。")).toBeVisible();
+      // Another session sets the username while this confirmation is open.
+      await page.evaluate(async () => {
+        await fetch("/graphql", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query: 'mutation { setProfileUsername(profileId: "prof_02", username: "bob-elsewhere") { nanoid } }' }),
+        });
+      });
+      await content.getByRole("dialog").getByRole("button", { name: "設定", exact: true }).click();
+      await expect(content.getByText("ユーザー名はすでに設定されています")).toBeVisible();
+      await expect(content.getByText("@bob-elsewhere").first()).toBeVisible();
+    } else if (item.id === "account-detail-set-modal" || item.id === "account-detail-set-confirm") {
+      await expect(content.locator("h1")).toContainText("Bob Builder");
+      await content.getByRole("button", { name: "設定する" }).click();
+      await content.locator("#set-username").fill("bob");
+      await expect(content.getByText("利用できます")).toBeVisible();
+      if (item.id === "account-detail-set-confirm") {
+        await content.getByRole("dialog").getByRole("button", { name: "設定", exact: true }).click();
+        await expect(content.getByText("後から変更できません。")).toBeVisible();
+        await expect(content.locator("#username-confirm-id")).toContainText("@bob");
+      }
     } else if (item.id.startsWith("account-detail")) {
       await expect(content.locator("h1")).toContainText("Alice Wonderland");
-      await expect(content.getByText("ed25519:AAAA", { exact: true })).toBeVisible();
+      await expect(page.getByText("@alice").first()).toBeVisible();
       await expect(page.getByText("https://alice.example.com", { exact: true })).toBeVisible();
       if (item.id === "account-detail-edit") {
         await content.getByRole("button").first().click();
@@ -295,7 +371,7 @@ async function captureScreen(browser: Browser, server: AppServer, item: ScreenCa
   const viewer = viewerOf(item);
   // A real-mode viewer without a usable session: the BFF answers these GraphQL errors
   // by design (and the client displays them). Any other code still fails the capture.
-  const expectedGraphqlCodes = viewer ? new Set(["UNAUTHENTICATED", "NOT_IMPLEMENTED"]) : new Set<string>();
+  const expectedGraphqlCodes = viewer ? new Set(["UNAUTHENTICATED", "NOT_IMPLEMENTED"]) : new Set<string>(EXPECTED_GRAPHQL_CODES[item.id] ?? []);
   const context = await browser.newContext({
     baseURL: server.url, viewport: { width: item.viewport.width, height: item.viewport.height },
     deviceScaleFactor: 1, locale: "en-US", timezoneId: "UTC", colorScheme: "dark",
@@ -418,8 +494,12 @@ export async function captureScreens(frontendRoot: string, output: string, side:
     await Promise.all(servers.map((server) => server.waitUntilReady()));
     const capturedApps = new Set<ScreenApp>(servers.map((server) => server.app));
     const shuttlePub = servers.find((server) => server.app === "ShuttlePub")!;
+    const emumet = servers.find((server) => server.app === "Emumet")!;
     const shuttlePubHtml = await Promise.all(["/", "/login"].map(async (path) => (await fetch(`${shuttlePub.url}${path}`)).text()));
-    const features = featuresInShuttlePubHtml(shuttlePubHtml.join("\n"));
+    const features = new Set([
+      ...featuresInShuttlePubHtml(shuttlePubHtml.join("\n")),
+      ...featuresInEmumetHtml(await (await fetch(`${emumet.url}/accounts/new`)).text()),
+    ]);
     const { capture: cases, skipped } = selectCases(SCREEN_CASES.filter((item) => capturedApps.has(item.app)), features, side);
     for (const item of skipped) {
       console.info(`Skipped ${item.filename}: this baseline does not have "${"requires" in item ? item.requires : ""}" yet (reported as New)`);
@@ -443,6 +523,14 @@ export async function captureScreens(frontendRoot: string, output: string, side:
       expect(shuttlePubStub?.unexpectedRequests ?? [], `${item.filename}: unexpected ShuttlePub backend/IdP requests`).toEqual([]);
       for (const entry of servers) {
         expect(await entry.networkViolations(), `${entry.app}: unexpected server requests`).toEqual([]);
+      }
+      if (MUTATES_SERVER.has(item.id)) {
+        // The mock Emumet keeps what this case wrote; start a fresh one so every later case sees the seed data.
+        const index = servers.indexOf(server);
+        await server.stop();
+        const fresh = await startApp(frontendRoot, item.app, stub.url);
+        servers[index] = fresh;
+        await fresh.waitUntilReady();
       }
     }
     console.info(`Captured ${cases.length} app screenshots in ${output}`);

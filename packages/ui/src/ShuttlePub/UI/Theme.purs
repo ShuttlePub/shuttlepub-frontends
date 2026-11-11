@@ -35,6 +35,12 @@ textAccent = "text-accent"
 textError :: String
 textError = "text-error"
 
+textSuccess :: String
+textSuccess = "text-success"
+
+textWarning :: String
+textWarning = "text-warning"
+
 textTempHigh :: String
 textTempHigh = "text-temp-high"
 
