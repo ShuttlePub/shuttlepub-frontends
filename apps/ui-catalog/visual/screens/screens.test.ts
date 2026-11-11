@@ -15,7 +15,7 @@ test("screen inventory covers every app and state at desktop/mobile sizes with s
   const names = SCREEN_CASES.map((item) => item.filename);
   // Then
   expect(new Set(names).size).toBe(SCREEN_CASES.length);
-  expect(SCREEN_CASES).toHaveLength(80);
+  expect(SCREEN_CASES).toHaveLength(90);
   for (const item of SCREEN_CASES) {
     expect(item.filename).toMatch(/^(Booskiff|Emumet|ShuttlePub)-[A-Za-z0-9-]+\.png$/);
     expect(item.path).toMatch(/^\/(?!\/)/);
@@ -47,15 +47,22 @@ test("ShuttlePub cases cover the SNS shell screens at both widths and need no lo
   const cases = SCREEN_CASES.filter((item) => item.app === "ShuttlePub");
   // Then
   expect([...new Set(cases.map((item) => item.id))].sort()).toEqual([
-    "compose", "compose-visibility", "home", "not-found", "post-detail", "profile-menu", "settings",
+    "compose", "compose-visibility", "home", "home-session-expired", "home-signed-out",
+    "login", "login-denied", "login-failed", "not-found", "post-detail", "profile-menu", "settings",
   ]);
   expect(cases.every((item) => !item.authenticated)).toBe(true);
   // Screens that main already served (as F0 placeholders) need no feature, so they
-  // are always compared; the new screens declare the SNS shell.
+  // are always compared; the new screens declare the SNS shell or the login screen.
   for (const item of cases) {
     const required = "requires" in item ? item.requires : undefined;
-    expect(required).toBe(["home", "not-found"].includes(item.id) ? undefined : "sns-shell");
+    const viewer = "viewer" in item ? item.viewer : undefined;
+    if (["home", "not-found"].includes(item.id)) expect(required).toBeUndefined();
+    else expect(required).toBe(viewer ? "sns-login" : "sns-shell");
+    // Only the login UI is captured against the real-mode BFF (no session / stale session).
+    expect(viewer === undefined).toBe(!/^(login|home-signed-out|home-session-expired)/.test(item.id));
   }
+  expect(cases.filter((item) => "viewer" in item && item.viewer === "session-expired").map((item) => item.id))
+    .toEqual(["home-session-expired", "home-session-expired"]);
 });
 
 test("only the baseline side may skip cases whose screen feature is missing", () => {
@@ -63,14 +70,22 @@ test("only the baseline side may skip cases whose screen feature is missing", ()
   const shuttlePub = SCREEN_CASES.filter((item) => item.app === "ShuttlePub");
   const placeholderHtml = '<main id="app"><h1>ShuttlePub</h1><template-state></template-state></main>';
   const shellHtml = '<main id="app" lang="ja"><div class="sp-app" data-testid="app-shell"></div></main>';
+  const loginHtml = '<div class="sp-page sp-page-login" data-testid="login-page"></div>';
+  const withLogin = featuresInShuttlePubHtml(shellHtml + loginHtml);
   // When / Then
   expect(featuresInShuttlePubHtml(placeholderHtml).size).toBe(0);
   expect([...featuresInShuttlePubHtml(shellHtml)]).toEqual(["sns-shell"]);
+  expect([...withLogin].sort()).toEqual(["sns-login", "sns-shell"]);
   const baseline = selectCases(shuttlePub, featuresInShuttlePubHtml(placeholderHtml), "baseline");
   expect(baseline.capture.map((item) => item.id).sort()).toEqual(["home", "home", "not-found", "not-found"]);
   expect(baseline.skipped).toHaveLength(shuttlePub.length - 4);
+  // A main with the shell but without the login screen reports the login cases as New.
+  const shellOnly = selectCases(shuttlePub, featuresInShuttlePubHtml(shellHtml), "baseline");
+  expect(shellOnly.skipped.every((item) => "requires" in item && item.requires === "sns-login")).toBe(true);
+  expect(shellOnly.skipped).toHaveLength(10);
   expect(() => selectCases(shuttlePub, featuresInShuttlePubHtml(placeholderHtml), "branch")).toThrow(/sns-shell/);
-  expect(selectCases(shuttlePub, featuresInShuttlePubHtml(shellHtml), "branch")).toEqual({ capture: shuttlePub, skipped: [] });
+  expect(() => selectCases(shuttlePub, featuresInShuttlePubHtml(shellHtml), "branch")).toThrow(/sns-login/);
+  expect(selectCases(shuttlePub, withLogin, "branch")).toEqual({ capture: shuttlePub, skipped: [] });
   expect(captureSide(undefined)).toBe("branch");
   expect(captureSide("baseline")).toBe("baseline");
   expect(() => captureSide("main")).toThrow();

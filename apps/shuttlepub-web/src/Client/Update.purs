@@ -2,12 +2,15 @@ module Client.Update where
 
 import Prelude
 
+import App.Api.Error (ApiError(..))
+import App.Api.Error as Error
 import App.Api.GraphQL (createPost, fetchApiMode, fetchApiStatus, fetchAvailableProfiles, fetchPostDetail, fetchProfileContext, fetchTimeline, selectProfile)
 import App.Dom (focusById, focusFirstIn, logoutAndReload, scrollToTop, setScrollLock)
 import App.Message (Message(..))
 import App.Model (DetailTab(..), Model, RemoteData(..), emptyCompose, fromEither)
 import App.Post (TimelineTab, timelineTabFromValue)
 import App.Route (Route(..), routeCodec)
+import App.View.Auth (authActionId, authActionShown)
 import App.View.Compose (composeTextId, visibilityButtonId)
 import App.View.Pages (detailTabId, timelineTabId)
 import App.View.Shell (composeButtonDesktopId, composeButtonMobileId, profileButtonDesktopId, profileButtonMobileId, profileMenuId)
@@ -140,6 +143,15 @@ mkUpdate nav model = case _ of
     Tuple model [ Just <<< ProfileSelected <$> selectProfile profileId ]
   ProfileSelected result -> case result of
     Right context -> closeProfileMenu (model { profileContext = Loaded context })
+    -- The session ended (or the account lost access) while the menu was open: the
+    -- shell now shows that state instead of a switcher that can no longer work.
+    Left error | endsSession error ->
+      let
+        next = model { profileContext = Failed error, availableProfiles = Failed error, profileMenu = Nothing }
+      in
+        -- The switcher that opened the menu is gone: focus the way out, which the view
+        -- always renders for these states (the notice's action, or the login button on /login).
+        Tuple next [ syncScrollLock next, effect (focusById authActionId) ]
     Left error -> case model.profileMenu of
       Just state -> noMessages $ model { profileMenu = Just state { error = Just error } }
       Nothing -> noMessages model
@@ -149,6 +161,9 @@ mkUpdate nav model = case _ of
   withCompose f = case model.compose of
     Just state -> f state
     Nothing -> noMessages model
+  endsSession error = Error.isSignedOut error || case error of
+    Forbidden _ -> true
+    _ -> false
 
 type Step = { model :: Model, effects :: Array (Aff (Maybe Message)) }
 
@@ -205,11 +220,16 @@ closeProfileMenu model = case model.profileMenu of
 -- | the overlay was open, so focus returns to the twin that is visible now.
 visibleOpener :: Model -> String -> String
 visibleOpener model opener
-  | opener == profileButtonDesktopId || opener == profileButtonMobileId =
-      if model.isMobile then profileButtonMobileId else profileButtonDesktopId
+  | opener == profileButtonDesktopId || opener == profileButtonMobileId = headerSwitcher model
   | opener == composeButtonDesktopId || opener == composeButtonMobileId =
       if model.isMobile then composeButtonMobileId else composeButtonDesktopId
+  -- Opened from the session notice: back to it, unless the menu resolved the notice
+  -- (a Profile was chosen) and it is gone; then to the header switcher (ui-spec 実装上の注意 6).
+  | opener == authActionId = if authActionShown model then authActionId else headerSwitcher model
   | otherwise = opener
+
+headerSwitcher :: Model -> String
+headerSwitcher model = if model.isMobile then profileButtonMobileId else profileButtonDesktopId
 
 -- | The page behind a modal layer does not scroll: the compose form (both widths) and
 -- | the mobile Profile bottom sheet. The desktop Profile dropdown is not modal.
