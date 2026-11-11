@@ -40,7 +40,7 @@ describe("mock mode", () => {
     expect(result.data).toEqual({
       apiMode: "MOCK",
       apiStatus: { apiVersion: apiStatusFixture.api_version },
-      profileContext: { activeProfile: profileContextFixture.activeProfile },
+      profileContext: { activeProfile: { id: profileContextFixture.activeProfile!.id, handle: profileContextFixture.activeProfile!.handle, displayName: profileContextFixture.activeProfile!.displayName } },
     });
   });
 });

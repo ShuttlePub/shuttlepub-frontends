@@ -1,11 +1,17 @@
 import { GraphQLError } from "graphql";
 import { AuthError } from "./auth-error.ts";
+import { policyResolvers } from "./policy/resolvers.ts";
+import type { ProfilePolicySource } from "./policy/source.ts";
 import type { ProfileContextSource } from "./profile.ts";
 import { ShuttlePubApiError, type ShuttlePubApi, type ShuttlePubApiErrorKind } from "./rest/client.ts";
 
 export type GraphQLContext = {
   api: ShuttlePubApi;
   profiles: ProfileContextSource;
+  /** Emumet Profile mute/block settings (mock or real, fixed at startup like api). */
+  policy: ProfilePolicySource;
+  /** This server's own hosts (refused as a muted/blocked domain). */
+  selfDomains: readonly string[];
 };
 
 export const ERROR_CODES: Record<ShuttlePubApiErrorKind, string> = {
@@ -40,10 +46,12 @@ async function guarded<T>(work: () => Promise<T>): Promise<T> {
 
 export const resolvers = {
   Mutation: {
+    ...policyResolvers.Mutation,
     selectProfile: (_root: unknown, args: { id: string }, context: GraphQLContext) =>
       guarded(() => context.profiles.selectProfile(args.id)),
   },
   Query: {
+    ...policyResolvers.Query,
     availableProfiles: (_root: unknown, _args: unknown, context: GraphQLContext) =>
       guarded(() => context.profiles.availableProfiles()),
     apiMode: (_root: unknown, _args: unknown, context: GraphQLContext) => context.api.mode.toUpperCase(),

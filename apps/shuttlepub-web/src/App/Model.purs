@@ -3,6 +3,7 @@ module App.Model where
 import Prelude
 
 import App.Api.Error (ApiError)
+import App.MuteBlock.Types as MuteBlock
 import App.Profile (ProfileContext)
 import App.Route (Route)
 import Data.Argonaut.Decode.Class (class DecodeJson)
@@ -50,6 +51,7 @@ type Model =
   , apiMode :: RemoteData ApiMode
   , apiStatus :: RemoteData ApiStatus
   , profileContext :: RemoteData ProfileContext
+  , muteBlock :: MuteBlock.Model
   }
 
 -- | Initial model used by SSR (and as the base for tests). Data is requested by
@@ -61,4 +63,5 @@ initialModel route =
   , apiMode: NotAsked
   , apiStatus: NotAsked
   , profileContext: NotAsked
+  , muteBlock: MuteBlock.init
   }

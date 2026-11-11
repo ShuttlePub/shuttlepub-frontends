@@ -1,18 +1,21 @@
 /**
  * Usage: bun scripts/verify-openapi.ts
  *
- * Offline check that openapi/shuttlepub.json still matches the producer pin in
- * openapi/producer.lock.json. Exits non-zero on any mismatch.
+ * Offline check that every vendored OpenAPI schema still matches its producer pin
+ * (openapi/shuttlepub.json + producer.lock.json, openapi/emumet.json + emumet.lock.json).
+ * Exits non-zero on any mismatch.
  */
-import { OpenApiLockError, verifyLock } from "../bff/openapi/lock.ts";
+import { OPENAPI_DIR, OPENAPI_PINS, OpenApiLockError, verifyLock } from "../bff/openapi/lock.ts";
 
-try {
-  const lock = await verifyLock();
-  console.log(`OpenAPI schema OK: ${lock.producer.repository}@${lock.producer.commit} sha256:${lock.schema.sha256}`);
-} catch (error) {
-  if (error instanceof OpenApiLockError) {
-    console.error(`OpenAPI lock check failed: ${error.message}`);
-    process.exit(1);
+let failed = false;
+for (const pin of OPENAPI_PINS) {
+  try {
+    const lock = await verifyLock(OPENAPI_DIR, pin);
+    console.log(`OpenAPI schema OK: ${lock.producer.repository}@${lock.producer.commit} sha256:${lock.schema.sha256}`);
+  } catch (error) {
+    if (!(error instanceof OpenApiLockError)) throw error;
+    console.error(`OpenAPI lock check failed (${pin.name}): ${error.message}`);
+    failed = true;
   }
-  throw error;
 }
+if (failed) process.exit(1);

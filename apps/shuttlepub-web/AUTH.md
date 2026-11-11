@@ -93,6 +93,9 @@ direction は実装上の `next` を使用します（Emumet route annotation �
 `id` は公開 **Account nanoid**、`handle` は `name`、`displayName` は `display_name`（null 時のみ `name`）。
 API は内部 Profile nanoid を返さないので作りません。今後その ID や未提供属性が必要なら、
 別途 upstream API 契約を追加する必要があります。空一覧は `[]`、未選択は `activeProfile: null`。
+Emumet が `AccountResponse.profile_id`（RX、Emumet 49acf9d 以降は必須）で返す Profile nanoid は BFF 内部だけで
+保持し、Profile 単位の Emumet API（domain-controls・blocks/mutes・following/followers）の宛先に使います。
+GraphQL の `Profile` には出しません。`profile_id` が無い応答は `INVALID_UPSTREAM_RESPONSE` です。
 選択先の消失・他人の ID は `PROFILE_UNAVAILABLE`、moderation 情報の不備/制限対象も fail closed。
 Profile の作成や一般登録は行いません。
 

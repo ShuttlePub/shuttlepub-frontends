@@ -1,28 +1,28 @@
 /**
  * Usage:
- *   bun scripts/sync-openapi.ts --commit <40-hex SHA> [--producer-dir <ShuttlePub checkout>] [--ref <name>]
- *   bun scripts/sync-openapi.ts --commit <40-hex SHA> --file <path-to-schema.json>
+ *   bun scripts/sync-openapi.ts [--producer shuttlepub|emumet] --commit <40-hex SHA> [--producer-dir <checkout>] [--ref <name>]
+ *   bun scripts/sync-openapi.ts [--producer shuttlepub|emumet] --commit <40-hex SHA> --file <path-to-schema.json>
  *
  * Vendors the producer's generated OpenAPI schema at an exact producer commit:
- *   openapi/shuttlepub.json       verbatim bytes of openapi/shuttlepub.json at <SHA>
- *   openapi/producer.lock.json    producer repository/commit + SHA-256 of those bytes
+ *   shuttlepub (default)  openapi/shuttlepub.json + openapi/producer.lock.json
+ *                         (ShuttlePub/ShuttlePub openapi/shuttlepub.json)
+ *   emumet                openapi/emumet.json + openapi/emumet.lock.json
+ *                         (ShuttlePub/Emumet openapi.json)
+ * The lock records the producer repository/commit + SHA-256 of the vendored bytes.
  *
  * Sources (the only commands that need anything outside this repo; the build never does):
- *   --producer-dir  read `git show <SHA>:openapi/shuttlepub.json` from a local clone
+ *   --producer-dir  read `git show <SHA>:<schema path>` from a local clone
  *                   (the commit must exist there; the working tree is never read)
  *   --file          use a file you already extracted (you vouch it is the bytes at <SHA>)
- *   (default)       download raw.githubusercontent.com/ShuttlePub/ShuttlePub/<SHA>/openapi/shuttlepub.json
+ *   (default)       download raw.githubusercontent.com/<repository>/<SHA>/<schema path>
  *
  * After syncing, run `bun run codegen` to regenerate the TS REST types.
  */
 import { mkdir, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
-  LOCK_FILE,
   OPENAPI_DIR,
-  PRODUCER_REPOSITORY,
-  PRODUCER_SCHEMA_PATH,
-  SCHEMA_FILE,
+  OPENAPI_PINS,
   isCommitSha,
   serializeLock,
   sha256Hex,
@@ -40,6 +40,17 @@ function option(name: string): string | undefined {
   }
   return value;
 }
+
+const producerName = option("--producer") ?? "shuttlepub";
+const pin = OPENAPI_PINS.find((candidate) => candidate.name === producerName);
+if (pin === undefined) {
+  console.error(`--producer must be one of ${OPENAPI_PINS.map((candidate) => candidate.name).join(", ")}`);
+  process.exit(2);
+}
+const PRODUCER_REPOSITORY = pin.repository;
+const PRODUCER_SCHEMA_PATH = pin.schemaPath;
+const SCHEMA_FILE = pin.schemaFile;
+const LOCK_FILE = pin.lockFile;
 
 async function readSchemaBytes(commit: string): Promise<Uint8Array> {
   const file = option("--file");

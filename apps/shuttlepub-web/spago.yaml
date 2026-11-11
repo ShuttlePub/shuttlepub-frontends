@@ -17,6 +17,7 @@ package:
     - argonaut-generic
     - arrays
     - console
+    - datetime
     - effect
     - either
     - flame
@@ -28,9 +29,11 @@ package:
     - prelude
     - routing
     - routing-duplex
+    - strings
     - tuples
     - type-equality
     - web-dom
+    - web-events
   test:
     main: Test.Main
     dependencies: []

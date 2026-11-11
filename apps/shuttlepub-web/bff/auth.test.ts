@@ -345,7 +345,7 @@ test("Kratos errors/malformed flows are sanitized; logout never follows a suppli
 });
 
 describe("authenticated Emumet Profile context", () => {
-  const owned = { id: "owned-account", name: "owner", display_name: "My profile", moderation: null };
+  const owned = { id: "owned-account", name: "owner", display_name: "My profile", moderation: null, profile_id: "owned-profile", profile_username: null };
   async function graphql(app: ReturnType<typeof createApp>, sessionCookie: string, query: string) {
     return app.handleGraphql(req("/graphql", {
       method: "POST", headers: { Origin: origin, Cookie: sessionCookie, "Content-Type": "application/json" },
@@ -409,7 +409,7 @@ describe("authenticated Emumet Profile context", () => {
   test("unavailable/malformed/moderated data and unauthenticated access never fall back to mock", async () => {
     const f = await fixture();
     const session = await f.login();
-    for (const data of [{}, { items: [{ id: "made-up" }] }, { items: [owned, owned] }]) {
+    for (const data of [{}, { items: [{ id: "made-up" }] }, { items: [owned, owned] }, { items: [{ ...owned, profile_id: undefined }] }]) {
       const app = createApp({ mode: "real", apiUrl: "https://backend.example" }, {
         auth: f.config, emumetFetch: (async () => Response.json(data)) as FetchLike,
       });

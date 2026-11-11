@@ -1,10 +1,13 @@
 // Emumet's current public API integrates Profile fields into owned Account resources.
 // id is the integrated Account nanoid, NOT an invented internal Profile nanoid.
+// profileId is the Profile nanoid Emumet reports for that Account (AccountResponse.profile_id,
+// RX); Profile-scoped Emumet APIs (domain controls, blocks/mutes) are addressed with it. It
+// stays inside the BFF: the GraphQL Profile type does not expose it.
 import { AuthError } from "./auth-error.ts";
 import type { FetchLike, ViewerSession } from "./auth.ts";
 import type { ApiMode } from "./rest/client.ts";
 
-export type Profile = { id: string; handle: string; displayName: string };
+export type Profile = { id: string; handle: string; displayName: string; profileId: string };
 export type ProfileContext = { activeProfile: Profile | null };
 export interface ProfileContextSource {
   readonly mode: ApiMode;
@@ -13,7 +16,7 @@ export interface ProfileContextSource {
   selectProfile(id: string): Promise<ProfileContext>;
 }
 export const profileContextFixture: ProfileContext = {
-  activeProfile: { id: "profile-fixture-1", handle: "fixture", displayName: "Fixture Profile" },
+  activeProfile: { id: "profile-fixture-1", handle: "fixture", displayName: "Fixture Profile", profileId: "pf-fixture-1" },
 };
 export function createMockProfileContext(): ProfileContextSource {
   return {
@@ -68,13 +71,14 @@ export function createRealProfileContext(deps?: RealProfileDeps): ProfileContext
       if (!data || !Array.isArray(data.items)) throw new AuthError("INVALID_UPSTREAM_RESPONSE", 502);
       for (const item of data.items) {
         if (!item || typeof item.id !== "string" || !item.id || ids.has(item.id) || typeof item.name !== "string" || !item.name ||
-          !(item.display_name === null || typeof item.display_name === "string") || !Object.hasOwn(item, "moderation")) {
+          !(item.display_name === null || typeof item.display_name === "string") || !Object.hasOwn(item, "moderation") ||
+          typeof item.profile_id !== "string" || !item.profile_id) {
           throw new AuthError("INVALID_UPSTREAM_RESPONSE", 502);
         }
         // An owned account is not necessarily allowed to act; do not promote moderated identities.
         if (item.moderation !== null) throw new AuthError("FORBIDDEN", 403);
         ids.add(item.id);
-        profiles.push({ id: item.id, handle: item.name, displayName: item.display_name ?? item.name });
+        profiles.push({ id: item.id, handle: item.name, displayName: item.display_name ?? item.name, profileId: item.profile_id });
       }
       if (data.items.length < 100) return profiles;
       if (typeof data.last !== "string" || data.last !== profiles.at(-1)?.id || data.last === cursor) {

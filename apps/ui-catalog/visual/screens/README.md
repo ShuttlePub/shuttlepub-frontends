@@ -28,7 +28,8 @@ Use the same browser, OS and fonts for main and PR captures.
 `SCREEN_CASES` in `cases.ts` is the reusable, serializable inventory. Each state
 is captured at 1280×900 and 390×844, at device scale 1, with a full-page screenshot:
 
-- ShuttlePub (F0 foundation placeholder): home, 404. No login; mock mode only. The home case waits for the
+- ShuttlePub (F0 foundation placeholder): home, 404; mute/block settings (domains, accounts,
+  block confirmation) from the BFF's stateful mock. No login; mock mode only. The home case waits for the
   hydration marker and for the BFF rows. `shuttlepub-verify.ts` additionally checks hydration and real-mode 501/500.
 - Booskiff: login, populated Drive, empty Drive, selected folder, file detail, 404.
 - Emumet: login, populated accounts, new account, filled bot account form,

@@ -11,6 +11,15 @@ mock / real 切替、SSR + hydration、ルーティング骨格、Profile contex
 
 追加済み: Hydra OIDC 認証ルート、session、Emumet Bearer 読取・Profile 選択 API。
 
+追加済み (D08 / personal-domain-controls-web-ui): 設定「ミュート・ブロック」画面
+(`/settings/mute-block/domains`・`/settings/mute-block/accounts`)。画面構成・文言は host の
+`intents/shuttlepub/features/personal-domain-controls-ui/ui-spec.md` (UI モック v5 合意) に従う。
+選択中 Profile の domain mute/block (Emumet domain-controls) と個別アカウントの mute/block
+(Emumet blocks/mutes) の一覧・追加・解除。Emumet で実適用されるのは Follow 制御 (block 時の
+既存関係の両方向解除・新規 Follow 拒否) だけで、投稿の表示抑制・反応拒否は ShuttlePub の後続
+実装 (未接続)。投稿・プロフィールの「…」メニューと直接 URL・引用・返信の隠し表示 (ui-spec 3-x/4-x/5-x)
+は S8 契約と SNS 本体 shell の後の別変更。
+
 含まない: タイムライン等の本格 UI、**ログイン/選択画面のレイアウト・画面遷移・デザイン**。
 画面構成はユーザーとのモック合意後の別 PR で実装します。いま表示するのは基盤検証用の素のプレースホルダ
 (見出しと各データ源の状態) だけで、レイアウトを決めるものではありません。
@@ -50,6 +59,9 @@ real の Profile context は本人所有の Emumet 統合 Account/Profile を使
 
 - `openapi/shuttlepub.json`: ShuttlePub producer (`ShuttlePub/ShuttlePub` の `openapi/shuttlepub.json`) の生成物をそのまま取り込んだもの。手編集しない。
 - `openapi/producer.lock.json`: producer の commit SHA と、取り込んだバイト列の SHA-256 / サイズ。
+- `openapi/emumet.json` / `openapi/emumet.lock.json`: 同じ方式で固定した Emumet (`ShuttlePub/Emumet` の
+  `openapi.json`)。型生成は tag `ProfilePolicy` の operation と参照 schema だけ
+  (`bff/rest/generated/emumet-api.ts`)。更新は `bun run openapi:sync -- --producer emumet --commit <SHA>`。
 
 ビルドは常に repo 内のこの 2 ファイルだけを使うためオフラインで通ります。ファイルを編集したり lock と食い違うと
 `bun run openapi:verify` / `bun test` / `bun run codegen` が失敗します (CI でも実行)。

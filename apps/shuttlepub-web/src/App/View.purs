@@ -3,8 +3,10 @@ module App.View where
 import Prelude
 
 import App.Api.Error as Error
-import App.Message (Message)
+import App.Message (Message(..))
 import App.Model (Model, RemoteData(..))
+import App.MuteBlock.Types (Tab(..))
+import App.MuteBlock.View as MuteBlock
 import App.Route (Route(..))
 import Data.Maybe (Maybe(..), maybe)
 import Flame (Html)
@@ -25,6 +27,8 @@ view model = UI.Layout.shell
   [ UI.Layout.contentArea
       [ case model.route of
           Just Home -> home model
+          Just MuteBlockAccounts -> map MuteBlockMsg (MuteBlock.view AccountsTab model.muteBlock)
+          Just MuteBlockDomains -> map MuteBlockMsg (MuteBlock.view DomainsTab model.muteBlock)
           Nothing -> NotFound.notFound
       ]
   ]

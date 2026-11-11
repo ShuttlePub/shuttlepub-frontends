@@ -25,6 +25,11 @@ const routes = [
   // route and proves SSR + hydration at both widths; it does not fix any screen layout.
   { app: "ShuttlePub", id: "home", path: "/", authenticated: false, data: "populated" },
   { app: "ShuttlePub", id: "not-found", path: "/visual-route-not-found", authenticated: false, data: "populated" },
+  // D08 mute/block settings (personal-domain-controls-web-ui, UI mock v5): both sub-pages
+  // with the stateful mock's seed, and the block confirmation with detached follows.
+  { app: "ShuttlePub", id: "mute-block-domains", path: "/settings/mute-block/domains", authenticated: false, data: "populated" },
+  { app: "ShuttlePub", id: "mute-block-accounts", path: "/settings/mute-block/accounts", authenticated: false, data: "populated" },
+  { app: "ShuttlePub", id: "mute-block-block-dialog", path: "/settings/mute-block/domains", authenticated: false, data: "populated" },
 ] as const satisfies readonly {
   app: ScreenApp; id: string; path: string; authenticated: boolean; data: DataState;
 }[];

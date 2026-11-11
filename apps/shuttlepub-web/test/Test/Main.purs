@@ -4,6 +4,13 @@ import Prelude
 
 import App.Api.Error (ApiError(..), describe, fromGqlCode, tag)
 import App.Model (Model, RemoteData(..), fromEither, initialModel)
+import App.Model as AppModel
+import App.MuteBlock.Types as MuteBlock
+import App.MuteBlock.Types (Change(..), Dialog(..), Failure(..), InputProblem(..), Message(..), Undo(..), Write(..))
+import App.MuteBlock.Update as MuteBlockUpdate
+import Data.Array (length)
+import Data.Tuple (Tuple(..))
+import Generated.Schema.Gql.Enum.PolicyMode (PolicyMode(..))
 import App.Route (Route(..), routeCodec)
 import Data.Argonaut.Decode (class DecodeJson, decodeJson)
 import Data.Argonaut.Encode (class EncodeJson, encodeJson)
@@ -25,6 +32,7 @@ main = do
   testModelRoundTrip
   testErrorMapping
   testSsr
+  testMuteBlock
 
 assertEqual :: forall a. Eq a => Show a => String -> a -> a -> Effect Unit
 assertEqual label actual expected =
@@ -53,6 +61,10 @@ testRouteCodec = do
   assertEqual "print Home" (print routeCodec Home) "/"
   assertEqual "parse unknown path" (hush (parse routeCodec "/nope")) Nothing
   roundTrip "route Home" Home
+  assertEqual "parse mute-block domains" (hush (parse routeCodec "/settings/mute-block/domains")) (Just MuteBlockDomains)
+  assertEqual "parse mute-block accounts" (hush (parse routeCodec "/settings/mute-block/accounts")) (Just MuteBlockAccounts)
+  assertEqual "print mute-block domains" (print routeCodec MuteBlockDomains) "/settings/mute-block/domains"
+  assertEqual "mute-block root is not a page" (hush (parse routeCodec "/settings/mute-block")) Nothing
 
 testModelRoundTrip :: Effect Unit
 testModelRoundTrip = do
@@ -66,6 +78,7 @@ testModelRoundTrip = do
       , apiMode: Loaded MOCK
       , apiStatus: Loaded { apiVersion: "v1" }
       , profileContext: Loaded { activeProfile: Just { id: "p1", handle: "alice", displayName: "Alice" } }
+      , muteBlock: MuteBlock.init
       }
 
     loading :: Model
@@ -78,6 +91,7 @@ testModelRoundTrip = do
       , apiMode: Loaded REAL
       , apiStatus: Failed (NotImplemented "later")
       , profileContext: Failed (Unavailable "down")
+      , muteBlock: MuteBlock.init
       }
   roundTrip "loaded model" loaded
   roundTrip "failed model" failed
@@ -117,3 +131,60 @@ testSsr = do
   for_ [ "/", "/nope" ] \path -> do
     html <- renderPage path
     assertNotContains ("SSR " <> path) html "undefined"
+
+-- | D08 mute/block settings page: SSR shell, state round trip and the update
+-- | rules that keep writes honest (no silent success, no double write).
+testMuteBlock :: Effect Unit
+testMuteBlock = do
+  page <- renderPage "/settings/mute-block/domains"
+  assertContains "mute-block SSR" page "ミュート・ブロック"
+  assertContains "mute-block SSR claims no data" page "読み込み中"
+  assertContains "mute-block SSR tabs" page "/settings/mute-block/accounts"
+  assertNotContains "mute-block SSR" page "undefined"
+  let
+    muted = { domain: "noisy.social", mode: MUTE, revision: 3, createdAt: "2025-11-30T09:00:00Z" }
+    blocked = { domain: "bot-farm.example", mode: BLOCK, revision: 1, createdAt: "2025-12-20T09:00:00Z" }
+    ready = MuteBlock.init { profile = Just "acc-1", profileKnown = true, domains = MuteBlock.Ready [ muted, blocked ], actors = MuteBlock.Ready [] }
+    step model message = case MuteBlockUpdate.update model message of
+      Tuple next effects -> { next, effects: length effects }
+  roundTrip "mute-block model" (ready { dialog = Just (ConfirmBlock { domain: "example.social", current: Nothing, fromInput: true, impact: MuteBlock.Ready { following: [ "https://example.social/users/a" ], followers: [] }, acknowledged: false, pending: false, failure: Nothing }) })
+  roundTrip "app model with mute-block" ((initialModel (Just MuteBlockDomains)) { muteBlock = ready } :: AppModel.Model)
+  let none = step MuteBlock.init (ProfileKnown (Right Nothing))
+  assertEqual "no profile is an error, not an empty list" none.next.domains (MuteBlock.Failed (Failure "PROFILE_REQUIRED"))
+  let known = step MuteBlock.init (ProfileKnown (Right (Just "acc-1")))
+  assertEqual "a known profile loads both lists" known.effects 2
+  assertEqual "stale list response is dropped" (step ready (DomainsLoaded "acc-2" (Right []))).next.domains ready.domains
+  let adding = ready { dialog = Just (AddDomain { input: "noisy.social", problem: Nothing, pending: true }) }
+  assertEqual "adding the same mode again is refused"
+    (step adding (AddChecked MUTE (Right { domain: Just "noisy.social", error: Nothing }))).next.dialog
+    (Just (AddDomain { input: "noisy.social", problem: Just (AlreadySet MUTE), pending: false }))
+  assertEqual "a refused input shows its reason"
+    (step adding (AddChecked MUTE (Right { domain: Nothing, error: Just "WILDCARD" }))).next.dialog
+    (Just (AddDomain { input: "noisy.social", problem: Just (InputRefused "WILDCARD"), pending: false }))
+  let blockingMuted = step adding (AddChecked BLOCK (Right { domain: Just "noisy.social", error: Nothing }))
+  case blockingMuted.next.dialog of
+    Just (ConfirmBlock state) -> do
+      assertEqual "blocking a muted domain replaces its revision" (map _.revision state.current) (Just 3)
+      assertEqual "impact is loaded before blocking" state.impact MuteBlock.Loading
+    _ -> throw "expected the block confirmation"
+  let
+    detaching = ready { dialog = Just (ConfirmBlock { domain: "example.social", current: Nothing, fromInput: true, impact: MuteBlock.Ready { following: [ "https://example.social/users/a" ], followers: [] }, acknowledged: false, pending: false, failure: Nothing }) }
+  assertEqual "detaching follows needs the acknowledgement" (step detaching ConfirmBlockDomain).effects 0
+  let acknowledged = step (step detaching (ToggleAcknowledged true)).next ConfirmBlockDomain
+  assertEqual "acknowledged block writes once" acknowledged.effects 1
+  assertTrue "pending block is not sent twice" ((step acknowledged.next ConfirmBlockDomain).effects == 0)
+  let
+    writing = ready { writing = true }
+  assertEqual "no second write while one is in flight" (step writing (UnmuteDomain muted)).effects 0
+  let unmuted = step (ready { writing = true }) (Written UnmuteDomainRow "noisy.social" (Right (DomainRemoved "noisy.social")))
+  assertEqual "unmute removes the row" unmuted.next.domains (MuteBlock.Ready [ blocked ])
+  assertEqual "unmute offers undo" (map _.undo unmuted.next.toast) (Just (Just (RestoreDomainMute "noisy.social")))
+  let conflict = step (acknowledged.next) (Written BlockDomain "example.social" (Left (Failure "REVISION_CONFLICT")))
+  case conflict.next.dialog of
+    Just (ConfirmBlock state) -> assertEqual "a conflict stays visible in the dialog" state.failure (Just (Failure "REVISION_CONFLICT"))
+    _ -> throw "the dialog must stay open on failure"
+  assertEqual "a failed write never changes the list" conflict.next.domains ready.domains
+  let
+    swapped = step (ready { writing = true }) (Written ActorToMute "remote.example/users/zed" (Right (ActorRemoved "rel-1")))
+  assertEqual "changing a block into a mute keeps its toast" (map _.rest swapped.next.toast) (Just " をミュートに変更しました")
+  assertEqual "and refetches the individual list" swapped.effects 2

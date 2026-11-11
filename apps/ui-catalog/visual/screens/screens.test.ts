@@ -13,7 +13,7 @@ test("screen inventory covers every app and state at desktop/mobile sizes with s
   const names = SCREEN_CASES.map((item) => item.filename);
   // Then
   expect(new Set(names).size).toBe(SCREEN_CASES.length);
-  expect(SCREEN_CASES).toHaveLength(32);
+  expect(SCREEN_CASES).toHaveLength(38);
   for (const item of SCREEN_CASES) {
     expect(item.filename).toMatch(/^(Booskiff|Emumet|ShuttlePub)-[A-Za-z0-9-]+\.png$/);
     expect(item.path).toMatch(/^\/(?!\/)/);
@@ -26,12 +26,15 @@ test("screen inventory covers every app and state at desktop/mobile sizes with s
   }
 });
 
-test("ShuttlePub placeholder cases register both routes at both widths and need no login", () => {
+test("ShuttlePub cases register every route at both widths and need no login", () => {
   // Given / When
   const cases = SCREEN_CASES.filter((item) => item.app === "ShuttlePub");
   // Then
   expect(cases.map((item) => item.filename).sort()).toEqual([
     "ShuttlePub-home-desktop.png", "ShuttlePub-home-mobile.png",
+    "ShuttlePub-mute-block-accounts-desktop.png", "ShuttlePub-mute-block-accounts-mobile.png",
+    "ShuttlePub-mute-block-block-dialog-desktop.png", "ShuttlePub-mute-block-block-dialog-mobile.png",
+    "ShuttlePub-mute-block-domains-desktop.png", "ShuttlePub-mute-block-domains-mobile.png",
     "ShuttlePub-not-found-desktop.png", "ShuttlePub-not-found-mobile.png",
   ]);
   expect(cases.every((item) => !item.authenticated)).toBe(true);

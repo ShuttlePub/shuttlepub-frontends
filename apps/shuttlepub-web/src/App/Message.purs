@@ -2,6 +2,7 @@ module App.Message where
 
 import App.Api.Error (ApiError)
 import App.Model (ApiStatus)
+import App.MuteBlock.Types as MuteBlock
 import App.Profile (ProfileContext)
 import App.Route (Route)
 import Data.Either (Either)
@@ -15,3 +16,4 @@ data Message
   | ApiModeLoaded (Either ApiError ApiMode)
   | ApiStatusLoaded (Either ApiError ApiStatus)
   | ProfileContextLoaded (Either ApiError ProfileContext)
+  | MuteBlockMsg MuteBlock.Message
