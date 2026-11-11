@@ -53,6 +53,7 @@ data Message
   | AccountCreateFailed Int String -- generation, errorMsg
   -- Username checks (debounced; stale results are ignored by comparing the value)
   | UsernameSettled UsernameTarget String -- typing paused: ask the server
+  | RecheckUsername UsernameTarget -- "check again" after an unconfirmed answer
   | UsernameChecked UsernameTarget String Verdict
   | UsernameRejected UsernameTarget Int (Maybe String) String Verdict -- target, generation, accountId (set dialog), value, verdict
   -- One-time username setting for an existing profile

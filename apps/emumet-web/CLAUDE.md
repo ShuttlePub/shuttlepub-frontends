@@ -49,7 +49,7 @@ bff/
   loaders.ts               -- DataLoader: profile + metadata, request-scoped, memoized per request
   resolvers.ts             -- Query/Mutation resolvers
   registration-gate-resolvers.ts -- Registration gate (D15) resolvers + error classification (extensions.code)
-  profile-identity-resolvers.ts -- Profile username resolvers (setProfileUsername / checkProfileUsername / Profile.usernameState) + extensions.code classification (USERNAME_* etc.)
+  profile-identity-resolvers.ts -- Profile username resolvers (setProfileUsername / checkProfileUsername (形式・予約語は BFF、重複は Emumet の空き確認 API。確認できなければ UNKNOWN で VALID にしない) / Profile.usernameState) + extensions.code classification (USERNAME_* etc.)
   openapi/                 -- Pinned Emumet OpenAPI (lock verification, contract validation); see README
   emumet/
     client.ts              -- EmumetClient interface + DTOs (camelCase)

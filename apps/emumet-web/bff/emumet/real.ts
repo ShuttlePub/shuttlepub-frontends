@@ -18,6 +18,7 @@ import {
   EmumetAccountRestrictedError,
   EmumetApiError,
   EmumetNotFoundError,
+  EmumetRateLimitedError,
   EmumetUnsupportedError,
   EmumetUsernameAlreadySetError,
   EmumetUsernameConflictError,
@@ -32,6 +33,7 @@ import {
   type Moderation,
   type Profile,
   type ProfileFields,
+  type UsernameAvailability,
 } from "./client.ts";
 
 export type RealEmumetConfig = {
@@ -44,6 +46,9 @@ export type RealEmumetConfig = {
   /** 登録ゲート API の接続・応答待ち上限 (ms)。省略時は registration-gate-real.ts の既定値 */
   readonly registrationGateTimeoutMs?: number;
 };
+
+/** 空き確認 (入力中検証) の接続・応答待ち上限 (ms)。長く待たせず「確認できなかった」として扱う */
+const AVAILABILITY_TIMEOUT_MS = 5_000;
 
 const METADATA_WRITE_UNSUPPORTED = "writing metadata is not supported: Emumet has no per-field id or revision to make it safe";
 
@@ -250,6 +255,29 @@ export function createRealEmumetClient(config: RealEmumetConfig, accessToken: st
     return toProfileFromResponse(json as WireProfileResponse);
   }
 
+  /** 200 本文を契約で検証してから変換する。違反は成功扱いにしない */
+  async function readAvailabilityResponse(resp: Response): Promise<UsernameAvailability> {
+    const label = "GET /api/v1/profiles/username-availability";
+    let json: unknown;
+    try {
+      json = await resp.json();
+    } catch {
+      throw new EmumetInvalidResponseError(`Emumet API ${label}: 200 body is not valid JSON`);
+    }
+    const violations = violationsForResponse({ path: "/api/v1/profiles/username-availability", method: "get", status: "200" }, json);
+    if (violations.length > 0) {
+      throw new EmumetInvalidResponseError(
+        `Emumet API ${label}: 200 body violates the pinned OpenAPI contract: ${describeViolations(violations)}`,
+      );
+    }
+    const wire = json as { available: boolean; reason?: "invalid_format" | "reserved" | "taken" | null };
+    if (wire.available) return { available: true };
+    if (wire.reason === undefined || wire.reason === null) {
+      throw new EmumetInvalidResponseError(`Emumet API ${label}: available=false without a reason`);
+    }
+    return { available: false, reason: wire.reason };
+  }
+
   /**
    * 409 は「設定済み」と「他で使用中」を本文で区別しない (空本文)。契約は次のとおり:
    *   - 再確認は 409 後の「現在の状態」であり、409 の原因そのものの証明ではない
@@ -340,6 +368,32 @@ export function createRealEmumetClient(config: RealEmumetConfig, accessToken: st
     },
 
     listMetadata,
+
+    /**
+     * 入力中の空き確認。200 本文は契約 (ProfileUsernameAvailabilityResponse) で検証してから使う。429 は
+     * Retry-After 付きの EmumetRateLimitedError、接続不可・時間切れは EmumetUnavailableError。確認できなかった
+     * 結果を「利用できる」として扱わない責務は呼び出し側 (resolver) が持つ
+     */
+    async checkUsernameAvailability(username: string): Promise<UsernameAvailability> {
+      const path = `/api/v1/profiles/username-availability?username=${encodeURIComponent(username)}`;
+      let resp: Response;
+      try {
+        resp = await request("GET", path, undefined, AVAILABILITY_TIMEOUT_MS);
+      } catch (cause) {
+        throw new EmumetUnavailableError("Emumet API request failed: GET /api/v1/profiles/username-availability", { cause });
+      }
+      switch (resp.status) {
+        case 200:
+          return await readAvailabilityResponse(resp);
+        case 429: {
+          const header = resp.headers.get("Retry-After");
+          const seconds = header === null ? Number.NaN : Number(header);
+          throw new EmumetRateLimitedError(Number.isFinite(seconds) && seconds >= 0 ? seconds : null);
+        }
+        default:
+          throw new EmumetApiError(resp.status, await resp.text());
+      }
+    },
 
     /**
      * Metadata の書込み (作成・更新・削除) はすべて未対応で、何も送らない。上流の PATCH /api/v1/accounts/{id} は

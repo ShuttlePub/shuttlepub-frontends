@@ -245,6 +245,12 @@ mkUpdate nav model = case _ of
       Tuple model [ checkUsernameAff target value ]
     else noMessages model
 
+  RecheckUsername target ->
+    case currentUsername model target of
+      Just value | shouldAskServer value && not (usernameLocked model target) ->
+        Tuple (withVerdict target value Unverified model) [ checkUsernameAff target value ]
+      _ -> noMessages model
+
   UsernameChecked target value verdict ->
     -- A late answer must not change the verdict under an open confirmation or a request in flight.
     if usernameLocked model target || usernameTaken model target value then noMessages model
@@ -639,6 +645,7 @@ checkUsernameAff target value = do
   pure $ case result of
     Left err | isUnauthorized err -> Just SessionExpired
     Right "VALID" -> Just (UsernameChecked target value Verified)
+    Right "TAKEN" -> Just (UsernameChecked target value Taken)
     Right "FORMAT" -> Just (UsernameChecked target value (Rejected ReasonFormat))
     Right "RESERVED" -> Just (UsernameChecked target value (Rejected ReasonReserved))
     _ -> Just (UsernameChecked target value Unavailable)

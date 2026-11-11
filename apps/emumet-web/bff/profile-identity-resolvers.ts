@@ -138,10 +138,32 @@ export const profileIdentityResolvers = {
       }
       return host;
     },
-    /** 規則だけの判定 (Emumet は呼ばない)。重複は書き込み時にしか判明しないため含まない */
-    checkProfileUsername: (_parent: unknown, args: { username: string }, context: GraphQLContext) => {
-      requireEmumet(context);
-      return checkProfileUsername(args.username) ?? "VALID";
+    /**
+     * 入力中の検証。形式・予約語は BFF で判定 (Emumet は呼ばない)、設定できそうなときだけ Emumet の空き確認 API で重複を見る。
+     * 確認できなかった (接続不可・時間切れ・429・契約違反・未接続) ときは VALID ではなく UNKNOWN を返す。
+     * 認証・権限の失敗だけはエラー。結果は参考値で、最終判定は作成 / 設定時の 400 / 409
+     */
+    checkProfileUsername: async (_parent: unknown, args: { username: string }, context: GraphQLContext) => {
+      const emumet = requireEmumet(context);
+      const violation = checkProfileUsername(args.username);
+      if (violation !== null) return violation;
+      try {
+        const result = await emumet.checkUsernameAvailability(args.username);
+        if (result.available) return "VALID";
+        switch (result.reason) {
+          case "taken":
+            return "TAKEN";
+          case "invalid_format":
+            return "FORMAT";
+          case "reserved":
+            return "RESERVED";
+        }
+      } catch (error) {
+        const classified = classifyProfileIdentityError(error);
+        const code = classified?.extensions["code"];
+        if (code === "UNAUTHENTICATED" || code === "FORBIDDEN") throw classified;
+        return "UNKNOWN";
+      }
     },
   },
   Profile: {

@@ -1,12 +1,13 @@
 {
   "producer": {
     "repository": "ShuttlePub/Emumet",
-    "commit": "49acf9ddcb76c38c1882eb6442b7aca848cdfa44",
-    "path": "openapi.json"
+    "commit": "fdcc87d0f80f4f0978f6f64d4464797c807bf8a2",
+    "path": "openapi.json",
+    "ref": "profile-username-availability-api"
   },
   "schema": {
     "file": "emumet.json",
-    "sha256": "46b3134dbfe5125a39c8cea70ea15764e0e6d845ac17cfca04bb42354ad23235",
-    "bytes": 192927
+    "sha256": "239cb653d2e3c06db17ad1d3e994ec33de323f0eaf0224597ffa23b778050faf",
+    "bytes": 196781
   }
 }

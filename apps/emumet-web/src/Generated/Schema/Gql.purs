@@ -54,7 +54,7 @@ newtype Query = Query
   , checkProfileUsername ::
       { username :: NotNull (AsGql "String" String) }
       ->
-      -- | 入力中の検証用。Emumet は呼ばず規則 (形式・予約語) だけを判定する
+      -- | 入力中の検証用。形式・予約語は BFF で判定し、満たすときだけ Emumet の空き確認 API (認証必須・レート制限あり) を呼ぶ
       AsGql "ProfileUsernameCheck" ProfileUsernameCheck
   }
 

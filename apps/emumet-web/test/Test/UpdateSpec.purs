@@ -124,6 +124,14 @@ run = do
     (let m = step typedNewForCheck (UsernameChecked ForNewAccount "alice" Taken) in verdictOfNew m == Taken)
   check "a check answer for an older value is ignored on the input step" true
     (let m = step typedNewForCheck (UsernameChecked ForNewAccount "alic" Taken) in verdictOfNew m == Unverified)
+  check "an unconfirmed answer (429 / connection trouble) is recorded and never makes the value available" true
+    (let m = step typedNewForCheck (UsernameChecked ForNewAccount "alice" Unavailable) in verdictOfNew m == Unavailable)
+  check "Recheck after an unconfirmed answer asks again (verdict back to unverified)" true
+    (let m = step (typedNewForCheck { newAccountForm = emptyNewAccountForm { name = "N", username = { value: "alice", verdict: Unavailable } } }) (RecheckUsername ForNewAccount) in verdictOfNew m == Unverified)
+  check "Recheck is ignored under a confirmation" true
+    (let m = step (creating 1 false) (RecheckUsername ForNewAccount) in verdictOfNew m == Verified)
+  check "Recheck is ignored for a value the local rules refuse" true
+    (let m = step (typedNewForCheck { newAccountForm = emptyNewAccountForm { name = "N", username = { value: "Alice", verdict: Unavailable } } }) (RecheckUsername ForNewAccount) in verdictOfNew m == Unavailable)
   check "a late Verified does not undo a taken verdict for the same value" true
     (let m = step (typedNewForCheck { newAccountForm = emptyNewAccountForm { name = "N", username = { value: "alice", verdict: Taken } } }) (UsernameChecked ForNewAccount "alice" Verified) in verdictOfNew m == Taken)
   check "a late Verified does not undo a taken verdict in the set dialog" true

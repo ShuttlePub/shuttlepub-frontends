@@ -86,7 +86,7 @@ instance DecodeJson Reason where
 -- | Outcome of the server-side judgement for the value currently in the field.
 -- | Unverified: not asked yet / the question is in flight.
 -- | Taken: the server refused a submission because the name is already in use.
--- | Unavailable: the server could not be asked.
+-- | Unavailable: the server could not tell (429, connection trouble, ...): never shown as available.
 data Verdict = Unverified | Verified | Rejected Reason | Taken | Unavailable
 
 derive instance Eq Verdict
@@ -100,7 +100,7 @@ instance DecodeJson Verdict where
   decodeJson = genericDecodeJson
 
 -- | What the single status line under the input shows.
-data Status = NoStatus | Checking | Available | Unusable String
+data Status = NoStatus | Checking | Available | Unusable String | Unconfirmed String
 
 derive instance Eq Status
 
@@ -110,6 +110,7 @@ instance Show Status where
     Checking -> "Checking"
     Available -> "Available"
     Unusable m -> "Unusable " <> show m
+    Unconfirmed m -> "Unconfirmed " <> show m
 
 formatMessage :: String
 formatMessage = "先頭は a〜z か 0〜9、以降は a〜z、0〜9、. _ - が使えます"
@@ -121,7 +122,7 @@ unusableMessage :: String
 unusableMessage = "利用できません"
 
 unavailableMessage :: String
-unavailableMessage = "確認できませんでした。もう一度お試しください"
+unavailableMessage = "空き状況を確認できませんでした"
 
 status :: String -> Verdict -> Status
 status value verdict = case validate value of
@@ -135,7 +136,7 @@ status value verdict = case validate value of
     Rejected ReasonFormat -> Unusable formatMessage
     Rejected ReasonReserved -> Unusable unusableMessage
     Taken -> Unusable unusableMessage
-    Unavailable -> Unusable unavailableMessage
+    Unavailable -> Unconfirmed unavailableMessage
 
 -- | The create / set buttons are enabled only when the name is "available".
 isAvailable :: String -> Verdict -> Boolean

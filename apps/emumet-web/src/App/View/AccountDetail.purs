@@ -4,7 +4,7 @@ import Prelude
 
 import App.Api.GraphQL.Types (AccountResponse(..), MetadataResponse(..), ProfileResponse(..))
 import App.Format (formatDate)
-import App.Message (Message(..))
+import App.Message (Message(..), UsernameTarget(..))
 import App.Model (AccountWithDetails, DialogStep(..), EditMetadataForm, EditProfileForm, RemoteData(..), SetUsernameDialog)
 import App.Username (isAvailable)
 import App.View.UsernameUi as U
@@ -83,7 +83,7 @@ setUsernameModal dialog host errorMsg savePending =
       U.modalFrame "set-username-title" "input"
         [ U.modalTitle "set-username-title" "ユーザー名を設定"
         , U.errorBanner errorMsg
-        , U.usernameInput "set" true dialog.username host SetSetUsernameInput
+        , U.usernameInput "set" true dialog.username host SetSetUsernameInput (RecheckUsername ForExistingProfile)
         , U.buttonRow
             [ U.outlineButton "キャンセル" CloseSetUsername
             , U.primaryButton "設定" (not (isAvailable dialog.username.value dialog.username.verdict && U.hostReady host) || savePending) ReviewSetUsername

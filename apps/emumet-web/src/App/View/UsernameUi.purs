@@ -101,8 +101,8 @@ acct host username = "@" <> username <> maybe "" (\h -> "@" <> h) host
 -- | The username input: label with a (?) link to the help page, "@" before and "@host" after
 -- | (the host is dropped on narrow screens), and one status line below.
 -- | `initialFocus` marks the input as where the focus lands when the dialog opens.
-usernameInput :: String -> Boolean -> UsernameField -> RemoteData String -> (String -> Message) -> Html Message
-usernameInput idPrefix initialFocus field host onInput =
+usernameInput :: String -> Boolean -> UsernameField -> RemoteData String -> (String -> Message) -> Message -> Html Message
+usernameInput idPrefix initialFocus field host onInput onRecheck =
   let
     inputId = idPrefix <> "-username"
     capId = idPrefix <> "-username-status"
@@ -145,7 +145,7 @@ usernameInput idPrefix initialFocus field host onInput =
               _ -> HE.span [ HA.class' "hidden" ] []
           ]
       , HE.div [ HA.id capId, HA.class' "min-h-4 text-xs", HA.createAttribute "aria-live" "polite" ]
-          [ if hostFailed then hostFailure else statusLine st ]
+          [ if hostFailed then hostFailure else statusLine onRecheck st ]
       ]
   where
   affix = "flex items-center whitespace-nowrap bg-bg-primary px-2.5 py-2 text-sm " <> T.textMuted
@@ -176,8 +176,8 @@ hint =
     ]
     [ HE.text "?" ]
 
-statusLine :: Status -> Html Message
-statusLine = case _ of
+statusLine :: Message -> Status -> Html Message
+statusLine onRecheck = case _ of
   NoStatus -> HE.span [ HA.class' "hidden" ] []
   Checking ->
     HE.span [ HA.class' ("inline-flex items-center gap-1.5 " <> T.textSecondary) ]
@@ -186,6 +186,17 @@ statusLine = case _ of
       ]
   Available -> HE.span [ HA.class' T.textSuccess ] [ HE.text "✓ 利用できます" ]
   Unusable msg -> HE.span [ HA.class' T.textError ] [ HE.text ("✕ " <> msg) ]
+  -- Not confirmed (rate limit, connection trouble): neither available nor refused; ask again.
+  Unconfirmed msg ->
+    HE.span [ HA.class' ("inline-flex items-center gap-2 " <> T.textWarning) ]
+      [ HE.text msg
+      , HE.button
+          [ HA.type' "button"
+          , HA.class' ("underline " <> T.textAccent <> " hover:opacity-80")
+          , HA.onClick onRecheck
+          ]
+          [ HE.text "再確認" ]
+      ]
 
 errorBanner :: Maybe String -> Html Message
 errorBanner = case _ of

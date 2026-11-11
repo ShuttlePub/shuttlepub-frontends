@@ -220,25 +220,68 @@ describe("(c') 上流エラーの写像 (setProfileUsername / username 付き cr
 
 });
 
-describe("(d) checkProfileUsername — 規則だけの判定", () => {
-  test("VALID / FORMAT / RESERVED を返し、Emumet の操作 (設定・作成) は呼ばない", async () => {
+describe("(d) checkProfileUsername — 入力中の検証 (形式・予約語は BFF、重複は Emumet の空き確認 API)", () => {
+  const CHECK = "query($u: String!) { checkProfileUsername(username: $u) }";
+
+  test("VALID / TAKEN / FORMAT / RESERVED。設定・作成は呼ばない。形式・予約語の違反は空き確認を呼ばない", async () => {
     const base = createMockEmumetClient();
     const calls: string[] = [];
     const emumet: EmumetClient = {
       ...base,
       setProfileUsername: (...args) => (calls.push("set"), base.setProfileUsername(...args)),
       createAccount: (...args) => (calls.push("create"), base.createAccount(...args)),
+      checkUsernameAvailability: (...args) => (calls.push(`availability:${args[0]}`), base.checkUsernameAvailability(...args)),
     };
     const context = await authenticated(emumet);
-    const check = async (username: string) => (await run("query($u: String!) { checkProfileUsername(username: $u) }", context, { u: username })).data?.["checkProfileUsername"];
-    expect(await check("alice")).toBe("VALID");
+    const check = async (username: string) => (await run(CHECK, context, { u: username })).data?.["checkProfileUsername"];
+    expect(await check("fresh-name")).toBe("VALID");
+    expect(await check("alice")).toBe("TAKEN");
     expect(await check("Alice")).toBe("FORMAT");
     expect(await check(" alice")).toBe("FORMAT");
     expect(await check("")).toBe("FORMAT");
     expect(await check("admin")).toBe("RESERVED");
     expect(await check("alice\n")).toBe("FORMAT");
     expect(await check("admin\n")).toBe("FORMAT");
-    expect(calls).toEqual([]);
+    // 形式・予約語を満たす 2 回だけが Emumet へ届く (レート制限を節約)
+    expect(calls).toEqual(["availability:fresh-name", "availability:alice"]);
+  });
+
+  test("確認できなかったとき (429 / 接続不可) は VALID ではなく UNKNOWN。形式・予約語は引き続き判定できる", async () => {
+    const emumet = createMockEmumetClient();
+    const context = await authenticated(emumet);
+    const check = async (username: string) => (await run(CHECK, context, { u: username })).data?.["checkProfileUsername"];
+    for (const kind of ["rate_limited", "unavailable"] as const) {
+      emumet.profileIdentityControl.setAvailabilityFailure(kind);
+      expect(await check("fresh-name"), kind).toBe("UNKNOWN");
+      expect(await check("alice"), kind).toBe("UNKNOWN");
+      expect(await check("Alice"), kind).toBe("FORMAT");
+      expect(await check("admin"), kind).toBe("RESERVED");
+    }
+    emumet.profileIdentityControl.setAvailabilityFailure(null);
+    expect(await check("fresh-name")).toBe("VALID");
+  });
+
+  test("上流の 5xx や契約違反も UNKNOWN。401 だけは UNAUTHENTICATED (認証の失敗を確認不能に隠さない)", async () => {
+    const base = createMockEmumetClient();
+    const failing = (error: Error): EmumetClient => ({ ...base, checkUsernameAvailability: () => Promise.reject(error) });
+    const check = async (emumet: EmumetClient) => run(CHECK, await authenticated(emumet), { u: "fresh-name" });
+    expect((await check(failing(new EmumetApiError(503, "down")))).data?.["checkProfileUsername"]).toBe("UNKNOWN");
+    expect((await check(failing(new EmumetApiError(500, "boom")))).data?.["checkProfileUsername"]).toBe("UNKNOWN");
+    expect((await check(failing(new EmumetInvalidResponseError("bad body")))).data?.["checkProfileUsername"]).toBe("UNKNOWN");
+    expect((await check(failing(new TypeError("unexpected")))).data?.["checkProfileUsername"]).toBe("UNKNOWN");
+    expect(code(await check(failing(new EmumetApiError(401, ""))))).toBe("UNAUTHENTICATED");
+    expect(code(await check(failing(new EmumetApiError(403, ""))))).toBe("FORBIDDEN");
+  });
+
+  test("上流が同じ規則で invalid_format / reserved と返したときはその理由をそのまま使う (BFF の規則と食い違っても VALID にしない)", async () => {
+    const base = createMockEmumetClient();
+    const upstream = (reason: "invalid_format" | "reserved"): EmumetClient => ({
+      ...base,
+      checkUsernameAvailability: () => Promise.resolve({ available: false, reason }),
+    });
+    const run1 = async (emumet: EmumetClient) => (await run(CHECK, await authenticated(emumet), { u: "fresh-name" })).data?.["checkProfileUsername"];
+    expect(await run1(upstream("invalid_format"))).toBe("FORMAT");
+    expect(await run1(upstream("reserved"))).toBe("RESERVED");
   });
 });
 

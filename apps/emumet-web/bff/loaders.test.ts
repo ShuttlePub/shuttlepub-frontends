@@ -29,6 +29,7 @@ function fakeEmumetClient(overrides: BatchOverrides): EmumetClient {
     getProfile: () => notUsed("getProfile"),
     upsertProfile: () => notUsed("upsertProfile"),
     setProfileUsername: () => notUsed("setProfileUsername"),
+    checkUsernameAvailability: () => notUsed("checkUsernameAvailability"),
     createMetadata: () => notUsed("createMetadata"),
     updateMetadata: () => notUsed("updateMetadata"),
     deleteMetadata: () => notUsed("deleteMetadata"),

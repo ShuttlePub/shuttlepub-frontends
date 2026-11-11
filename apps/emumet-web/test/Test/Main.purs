@@ -39,6 +39,8 @@ main = do
   check "status pending" Checking (status "alice" Unverified)
   check "status verified" Available (status "alice" Verified)
   check "status taken" (Unusable "利用できません") (status "alice" Taken)
+  check "status unconfirmed (429 / connection trouble) is neither available nor refused" (Unconfirmed "空き状況を確認できませんでした") (status "alice" Unavailable)
+  check "an unconfirmed value cannot be submitted" false (isAvailable "alice" Unavailable)
   check "status reserved (local)" (Unusable "利用できません") (status "admin" Verified)
   check "status server-rejected format" (Unusable "先頭は a〜z か 0〜9、以降は a〜z、0〜9、. _ - が使えます") (status "alice" (Rejected ReasonFormat))
   check "status uppercase is an error, not converted" (Unusable "先頭は a〜z か 0〜9、以降は a〜z、0〜9、. _ - が使えます") (status "Alice" Verified)

@@ -2,7 +2,7 @@ module App.View.AccountNew where
 
 import Prelude
 
-import App.Message (Message(..))
+import App.Message (Message(..), UsernameTarget(..))
 import App.Model (DialogStep(..), NewAccountForm, RemoteData)
 import App.Username (isAvailable)
 import App.View.UsernameUi as U
@@ -27,7 +27,7 @@ modal form errorMsg host savePending =
         , U.errorBanner errorMsg
         , HE.div [ HA.class' "space-y-3 sm:space-y-4" ]
             [ accountNameField form
-            , U.usernameInput "new" false form.username host SetNewAccountUsername
+            , U.usernameInput "new" false form.username host SetNewAccountUsername (RecheckUsername ForNewAccount)
             , botField form
             ]
         , U.buttonRow
