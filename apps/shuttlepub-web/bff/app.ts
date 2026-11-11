@@ -6,7 +6,7 @@ import { ownActorDomain } from "./policy/domain.ts";
 import { createMockProfilePolicy } from "./policy/mock.ts";
 import { createRealProfilePolicy } from "./policy/real.ts";
 import type { ProfilePolicySource } from "./policy/source.ts";
-import { createMockProfileContext, createRealProfileContext, type ProfileContextSource } from "./profile.ts";
+import { createMockProfileContext, createRealProfileContext, mockSelectionCookie, mockSelectionFrom, type ProfileContextSource } from "./profile.ts";
 import type { ShuttlePubApi } from "./rest/client.ts";
 import { createMockApi } from "./rest/mock.ts";
 import { createRealApi } from "./rest/real.ts";
@@ -47,17 +47,27 @@ export function createApp(config: AppConfig, deps: AppDeps = {}): App {
   // session (no auth config) must never reach mock data: every call is UNAUTHENTICATED.
   const mockPolicy = config.mode === "mock" ? deps.mockPolicy ?? createMockProfilePolicy()
     : createRealProfilePolicy({ baseUrl: "http://unconfigured.invalid", session: () => Promise.reject(new AuthError("UNAUTHENTICATED", 401)) });
-  const mockHandler = createGraphqlHandler({ api, profiles, policy: mockPolicy,
-    selfDomains: config.mode === "mock" ? [MOCK_OWN_DOMAIN] : null });
+  // Real mode without auth config: no session, no selection, nothing to remember.
+  const unauthenticatedHandler = createGraphqlHandler({ api, profiles, policy: mockPolicy, selfDomains: null });
   return { config, api, profiles, ...(auth ? { auth } : {}),
     async handleGraphql(request) {
-      if (config.mode === "mock") return mockHandler(request);
+      if (config.mode === "mock") {
+        // The selected Profile is this browser's (cookie), so the policy resolvers see the
+        // same selection the page shows; other browsers keep the fixture default.
+        const cookies: string[] = [];
+        const requestProfiles = createMockProfileContext({
+          selectedId: mockSelectionFrom(request),
+          select: (id) => { cookies.push(mockSelectionCookie(id)); },
+        });
+        const response = await createGraphqlHandler({ api, profiles: requestProfiles, policy: mockPolicy, selfDomains: [MOCK_OWN_DOMAIN] })(request);
+        return cookies.length === 0 ? response : withCookies(response, cookies);
+      }
       // All POSTs are protected, including GraphQL queries. GET mutations are rejected by Yoga.
       if (request.method === "POST") {
         const rejected = checkOrigin(request, auth?.config.appOrigin ?? new URL(request.url).origin);
         if (rejected) return privateResponse(rejected);
       }
-      if (!auth) return privateResponse(await mockHandler(request));
+      if (!auth) return privateResponse(await unauthenticatedHandler(request));
       const cookies: string[] = [];
       let resolved: Promise<ViewerSession> | undefined;
       const getSession = () => resolved ??= auth.resolveSession(request, cookies);

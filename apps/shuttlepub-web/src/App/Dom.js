@@ -26,7 +26,8 @@ export const focusFirstIn = (selector) => () => {
   });
 };
 
-const FOCUSABLE = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+// summary: a <details> disclosure is keyboard-focusable (e.g. the accounts a block detaches).
+const FOCUSABLE = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
 
 // Keeps Tab / Shift+Tab inside an aria-modal dialog.
 const trapFocus = (dialog, event) => {

@@ -352,9 +352,56 @@ async function verifyMuteBlock(page: Page, viewport: Viewport) {
   await expect(block.getByTestId("block-impact")).toContainText("フォロー中 3 人・フォロワー 5 人");
   await expect(block.getByRole("button", { name: "ブロック", exact: true })).toBeDisabled();
   await expectTabStaysInside(page, block);
+  // The accounts a block detaches open from the keyboard: Tab reaches the disclosure,
+  // Enter / Space toggle it.
+  const disclosure = block.locator("summary");
+  const details = block.locator("details");
+  let reached = false;
+  for (let i = 0; i < 8 && !reached; i++) {
+    await page.keyboard.press("Tab");
+    reached = await disclosure.evaluate((element) => element === document.activeElement);
+  }
+  expect(reached, "Tab reaches 対象を表示 inside the block dialog").toBe(true);
+  await expect(details).not.toHaveAttribute("open");
+  await page.keyboard.press("Enter");
+  await expect(details).toHaveAttribute("open", "");
+  await expect(block.getByText("example.social/users/alice")).toBeVisible();
+  await page.keyboard.press("Space");
+  await expect(details).not.toHaveAttribute("open");
+  await page.keyboard.press("Space");
+  await expect(details).toHaveAttribute("open", "");
   await page.keyboard.press("Escape");
   await expect(block).toHaveCount(0);
   await expect(opener).toBeFocused();
+
+  // Switching the Profile in the shell reloads the page for that Profile (mock: the
+  // selection is this browser's); its settings stay separate from the first Profile.
+  await switchProfile(page, "Fixture Dev");
+  await expect(list).toHaveAttribute("data-state", "loaded");
+  await expect(page.locator('li[data-domain="noisy.social"]')).toHaveCount(0);
+  await opener.click();
+  await page.locator("#mb-add-input").fill("only-dev.example");
+  await dialog.getByRole("button", { name: "ミュート", exact: true }).click();
+  await page.getByTestId("mute-dialog").getByRole("button", { name: "ミュート", exact: true }).click();
+  await expect(toast).toContainText("only-dev.example をミュートしました");
+  await expect(page.locator('li[data-domain="only-dev.example"]')).toBeVisible();
+  await switchProfile(page, "Fixture Profile");
+  await expect(page.locator('li[data-domain="noisy.social"]')).toBeVisible();
+  await expect(page.locator('li[data-domain="only-dev.example"]')).toHaveCount(0);
+  await switchProfile(page, "Fixture Dev");
+  const devRow = page.locator('li[data-domain="only-dev.example"]');
+  await expect(devRow).toBeVisible();
+  await devRow.getByRole("button", { name: "ミュート解除（only-dev.example）" }).click();
+  await expect(devRow).toHaveCount(0);
+  await switchProfile(page, "Fixture Profile");
+  await expect(page.locator('li[data-domain="noisy.social"]')).toBeVisible();
+}
+
+async function switchProfile(page: Page, name: string) {
+  await visible(page, /投稿用 Profile を切り替え/).click();
+  await page.getByTestId("profile-menu").getByRole("menuitemradio", { name: new RegExp(name) }).click();
+  await expect(visible(page, new RegExp(`投稿用 Profile を切り替え（現在: ${name}）`))).toHaveCount(1);
+  await expect(page.getByTestId("domain-panel").locator("section")).toHaveAttribute("data-state", "loaded");
 }
 
 async function verifyMock(browser: Browser, frontendRoot: string, coreURL: string) {
@@ -377,11 +424,19 @@ async function verifyMock(browser: Browser, frontendRoot: string, coreURL: strin
         await verifyPostDetail(page);
         await verifyProfileSwitcher(page, viewport);
         if (viewport.name === "desktop") await verifyBreakpointCrossing(page);
-        await verifyMuteBlock(page, viewport);
         expect(errors, `mock ${viewport.name}: browser errors`).toEqual([]);
         console.info(`OK mock mode hydrates and keeps the shell's keyboard/focus rules at ${viewport.name} (${viewport.width}x${viewport.height})`);
       } finally {
         await context.close();
+      }
+      // A fresh browser: the switcher check above left this one on another Profile.
+      const muteBlock = await openPage(browser, server, viewport);
+      try {
+        await verifyMuteBlock(muteBlock.page, viewport);
+        expect(muteBlock.errors, `mute/block ${viewport.name}: browser errors`).toEqual([]);
+        console.info(`OK mute/block settings: keyboard, modal, own server, Profile switch at ${viewport.name}`);
+      } finally {
+        await muteBlock.context.close();
       }
     }
     expect(await server.networkViolations(), "mock mode must not fetch anything server-side").toEqual([]);

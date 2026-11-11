@@ -10,15 +10,18 @@ type GraphQLResponse = {
   errors?: { message: string; extensions?: Record<string, unknown>; path?: string[] }[];
 };
 
-async function run(app: App, query: string): Promise<GraphQLResponse> {
-  const response = await app.handleGraphql(
+async function send(app: App, query: string, cookie?: string): Promise<Response> {
+  return await app.handleGraphql(
     new Request("http://app.test/graphql", {
       method: "POST",
-      headers: { "content-type": "application/json", Origin: "http://app.test" },
+      headers: { "content-type": "application/json", Origin: "http://app.test", ...(cookie ? { Cookie: cookie } : {}) },
       body: JSON.stringify({ query }),
     }),
   );
-  return (await response.json()) as GraphQLResponse;
+}
+
+async function run(app: App, query: string, cookie?: string): Promise<GraphQLResponse> {
+  return (await (await send(app, query, cookie)).json()) as GraphQLResponse;
 }
 
 const servers: { stop: (closeActiveConnections?: boolean) => void }[] = [];
@@ -78,16 +81,40 @@ describe("mock mode", () => {
     expect(result.errors![0]!.extensions).toMatchObject({ code: "NOT_IMPLEMENTED" });
   });
 
-  test("lists every mock Profile and selects one without persisting it", async () => {
+  test("lists every mock Profile; a selection is remembered by that browser only (cookie)", async () => {
     const list = await run(app, "{ availableProfiles { id handle displayName } }");
     expect(list.data!.availableProfiles).toEqual(availableProfilesFixture.map(({ profileId: _, ...visible }) => visible));
     const second = availableProfilesFixture[1]!;
-    const selected = await run(app, `mutation { selectProfile(id: "${second.id}") { activeProfile { id } } }`);
-    expect(selected.data).toEqual({ selectProfile: { activeProfile: { id: second.id } } });
-    const after = await run(app, "{ profileContext { activeProfile { id } } }");
-    expect(after.data).toEqual({ profileContext: { activeProfile: { id: profileContextFixture.activeProfile!.id } } });
-    const unknown = await run(app, 'mutation { selectProfile(id: "someone-else") { activeProfile { id } } }');
-    expect(unknown.errors![0]!.extensions).toMatchObject({ code: "PROFILE_UNAVAILABLE" });
+    const response = await send(app, `mutation { selectProfile(id: "${second.id}") { activeProfile { id } } }`);
+    expect(await response.json()).toEqual({ data: { selectProfile: { activeProfile: { id: second.id } } } });
+    const cookie = response.headers.get("Set-Cookie")!;
+    expect(cookie).toContain("HttpOnly");
+    const browserCookie = cookie.split(";")[0]!;
+    // This browser keeps its selection; another browser (no cookie) still has the fixture default.
+    expect((await run(app, "{ profileContext { activeProfile { id } } }", browserCookie)).data)
+      .toEqual({ profileContext: { activeProfile: { id: second.id } } });
+    expect((await run(app, "{ profileContext { activeProfile { id } } }")).data)
+      .toEqual({ profileContext: { activeProfile: { id: profileContextFixture.activeProfile!.id } } });
+    // An unknown remembered id falls back to the default; an unknown selection is refused and not remembered.
+    expect((await run(app, "{ profileContext { activeProfile { id } } }", "sp_mock_profile=someone-else")).data)
+      .toEqual({ profileContext: { activeProfile: { id: profileContextFixture.activeProfile!.id } } });
+    const unknown = await send(app, 'mutation { selectProfile(id: "someone-else") { activeProfile { id } } }');
+    expect(unknown.headers.get("Set-Cookie")).toBeNull();
+    expect(((await unknown.json()) as GraphQLResponse).errors![0]!.extensions).toMatchObject({ code: "PROFILE_UNAVAILABLE" });
+  });
+
+  test("mute/block settings follow this browser's selected Profile and stay separate per Profile", async () => {
+    const [first, second] = availableProfilesFixture;
+    const cookie = (await send(app, `mutation { selectProfile(id: "${second!.id}") { activeProfile { id } } }`)).headers.get("Set-Cookie")!.split(";")[0]!;
+    const listB = await run(app, `{ domainControls(profile: "${second!.id}") { domain } }`, cookie);
+    expect(listB).toEqual({ data: { domainControls: [] } });
+    const saved = await run(app, `mutation { setDomainControl(profile: "${second!.id}", domain: "only-b.example", mode: MUTE) { domain revision } }`, cookie);
+    expect(saved.data).toEqual({ setDomainControl: { domain: "only-b.example", revision: 1 } });
+    // The page of another browser still on A cannot write as B, and A's list does not contain B's setting.
+    const asA = await run(app, `{ domainControls(profile: "${first!.id}") { domain } }`);
+    expect((asA.data!.domainControls as { domain: string }[]).map((c) => c.domain)).not.toContain("only-b.example");
+    const stale = await run(app, `{ domainControls(profile: "${second!.id}") { domain } }`);
+    expect(stale.errors![0]!.extensions).toMatchObject({ code: "PROFILE_CHANGED" });
   });
 });
 

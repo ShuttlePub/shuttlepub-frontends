@@ -250,7 +250,7 @@ dialogLayer model = case model.dialog of
       -- app's single keydown handler: Esc -> CloseDialog, Tab stays in the dialog.
       [ HA.class' "fixed inset-0 z-50 flex items-end md:items-center justify-center md:p-6" ]
       [ HE.div [ HA.class' "absolute inset-0 bg-black/55", HA.onClick CloseDialog, HA.createAttribute "data-testid" "dialog-backdrop" ] []
-      , dialogView dialog
+      , dialogView model.writing dialog
       ]
 
 dialogBox :: String -> Array (Html Message) -> Html Message
@@ -315,8 +315,10 @@ failureLine = case _ of
         ([ HE.span [ HA.class' T.textError ] [ HE.text (describe failure) ] ] <> map recoveryButton (recovery failure))
     ]
 
-dialogView :: Dialog -> Html Message
-dialogView = case _ of
+-- | busy: some write is in flight (a row action or "元に戻す"). A confirmation
+-- | cannot send its own write until it finishes, so writes never overlap.
+dialogView :: Boolean -> Dialog -> Html Message
+dialogView busy = case _ of
   AddDomain state ->
     dialogBox "add-dialog"
       [ dialogHead [ HE.text "ドメインを追加" ] false (Just CloseDialog)
@@ -355,7 +357,7 @@ dialogView = case _ of
         , dialogBody (failureLine state.failure)
         , dialogFoot
             [ firstButton "muted" state.pending CloseDialog "キャンセル"
-            , footButton "primary" state.pending ConfirmMuteDomain verb
+            , footButton "primary" (state.pending || busy) ConfirmMuteDomain verb
             ]
         ]
   ConfirmBlock state ->
@@ -368,8 +370,8 @@ dialogView = case _ of
         , dialogBody (impactView state.impact state.acknowledged state.pending <> failureLine state.failure)
         , dialogFoot
             ( [ firstButton "muted" state.pending CloseDialog "キャンセル" ]
-                <> (if fromMute then [] else [ footButton "" state.pending MuteInstead "代わりにミュート" ])
-                <> [ footButton "danger" (state.pending || not ready) ConfirmBlockDomain "ブロック" ]
+                <> (if fromMute then [] else [ footButton "" (state.pending || busy) MuteInstead "代わりにミュート" ])
+                <> [ footButton "danger" (state.pending || busy || not ready) ConfirmBlockDomain "ブロック" ]
             )
         ]
   ConfirmDomainUnblock state ->
@@ -381,8 +383,8 @@ dialogView = case _ of
           )
       , dialogFoot
           [ firstButton "muted" state.pending CloseDialog "キャンセル"
-          , footButton "" state.pending DomainUnblockToMute "ミュートに変更"
-          , footButton "primary" state.pending ConfirmDomainUnblockNow "ブロック解除"
+          , footButton "" (state.pending || busy) DomainUnblockToMute "ミュートに変更"
+          , footButton "primary" (state.pending || busy) ConfirmDomainUnblockNow "ブロック解除"
           ]
       ]
   ConfirmActorUnblock state ->
@@ -397,8 +399,8 @@ dialogView = case _ of
             )
         , dialogFoot
             [ firstButton "muted" state.pending CloseDialog "キャンセル"
-            , footButton "" state.pending ActorUnblockToMute "ミュートに変更"
-            , footButton "primary" state.pending ConfirmActorUnblockNow "ブロック解除"
+            , footButton "" (state.pending || busy) ActorUnblockToMute "ミュートに変更"
+            , footButton "primary" (state.pending || busy) ConfirmActorUnblockNow "ブロック解除"
             ]
         ]
 

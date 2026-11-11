@@ -11,7 +11,7 @@ import Prelude
 
 import App.MuteBlock.Api as Api
 import App.MuteBlock.Dom (focusLater, reloadPage)
-import App.MuteBlock.Types (ActorPolicy, Change(..), Dialog(..), DomainControl, Failure(..), Filter(..), InputProblem(..), Load(..), Message(..), Model, Undo(..), Write(..), actorLabel, blockReady, fromResult)
+import App.MuteBlock.Types (ActorPolicy, Change(..), Dialog(..), DomainControl, Failure(..), Filter(..), InputProblem(..), Load(..), Message(..), Model, Origin, Scope, Undo(..), Write(..), actorLabel, blockReady, fromResult)
 import Data.Array (filter, find, snoc)
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..), fromMaybe)
@@ -47,18 +47,20 @@ toastSeconds = 6000.0
 
 update :: Model -> Message -> Step
 update model = case _ of
+  -- A new selection starts a new epoch: whatever the previous one still has in
+  -- flight (lists, impact, writes) is dropped when it arrives.
   ProfileKnown (Right (Just profile)) ->
-    load (model { profile = Just profile, profileKnown = true, dialog = Nothing, toast = Nothing })
+    load (switched model) { profile = Just profile }
   ProfileKnown (Right Nothing) ->
-    noEffects model { profile = Nothing, profileKnown = true, domains = Failed (Failure "PROFILE_REQUIRED"), actors = Failed (Failure "PROFILE_REQUIRED") }
+    noEffects (switched model) { profile = Nothing, domains = Failed (Failure "PROFILE_REQUIRED"), actors = Failed (Failure "PROFILE_REQUIRED") }
   ProfileKnown (Left failure) ->
-    noEffects model { profile = Nothing, profileKnown = true, domains = Failed failure, actors = Failed failure }
+    noEffects (switched model) { profile = Nothing, domains = Failed failure, actors = Failed failure }
   Reload -> load (model { dialog = Nothing, toast = Nothing, writing = false })
-  DomainsLoaded profile result
-    | model.profile == Just profile -> noEffects model { domains = fromResult result }
+  DomainsLoaded scope result
+    | current scope -> noEffects model { domains = fromResult result }
     | otherwise -> noEffects model
-  ActorsLoaded profile result
-    | model.profile == Just profile -> noEffects model { actors = fromResult result }
+  ActorsLoaded scope result
+    | current scope -> noEffects model { actors = fromResult result }
     | otherwise -> noEffects model
   SetDomainFilter value -> noEffects model { domainFilter = value }
   SetActorFilter value -> noEffects model { actorFilter = value }
@@ -90,14 +92,14 @@ update model = case _ of
           else openBlock domain current true
       Right { error } -> refuse state (InputRefused (fromMaybe "INVALID" error))
     _ -> noEffects model
-  ImpactLoaded domain result -> case model.dialog of
-    Just (ConfirmBlock state) | state.domain == domain ->
+  ImpactLoaded scope domain result -> case model.dialog of
+    Just (ConfirmBlock state) | current scope && state.domain == domain ->
       noEffects model { dialog = Just (ConfirmBlock state { impact = fromResult result }) }
     _ -> noEffects model
   RetryImpact -> case model.dialog, model.profile of
     Just (ConfirmBlock state), Just profile | not state.pending ->
       Tuple model { dialog = Just (ConfirmBlock state { impact = Loading, acknowledged = false }) }
-        [ effect (Api.fetchImpact profile state.domain) (ImpactLoaded state.domain) ]
+        [ effect (Api.fetchImpact profile state.domain) (ImpactLoaded (scopeOf model profile) state.domain) ]
     _, _ -> noEffects model
   ToggleAcknowledged value -> case model.dialog of
     Just (ConfirmBlock state) -> noEffects model { dialog = Just (ConfirmBlock state { acknowledged = value }) }
@@ -107,24 +109,24 @@ update model = case _ of
     | otherwise -> Tuple model { dialog = Nothing } [ focus (openerIds model) ]
 
   ConfirmMuteDomain -> case model.dialog of
-    Just (ConfirmMute state) | not state.pending, Just profile <- model.profile ->
+    Just (ConfirmMute state) | not state.pending, not model.writing, Just profile <- model.profile ->
       Tuple model { dialog = Just (ConfirmMute state { pending = true, failure = Nothing }), writing = true }
         [ effect (Api.setDomainControl profile state.domain MUTE (map _.revision state.current))
-            (Written (if map _.mode state.current == Just BLOCK then DomainToMute else MuteDomain) state.domain <<< map DomainUpserted)
+            (Written (fromDialog profile) (if map _.mode state.current == Just BLOCK then DomainToMute else MuteDomain) state.domain <<< map DomainUpserted)
         ]
     _ -> noEffects model
   ConfirmBlockDomain -> case model.dialog of
-    Just (ConfirmBlock state) | not state.pending, blockReady state, Just profile <- model.profile ->
+    Just (ConfirmBlock state) | not state.pending, not model.writing, blockReady state, Just profile <- model.profile ->
       Tuple model { dialog = Just (ConfirmBlock state { pending = true, failure = Nothing }), writing = true }
         [ effect (Api.setDomainControl profile state.domain BLOCK (map _.revision state.current))
-            (Written BlockDomain state.domain <<< map DomainUpserted)
+            (Written (fromDialog profile) BlockDomain state.domain <<< map DomainUpserted)
         ]
     _ -> noEffects model
   MuteInstead -> case model.dialog of
-    Just (ConfirmBlock state) | not state.pending, Just profile <- model.profile ->
+    Just (ConfirmBlock state) | not state.pending, not model.writing, Just profile <- model.profile ->
       Tuple model { dialog = Just (ConfirmBlock state { pending = true, failure = Nothing }), writing = true }
         [ effect (Api.setDomainControl profile state.domain MUTE (map _.revision state.current))
-            (Written MuteDomain state.domain <<< map DomainUpserted)
+            (Written (fromDialog profile) MuteDomain state.domain <<< map DomainUpserted)
         ]
     _ -> noEffects model
   UnmuteDomain control
@@ -132,24 +134,24 @@ update model = case _ of
     | Just profile <- model.profile ->
         Tuple model { writing = true }
           [ effect (Api.removeDomainControl profile control.domain control.revision)
-              (Written UnmuteDomainRow control.domain <<< map DomainRemoved)
+              (Written (fromRow profile) UnmuteDomainRow control.domain <<< map DomainRemoved)
           ]
     | otherwise -> noEffects model
   OpenDomainUnblock opener control ->
     Tuple model { dialog = Just (ConfirmDomainUnblock { control, pending: false, failure: Nothing }), opener = Just opener }
       [ focus [ dialogFirstId ] ]
   ConfirmDomainUnblockNow -> case model.dialog of
-    Just (ConfirmDomainUnblock state) | not state.pending, Just profile <- model.profile ->
+    Just (ConfirmDomainUnblock state) | not state.pending, not model.writing, Just profile <- model.profile ->
       Tuple model { dialog = Just (ConfirmDomainUnblock state { pending = true, failure = Nothing }), writing = true }
         [ effect (Api.removeDomainControl profile state.control.domain state.control.revision)
-            (Written UnblockDomain state.control.domain <<< map DomainRemoved)
+            (Written (fromDialog profile) UnblockDomain state.control.domain <<< map DomainRemoved)
         ]
     _ -> noEffects model
   DomainUnblockToMute -> case model.dialog of
-    Just (ConfirmDomainUnblock state) | not state.pending, Just profile <- model.profile ->
+    Just (ConfirmDomainUnblock state) | not state.pending, not model.writing, Just profile <- model.profile ->
       Tuple model { dialog = Just (ConfirmDomainUnblock state { pending = true, failure = Nothing }), writing = true }
         [ effect (Api.setDomainControl profile state.control.domain MUTE (Just state.control.revision))
-            (Written DomainToMute state.control.domain <<< map DomainUpserted)
+            (Written (fromDialog profile) DomainToMute state.control.domain <<< map DomainUpserted)
         ]
     _ -> noEffects model
 
@@ -158,54 +160,59 @@ update model = case _ of
     | Just profile <- model.profile ->
         Tuple model { writing = true }
           [ effect (Api.removeActorPolicy profile policy.id MUTE)
-              (Written (UnmuteActorRow policy.actorUrl) (actorLabel policy.actorUrl) <<< map ActorRemoved)
+              (Written (fromRow profile) (UnmuteActorRow policy.actorUrl) (actorLabel policy.actorUrl) <<< map ActorRemoved)
           ]
     | otherwise -> noEffects model
   OpenActorUnblock opener policy ->
     Tuple model { dialog = Just (ConfirmActorUnblock { policy, pending: false, failure: Nothing }), opener = Just opener }
       [ focus [ dialogFirstId ] ]
   ConfirmActorUnblockNow -> case model.dialog of
-    Just (ConfirmActorUnblock state) | not state.pending, Just profile <- model.profile ->
+    Just (ConfirmActorUnblock state) | not state.pending, not model.writing, Just profile <- model.profile ->
       Tuple model { dialog = Just (ConfirmActorUnblock state { pending = true, failure = Nothing }), writing = true }
         [ effect (Api.removeActorPolicy profile state.policy.id BLOCK)
-            (Written UnblockActor (actorLabel state.policy.actorUrl) <<< map ActorRemoved)
+            (Written (fromDialog profile) UnblockActor (actorLabel state.policy.actorUrl) <<< map ActorRemoved)
         ]
     _ -> noEffects model
   ActorUnblockToMute -> case model.dialog of
-    Just (ConfirmActorUnblock state) | not state.pending, Just profile <- model.profile ->
+    Just (ConfirmActorUnblock state) | not state.pending, not model.writing, Just profile <- model.profile ->
       Tuple model { dialog = Just (ConfirmActorUnblock state { pending = true, failure = Nothing }), writing = true }
-        [ effect (actorToMute profile state.policy) (Written ActorToMute (actorLabel state.policy.actorUrl)) ]
+        [ effect (actorToMute profile state.policy) (Written (fromDialog profile) ActorToMute (actorLabel state.policy.actorUrl)) ]
     _ -> noEffects model
 
-  Written write subject (Left failure) -> case model.dialog of
-    Just dialog | dialogPending model ->
+  -- A completion from an earlier Profile selection changes nothing here (its
+  -- Profile was written; this page now shows another one).
+  Written origin _ _ _ | not (current { profile: origin.profile, epoch: origin.epoch }) -> noEffects model
+  Written origin write subject (Left failure) -> case model.dialog of
+    Just dialog | origin.dialog && dialogPending model ->
       noEffects model { dialog = Just (withFailure failure dialog), writing = false }
     _ ->
       let
-        Tuple next effects = showToast (model { writing = false }) { subject, rest: "", undo: Nothing, failure: Just failure }
+        Tuple next effects = showToast (model { writing = false }) origin { subject, rest: "", undo: Nothing, failure: Just failure }
       in
         Tuple next (effects <> reloadAfter model write)
-  Written write subject (Right change) ->
+  Written origin write subject (Right change) ->
     let
       -- Only the dialog that sent this write closes: a row action or "元に戻す"
       -- finishing later leaves a dialog opened meanwhile (and its input) alone.
-      fromDialog = dialogPending model
-      applied = applyChange change (model { writing = false, dialog = if fromDialog then Nothing else model.dialog })
-      refocus = if fromDialog then [ focus (openerIds model) ] else []
+      closes = origin.dialog && dialogPending model
+      applied = applyChange change (model { writing = false, dialog = if closes then Nothing else model.dialog })
+      refocus = if closes then [ focus (openerIds model) ] else []
       Tuple next effects = case notice write subject of
-        Just toast -> showToast (resetFilter write applied) toast
+        Just toast -> showToast (resetFilter write applied) origin toast
         Nothing -> noEffects applied { toast = Nothing }
     in
       Tuple next (effects <> refocus <> reloadAfter model write)
-  RunUndo -> case model.toast, model.profile of
-    Just { undo: Just undo }, Just profile | not model.writing && model.dialog == Nothing -> case undo of
+  -- "元に戻す" restores into the Profile whose write the toast reports, and only
+  -- while that selection is still the shown one.
+  RunUndo -> case model.toast of
+    Just { undo: Just undo, owner } | not model.writing && model.dialog == Nothing && current owner -> case undo of
       RestoreDomainMute domain ->
         Tuple model { writing = true, toast = Nothing }
-          [ effect (Api.setDomainControl profile domain MUTE Nothing) (Written UndoWrite domain <<< map DomainUpserted) ]
+          [ effect (Api.setDomainControl owner.profile domain MUTE Nothing) (Written (fromRow owner.profile) UndoWrite domain <<< map DomainUpserted) ]
       RestoreActorMute actorUrl ->
         Tuple model { writing = true, toast = Nothing }
-          [ effect (Api.addActorPolicy profile actorUrl MUTE) (Written UndoWrite (actorLabel actorUrl) <<< map ActorAdded) ]
-    _, _ -> noEffects model
+          [ effect (Api.addActorPolicy owner.profile actorUrl MUTE) (Written (fromRow owner.profile) UndoWrite (actorLabel actorUrl) <<< map ActorAdded) ]
+    _ -> noEffects model
   ToastHold held -> case model.toast of
     Just toast ->
       Tuple model { toast = Just toast { held = held } }
@@ -217,6 +224,15 @@ update model = case _ of
   ReloadPage -> Tuple model [ liftEffect reloadPage $> Nothing ]
   NoOp -> noEffects model
   where
+  current :: Scope -> Boolean
+  current scope = model.profile == Just scope.profile && model.epoch == scope.epoch
+
+  fromDialog :: String -> Origin
+  fromDialog profile = { profile, epoch: model.epoch, dialog: true }
+
+  fromRow :: String -> Origin
+  fromRow profile = { profile, epoch: model.epoch, dialog: false }
+
   findDomain :: String -> Maybe DomainControl
   findDomain domain = case model.domains of
     Ready list -> find (\control -> control.domain == domain) list
@@ -234,16 +250,24 @@ update model = case _ of
                   { domain, current, fromInput, impact: Loading, acknowledged: false, pending: false, failure: Nothing }
               )
           }
-        [ effect (Api.fetchImpact profile domain) (ImpactLoaded domain), focus [ dialogFirstId ] ]
+        [ effect (Api.fetchImpact profile domain) (ImpactLoaded (scopeOf model profile) domain), focus [ dialogFirstId ] ]
     Nothing -> noEffects model
+
+scopeOf :: Model -> String -> Scope
+scopeOf model profile = { profile, epoch: model.epoch }
+
+-- | A new Profile selection: nothing of the previous one stays (dialog, toast,
+-- | the in-flight write flag) and its late responses no longer match.
+switched :: Model -> Model
+switched model = model { profileKnown = true, dialog = Nothing, toast = Nothing, writing = false, epoch = model.epoch + 1 }
 
 -- | Loads both lists for the shown Profile.
 load :: Model -> Step
 load model = case model.profile of
   Just profile ->
     Tuple model { domains = Loading, actors = Loading }
-      [ effect (Api.fetchDomainControls profile) (DomainsLoaded profile)
-      , effect (Api.fetchActorPolicies profile) (ActorsLoaded profile)
+      [ effect (Api.fetchDomainControls profile) (DomainsLoaded (scopeOf model profile))
+      , effect (Api.fetchActorPolicies profile) (ActorsLoaded (scopeOf model profile))
       ]
   Nothing -> noEffects model
 
@@ -316,15 +340,16 @@ notice write subject = case write of
 -- | new id to; refetch rather than guess it.
 reloadAfter :: Model -> Write -> Array (Aff (Maybe Message))
 reloadAfter model = case _, model.profile of
-  ActorToMute, Just profile -> [ effect (Api.fetchActorPolicies profile) (ActorsLoaded profile) ]
+  ActorToMute, Just profile -> [ effect (Api.fetchActorPolicies profile) (ActorsLoaded (scopeOf model profile)) ]
   _, _ -> []
 
-showToast :: Model -> { subject :: String, rest :: String, undo :: Maybe Undo, failure :: Maybe Failure } -> Step
-showToast model toast =
+showToast :: Model -> Origin -> { subject :: String, rest :: String, undo :: Maybe Undo, failure :: Maybe Failure } -> Step
+showToast model origin toast =
   let
     id = model.toastSeq + 1
+    owner = { profile: origin.profile, epoch: origin.epoch }
   in
-    Tuple model { toast = Just { id, subject: toast.subject, rest: toast.rest, undo: toast.undo, failure: toast.failure, held: false }, toastSeq = id }
+    Tuple model { toast = Just { id, owner, subject: toast.subject, rest: toast.rest, undo: toast.undo, failure: toast.failure, held: false }, toastSeq = id }
       [ dismissLater id ]
 
 dismissLater :: Int -> Aff (Maybe Message)

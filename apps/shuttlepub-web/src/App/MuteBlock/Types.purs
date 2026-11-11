@@ -227,10 +227,21 @@ instance EncodeJson Undo where
 instance DecodeJson Undo where
   decodeJson = genericDecodeJson
 
+-- | Which Profile selection a request belongs to. epoch counts Profile changes
+-- | (ProfileKnown), so a response that arrives after a switch, even a switch back
+-- | to the same Profile, is recognised as stale and dropped.
+type Scope = { profile :: String, epoch :: Int }
+
+-- | Who sent a write: its scope, and whether a dialog sent it (only that dialog
+-- | closes or shows the failure when the write completes).
+type Origin = { profile :: String, epoch :: Int, dialog :: Boolean }
+
 -- | "<subject> <rest>" with an optional undo, or a failure (with reload when the
 -- | lists may be stale). held: pointer/focus is on it, so it does not time out.
 type Toast =
   { id :: Int
+  -- | The Profile (and selection) the toast's write and its "元に戻す" belong to.
+  , owner :: Scope
   , subject :: String
   , rest :: String
   , undo :: Maybe Undo
@@ -250,6 +261,8 @@ type Model =
   , toast :: Maybe Toast
   , toastSeq :: Int
   , writing :: Boolean
+  -- | Bumped whenever the selected Profile becomes known again (see Scope).
+  , epoch :: Int
   }
 
 init :: Model
@@ -265,14 +278,15 @@ init =
   , toast: Nothing
   , toastSeq: 0
   , writing: false
+  , epoch: 0
   }
 
 data Message
   -- | The app learned which Profile is selected (Nothing: none), or failed to.
   = ProfileKnown (Either Failure (Maybe String))
   | Reload
-  | DomainsLoaded String (Either Failure (Array DomainControl))
-  | ActorsLoaded String (Either Failure (Array ActorPolicy))
+  | DomainsLoaded Scope (Either Failure (Array DomainControl))
+  | ActorsLoaded Scope (Either Failure (Array ActorPolicy))
   | SetDomainFilter Filter
   | SetActorFilter Filter
   -- | Switch sub-page; the app turns it into a navigation.
@@ -284,7 +298,7 @@ data Message
   | AddInput String
   | SubmitAdd PolicyMode
   | AddChecked PolicyMode (Either Failure { domain :: Maybe String, error :: Maybe String })
-  | ImpactLoaded String (Either Failure Impact)
+  | ImpactLoaded Scope String (Either Failure Impact)
   -- | Look up the follows a block detaches again after a failure.
   | RetryImpact
   | ToggleAcknowledged Boolean
@@ -300,7 +314,7 @@ data Message
   | OpenActorUnblock String ActorPolicy
   | ConfirmActorUnblockNow
   | ActorUnblockToMute
-  | Written Write String (Either Failure Change)
+  | Written Origin Write String (Either Failure Change)
   | RunUndo
   | ToastHold Boolean
   | DismissToast Int
