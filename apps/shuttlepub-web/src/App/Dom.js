@@ -169,3 +169,5 @@ export const avatarColor = (id) => {
 };
 
 export const scrollToTop = () => { window.scrollTo(0, 0); };
+
+export const encodeQueryComponent = (value) => encodeURIComponent(value);

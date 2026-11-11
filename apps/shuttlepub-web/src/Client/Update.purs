@@ -2,12 +2,15 @@ module Client.Update where
 
 import Prelude
 
+import App.Api.Error (ApiError(..))
+import App.Api.Error as Error
 import App.Api.GraphQL (createPost, fetchApiMode, fetchApiStatus, fetchAvailableProfiles, fetchPostDetail, fetchProfileContext, fetchTimeline, selectProfile)
 import App.Dom (focusById, focusFirstIn, logoutAndReload, scrollToTop, setScrollLock)
 import App.Message (Message(..))
 import App.Model (DetailTab(..), Model, RemoteData(..), emptyCompose, fromEither)
 import App.Post (TimelineTab, timelineTabFromValue)
 import App.Route (Route(..), routeCodec)
+import App.View.Auth (authActionId)
 import App.View.Compose (composeTextId, visibilityButtonId)
 import App.View.Pages (detailTabId, timelineTabId)
 import App.View.Shell (composeButtonDesktopId, composeButtonMobileId, profileButtonDesktopId, profileButtonMobileId, profileMenuId)
@@ -140,6 +143,14 @@ mkUpdate nav model = case _ of
     Tuple model [ Just <<< ProfileSelected <$> selectProfile profileId ]
   ProfileSelected result -> case result of
     Right context -> closeProfileMenu (model { profileContext = Loaded context })
+    -- The session ended (or the account lost access) while the menu was open: the
+    -- shell now shows that state instead of a switcher that can no longer work.
+    Left error | endsSession error ->
+      let
+        Tuple next effects = closeProfileMenu (model { profileContext = Failed error, availableProfiles = Failed error })
+      in
+        -- The switcher that opened the menu is gone: focus the notice's way out.
+        Tuple next (effects <> [ effect (focusById authActionId) ])
     Left error -> case model.profileMenu of
       Just state -> noMessages $ model { profileMenu = Just state { error = Just error } }
       Nothing -> noMessages model
@@ -149,6 +160,9 @@ mkUpdate nav model = case _ of
   withCompose f = case model.compose of
     Just state -> f state
     Nothing -> noMessages model
+  endsSession error = Error.isSignedOut error || case error of
+    Forbidden _ -> true
+    _ -> false
 
 type Step = { model :: Model, effects :: Array (Aff (Maybe Message)) }
 

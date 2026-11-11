@@ -14,6 +14,9 @@ import Data.Show.Generic (genericShow)
 -- | error; none of them is ever turned into data (no silent fallback to mock).
 data ApiError
   = Unauthenticated String
+  -- | Unauthenticated because the session the browser held is no longer usable
+  -- | (BFF extensions.reason = SESSION_EXPIRED). The BFF has already cleared it.
+  | SessionExpired String
   | Forbidden String
   | ProfileUnavailable String
   | NotImplemented String
@@ -47,9 +50,24 @@ fromGqlCode code message = case code of
   Just "INVALID_UPSTREAM_RESPONSE" -> InvalidResponse message
   _ -> Unexpected message
 
+-- | Refines an error with the BFF's `extensions.reason` (bff/auth-error.ts AuthErrorReason).
+-- | Only an expiry of an UNAUTHENTICATED error is recognised; anything else is kept as is.
+withReason :: Maybe String -> ApiError -> ApiError
+withReason reason error = case reason, error of
+  Just "SESSION_EXPIRED", Unauthenticated message -> SessionExpired message
+  _, _ -> error
+
+-- | The viewer has no usable session (never logged in, logged out or expired).
+isSignedOut :: ApiError -> Boolean
+isSignedOut = case _ of
+  Unauthenticated _ -> true
+  SessionExpired _ -> true
+  _ -> false
+
 describe :: ApiError -> String
 describe = case _ of
   Unauthenticated _ -> "Login required"
+  SessionExpired _ -> "Login expired"
   Forbidden _ -> "Access denied"
   ProfileUnavailable _ -> "Selected profile is no longer available"
   NotImplemented message -> "Not implemented: " <> message
@@ -63,6 +81,7 @@ describe = case _ of
 tag :: ApiError -> String
 tag = case _ of
   Unauthenticated _ -> "unauthenticated"
+  SessionExpired _ -> "session_expired"
   Forbidden _ -> "forbidden"
   ProfileUnavailable _ -> "profile_unavailable"
   NotImplemented _ -> "not_implemented"

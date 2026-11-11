@@ -2,11 +2,13 @@ module Test.Main where
 
 import Prelude
 
-import App.Api.Error (ApiError(..), describe, fromGqlCode, tag)
+import App.Api.Error (ApiError(..), describe, fromGqlCode, isSignedOut, tag, withReason)
 import App.Dom (fullDateTime, relativeTime)
 import App.Model (DetailTab(..), Model, RemoteData(..), emptyCompose, fromEither, initialModel)
 import App.Post (Post, TimelineTab(..), Visibility(..), allTimelineTabs, timelineTabFromValue, timelineTabValue)
 import App.Route (Route(..), routeCodec)
+import App.View (view)
+import App.View.Common (loginHref)
 import Data.Argonaut.Decode (class DecodeJson, decodeJson)
 import Data.Argonaut.Encode (class EncodeJson, encodeJson)
 import Data.Either (Either(..), hush)
@@ -16,6 +18,7 @@ import Data.String (Pattern(..), contains)
 import Effect (Effect)
 import Effect.Class.Console (log)
 import Effect.Exception (throw)
+import Flame.Renderer.String as FRS
 import Generated.Schema.Gql.Enum.ApiMode (ApiMode(..))
 import Routing.Duplex (parse, print)
 import Server (renderPage)
@@ -29,6 +32,8 @@ main = do
   testTimelineTabs
   testTimeFormatting
   testSsr
+  testLoginHref
+  testLoginScreens
 
 assertEqual :: forall a. Eq a => Show a => String -> a -> a -> Effect Unit
 assertEqual label actual expected =
@@ -61,6 +66,8 @@ testRouteCodec = do
       , { path: "/bookmarks", route: Bookmarks }
       , { path: "/settings", route: Settings }
       , { path: "/posts/post-sora-zine", route: PostDetail "post-sora-zine" }
+      , { path: "/login", route: Login { error: Nothing } }
+      , { path: "/login?error=denied", route: Login { error: Just "denied" } }
       ]
   for_ cases \{ path, route } -> do
     assertEqual ("parse " <> path) (hush (parse routeCodec path)) (Just route)
@@ -131,6 +138,16 @@ testErrorMapping = do
   assertEqual "INVALID_UPSTREAM_RESPONSE" (fromGqlCode (Just "INVALID_UPSTREAM_RESPONSE") "m") (InvalidResponse "m")
   assertEqual "unknown code" (fromGqlCode (Just "WHATEVER") "m") (Unexpected "m")
   assertEqual "no code" (fromGqlCode Nothing "m") (Unexpected "m")
+  -- extensions.reason refines only an UNAUTHENTICATED error.
+  assertEqual "expired session" (withReason (Just "SESSION_EXPIRED") (Unauthenticated "m")) (SessionExpired "m")
+  assertEqual "no reason" (withReason Nothing (Unauthenticated "m")) (Unauthenticated "m")
+  assertEqual "unknown reason" (withReason (Just "OTHER") (Unauthenticated "m")) (Unauthenticated "m")
+  assertEqual "reason on another code" (withReason (Just "SESSION_EXPIRED") (Forbidden "m")) (Forbidden "m")
+  assertEqual "expired tag" (tag (SessionExpired "m")) "session_expired"
+  assertTrue "expired is signed out" (isSignedOut (SessionExpired "m"))
+  assertTrue "unauthenticated is signed out" (isSignedOut (Unauthenticated "m"))
+  assertTrue "forbidden keeps the session" (not (isSignedOut (Forbidden "m")))
+  roundTrip "expired error" (SessionExpired "m")
   assertEqual "tag" (tag (NotImplemented "m")) "not_implemented"
   assertContains "describe" (describe (NotImplemented "later")) "Not implemented: later"
   -- A failure stays a failure: it never becomes Loaded.
@@ -183,7 +200,61 @@ testSsr = do
   missing <- renderPage "/nope"
   assertContains "unknown path SSR" missing "404"
   assertNotContains "unknown path SSR" missing "role=\"tablist\""
-  for_ [ "/", "/posts/post-sora-zine", "/settings", "/notifications", "/search", "/bookmarks", "/nope" ] \path -> do
+  for_ [ "/", "/posts/post-sora-zine", "/settings", "/notifications", "/search", "/bookmarks", "/login", "/nope" ] \path -> do
     html <- renderPage path
     assertContains ("SSR " <> path) html "data-testid=\"app-shell\""
     assertNotContains ("SSR " <> path) html "undefined"
+
+testLoginHref :: Effect Unit
+testLoginHref = do
+  assertEqual "home returns to /" (loginHref (Just Home)) "/auth/login"
+  assertEqual "unknown path returns to /" (loginHref Nothing) "/auth/login"
+  assertEqual "login screen never returns to itself" (loginHref (Just (Login { error: Just "failed" }))) "/auth/login"
+  assertEqual "settings" (loginHref (Just Settings)) "/auth/login?return_to=%2Fsettings"
+  assertEqual "post detail" (loginHref (Just (PostDetail "post-1"))) "/auth/login?return_to=%2Fposts%2Fpost-1"
+
+-- | What the client renders after the BFF answered (the same view as SSR, other model).
+renderAfter :: Maybe Route -> (Model -> Model) -> Effect String
+renderAfter route change = FRS.render (view (change ((initialModel route) { isHydrated = true, apiMode = Loaded REAL })))
+
+testLoginScreens :: Effect Unit
+testLoginScreens = do
+  login <- renderPage "/login"
+  assertContains "login SSR" login "data-testid=\"login-page\""
+  assertContains "login SSR heading" login "ログイン"
+  assertContains "login SSR start" login "href=\"/auth/login\""
+  assertNotContains "login SSR has no reason" login "data-testid=\"login-error\""
+  denied <- renderPage "/login?error=denied"
+  assertContains "denied reason" denied "data-testid=\"login-error\" data-state=\"denied\""
+  failed <- renderPage "/login?error=failed"
+  assertContains "failed reason" failed "data-testid=\"login-error\" data-state=\"failed\""
+  -- Only the reasons the BFF defines are shown; anything else in ?error= is ignored.
+  forged <- renderPage "/login?error=%3Cb%3Eforged%3C%2Fb%3E"
+  assertNotContains "forged reason" forged "data-testid=\"login-error\""
+  assertNotContains "forged reason text" forged "forged</b>"
+  -- Signed-out viewers: the header login entry and the notice return to this screen.
+  signedOut <- renderAfter (Just (PostDetail "post-1")) (_ { profileContext = Failed (Unauthenticated "UNAUTHENTICATED") })
+  assertContains "signed-out notice" signedOut "data-testid=\"auth-notice\" data-state=\"signed-out\""
+  assertContains "login link returns here" signedOut "href=\"/auth/login?return_to=%2Fposts%2Fpost-1\""
+  assertContains "header login link" signedOut "data-testid=\"login-link\""
+  assertNotContains "no logout for signed-out" signedOut "ログアウト"
+  expired <- renderAfter (Just Home) (_ { profileContext = Failed (SessionExpired "UNAUTHENTICATED") })
+  assertContains "expired notice" expired "data-state=\"expired\""
+  assertContains "expired header login link" expired "data-testid=\"login-link\""
+  -- On /login the screen itself is the way in: no second notice.
+  onLogin <- renderAfter (Just (Login { error: Nothing })) (_ { profileContext = Failed (SessionExpired "UNAUTHENTICATED") })
+  assertNotContains "no notice on /login" onLogin "data-testid=\"auth-notice\""
+  forbidden <- renderAfter (Just Home) (_ { profileContext = Failed (Forbidden "FORBIDDEN") })
+  assertContains "forbidden notice" forbidden "data-state=\"forbidden\""
+  assertContains "forbidden can log out" forbidden "ログアウト"
+  assertNotContains "forbidden has no login link" forbidden "data-testid=\"login-link\""
+  vanished <- renderAfter (Just Home) (_ { profileContext = Failed (ProfileUnavailable "PROFILE_UNAVAILABLE") })
+  assertContains "profile-unavailable notice" vanished "data-state=\"profile-unavailable\""
+  assertContains "profile-unavailable keeps the switcher" vanished "data-testid=\"profile-switcher\""
+  assertContains "profile-unavailable asks to select" vanished "投稿用 Profile を選択"
+  let
+    profile = { id: "p1", handle: "alice", displayName: "Alice" }
+  signedIn <- renderAfter (Just (Login { error: Nothing })) (_ { profileContext = Loaded { activeProfile: Just profile } })
+  assertContains "signed-in login screen" signedIn "data-testid=\"login-state\" data-state=\"signed-in\""
+  assertNotContains "signed-in login screen" signedIn "data-testid=\"login-start\""
+  assertNotContains "signed-in has no notice" signedIn "data-testid=\"auth-notice\""

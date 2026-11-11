@@ -8,6 +8,7 @@ module App.View.Common
   , AvatarSize(..)
   , routeLink
   , routeHref
+  , loginHref
   , onPlainClick
   , stateNote
   , errorNote
@@ -16,9 +17,9 @@ module App.View.Common
 import Prelude
 
 import App.Api.Error as Error
-import App.Dom (avatarColor, initialOf, isPlainClick, preventDefault)
+import App.Dom (avatarColor, encodeQueryComponent, initialOf, isPlainClick, preventDefault)
 import App.Message (Message(..))
-import App.Route (Route, routeCodec)
+import App.Route (Route(..), routeCodec)
 import Data.Maybe (Maybe(..))
 import Flame (Html)
 import Flame.Html.Attribute as HA
@@ -96,6 +97,18 @@ avatar size who = HE.span
 
 routeHref :: Route -> String
 routeHref = print routeCodec
+
+-- | Starts the OIDC login (bff/auth.ts, a plain navigation that leaves the app) and
+-- | comes back to the current screen. The BFF re-validates return_to (safeAppReturnTo).
+-- | Home, the login screen itself and unknown paths return to "/".
+loginHref :: Maybe Route -> String
+loginHref = case _ of
+  Just Home -> start
+  Just (Login _) -> start
+  Nothing -> start
+  Just route -> start <> "?return_to=" <> encodeQueryComponent (routeHref route)
+  where
+  start = "/auth/login"
 
 -- | A real link (works without JS and with modifier keys) that navigates in-app on a
 -- | plain click.
