@@ -2,8 +2,9 @@ import { mkdir } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { chromium, expect, type Browser, type Page } from "@playwright/test";
 import { startBooskiffStub } from "./booskiff-stub.ts";
-import { FIXED_TIME, MOCK_IDENTIFIER, MOCK_PASSWORD, SCREEN_CASES, type ScreenApp, type ScreenCase } from "./cases.ts";
+import { FIXED_TIME, MOCK_IDENTIFIER, MOCK_PASSWORD, SCREEN_CASES, type ScreenApp, type ScreenCase, type ScreenFeature } from "./cases.ts";
 import { localImage } from "./fixtures.ts";
+import { SHUTTLEPUB_FEATURE_PROBES, captureSide, featuresInShuttlePubHtml, selectCases, type CaptureSide } from "./features.ts";
 import { startApp, type AppServer } from "./servers.ts";
 
 async function prepareScreen(page: Page, item: ScreenCase) {
@@ -50,7 +51,11 @@ async function prepareScreen(page: Page, item: ScreenCase) {
       await expect(page.getByTestId("file-detail-page").locator('a[href="/api/files/file-design/download"]')).toBeVisible();
     }
   } else if (item.app === "ShuttlePub") {
-    if (item.id === "home") {
+    const shell = page.getByTestId("app-shell");
+    if (await shell.count()) {
+      await prepareShuttlePubShell(page, item);
+    } else if (item.id === "home") {
+      // F0 foundation placeholder (baseline revisions before the SNS shell).
       // The marker flips only after Flame resumed the SSR DOM, and the three rows
       // fill only from real BFF responses, so this fails if hydration or the
       // GraphQL path is broken. Mock fixture values, not layout, are asserted.
@@ -58,24 +63,6 @@ async function prepareScreen(page: Page, item: ScreenCase) {
       await expect(page.getByTestId("api-mode")).toContainText("mock");
       await expect(page.getByTestId("api-status")).toContainText("v1");
       await expect(page.getByTestId("profile-context")).toContainText("Fixture Profile");
-    } else if (item.id.startsWith("mute-block-")) {
-      // Rows come from the BFF's stateful mock through GraphQL after hydration.
-      const panel = item.id === "mute-block-accounts" ? "account-panel" : "domain-panel";
-      await expect(page.getByTestId(panel).locator("section")).toHaveAttribute("data-state", "loaded");
-      if (item.id === "mute-block-accounts") {
-        await expect(page.locator('li[data-actor="https://spam.example/users/spam_bot"]')).toBeVisible();
-      } else {
-        await expect(page.locator('li[data-domain="bot-farm.example"]')).toBeVisible();
-      }
-      if (item.id === "mute-block-block-dialog") {
-        // "+" -> pasted URL -> ブロック: normalized domain, detached follows listed.
-        await page.locator("#mb-add-button").click();
-        await page.locator("#mb-add-input").fill("https://Example.social/@alice");
-        await page.getByTestId("add-dialog").getByRole("button", { name: "ブロック", exact: true }).click();
-        await expect(page.getByTestId("block-impact")).toContainText("フォロー中 3 人・フォロワー 5 人");
-        await page.getByTestId("block-impact").locator("summary").click();
-        await expect(page.getByTestId("block-dialog")).toContainText("example.social をブロックしますか？");
-      }
     }
   } else {
     if (item.id === "accounts-populated") {
@@ -108,8 +95,66 @@ async function prepareScreen(page: Page, item: ScreenCase) {
   return expectedPath;
 }
 
-/** Resolves to false when the case's route does not exist in this revision (see ScreenCase marker). */
-async function captureScreen(browser: Browser, server: AppServer, item: ScreenCase, output: string): Promise<boolean> {
+/**
+ * ShuttlePub SNS shell (ui-spec v6). Waits for hydration and the mock fixtures that
+ * arrive through the real BFF, then opens the overlay a case photographs. Controls
+ * are found by role/name or test id so the same steps work at both widths (the
+ * desktop and mobile chrome are separate elements; only one is visible).
+ */
+async function prepareShuttlePubShell(page: Page, item: ScreenCase) {
+  const shell = page.getByTestId("app-shell");
+  const content = page.locator("#content");
+  await expect(shell).toHaveAttribute("data-hydration", "hydrated");
+  await expect(shell).toHaveAttribute("data-api-mode", "mock");
+  await expect(page.getByTestId("api-status")).toHaveAttribute("data-state", "loaded");
+  await expect(page.getByRole("button", { name: /投稿用 Profile を切り替え（現在: Fixture Profile）/ }).filter({ visible: true })).toHaveCount(1);
+  if (item.path === "/") {
+    await expect(page.getByTestId("timeline")).toHaveAttribute("data-state", "loaded");
+    await expect(content.locator("article")).toHaveCount(5);
+  }
+  if (item.id === "post-detail") {
+    await expect(page.getByTestId("post-detail")).toHaveAttribute("data-state", "loaded");
+    await expect(content.locator("article")).toHaveCount(3);
+    await expect(page.getByRole("tab", { name: /返信/ })).toHaveAttribute("aria-selected", "true");
+  } else if (item.id === "compose" || item.id === "compose-visibility") {
+    await page.getByRole("button", { name: "投稿する" }).filter({ visible: true }).click();
+    const dialog = page.getByRole("dialog", { name: "投稿" });
+    await expect(dialog).toBeVisible();
+    if (item.id === "compose") {
+      await dialog.getByRole("textbox", { name: "投稿内容" }).fill("ShuttlePub の投稿フォームを確認しています");
+      await expect(page.getByTestId("compose-submit")).toBeEnabled();
+    } else {
+      await expect(page.getByTestId("compose-submit")).toBeDisabled();
+      await page.getByTestId("compose-visibility").click();
+      await expect(dialog.getByRole("menu", { name: "公開範囲" }).getByRole("menuitemradio")).toHaveCount(4);
+    }
+  } else if (item.id === "profile-menu") {
+    await page.getByRole("button", { name: /投稿用 Profile を切り替え/ }).filter({ visible: true }).click();
+    await expect(page.getByTestId("profile-menu").getByRole("menuitemradio")).toHaveCount(3);
+  } else if (item.id === "settings") {
+    await expect(content).toContainText("Fixture Profile");
+  } else if (item.id.startsWith("mute-block-")) {
+    // Rows come from the BFF's stateful mock through GraphQL after hydration.
+    const panel = item.id === "mute-block-accounts" ? "account-panel" : "domain-panel";
+    await expect(page.getByTestId(panel).locator("section")).toHaveAttribute("data-state", "loaded");
+    if (item.id === "mute-block-accounts") {
+      await expect(page.locator('li[data-actor="https://spam.example/users/spam_bot"]')).toBeVisible();
+    } else {
+      await expect(page.locator('li[data-domain="bot-farm.example"]')).toBeVisible();
+    }
+    if (item.id === "mute-block-block-dialog") {
+      // "+" -> pasted URL -> ブロック: normalized domain, detached follows listed.
+      await page.locator("#mb-add-button").click();
+      await page.locator("#mb-add-input").fill("https://Example.social/@alice");
+      await page.getByTestId("add-dialog").getByRole("button", { name: "ブロック", exact: true }).click();
+      await expect(page.getByTestId("block-impact")).toContainText("フォロー中 3 人・フォロワー 5 人");
+      await page.getByTestId("block-impact").locator("summary").click();
+      await expect(page.getByTestId("block-dialog")).toContainText("example.social をブロックしますか？");
+    }
+  }
+}
+
+async function captureScreen(browser: Browser, server: AppServer, item: ScreenCase, output: string) {
   const context = await browser.newContext({
     baseURL: server.url, viewport: { width: item.viewport.width, height: item.viewport.height },
     deviceScaleFactor: 1, locale: "en-US", timezoneId: "UTC", colorScheme: "dark",
@@ -182,12 +227,6 @@ async function captureScreen(browser: Browser, server: AppServer, item: ScreenCa
     expect(documentResponse?.status(), `${item.filename}: SSR`).toBe(200);
     expect((await sessionResponse).status()).toBe(item.app === "ShuttlePub" || item.authenticated ? 200 : 401);
     await expect(page.locator("main#app")).toBeVisible();
-    if ("marker" in item && await page.getByTestId(item.marker).count() === 0) {
-      // Only an unknown route may be skipped: the revision must render the shared NotFound page.
-      await expect(page.getByText("Page not found.", { exact: true })).toBeVisible();
-      console.info(`Skipped ${item.filename}: the route does not exist in this revision`);
-      return false;
-    }
     await expect(page.locator("html")).toHaveAttribute("data-color", "catppuccin-mocha");
     await expect(page.locator("html")).toHaveAttribute("data-shape", "rounded");
     const expectedPath = await prepareScreen(page, item);
@@ -205,13 +244,12 @@ async function captureScreen(browser: Browser, server: AppServer, item: ScreenCa
     await Promise.all(responseChecks);
     expect(errors, `${item.filename}: errors during screenshot`).toEqual([]);
     console.info(`Captured ${item.filename}`);
-    return true;
   } finally {
     await context.close();
   }
 }
 
-export async function captureScreens(frontendRoot: string, output: string) {
+export async function captureScreens(frontendRoot: string, output: string, side: CaptureSide = "branch") {
   if (!isAbsolute(frontendRoot) || !isAbsolute(output)) throw new Error("FRONTEND_ROOT and CAPTURE_DIR must be absolute paths");
   await mkdir(output, { recursive: true });
   const stub = startBooskiffStub();
@@ -225,21 +263,29 @@ export async function captureScreens(frontendRoot: string, output: string) {
     }
     await Promise.all(servers.map((server) => server.waitUntilReady()));
     const capturedApps = new Set<ScreenApp>(servers.map((server) => server.app));
-    const cases = SCREEN_CASES.filter((item) => capturedApps.has(item.app));
-    let captured = 0;
+    const shuttlePub = servers.find((server) => server.app === "ShuttlePub")!;
+    const features = new Set<ScreenFeature>();
+    for (const path of new Set(SHUTTLEPUB_FEATURE_PROBES.map((probe) => probe.path))) {
+      const html = await (await fetch(`${shuttlePub.url}${path}`)).text();
+      for (const feature of featuresInShuttlePubHtml(html, path)) features.add(feature);
+    }
+    const { capture: cases, skipped } = selectCases(SCREEN_CASES.filter((item) => capturedApps.has(item.app)), features, side);
+    for (const item of skipped) {
+      console.info(`Skipped ${item.filename}: this baseline does not have "${"requires" in item ? item.requires : ""}" yet (reported as New)`);
+    }
     browser = await chromium.launch({
       ...(process.env.PLAYWRIGHT_CHROMIUM_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH } : {}),
     });
     for (const item of cases) {
       const server = servers.find((entry) => entry.app === item.app)!;
       stub.setState(item.data);
-      if (await captureScreen(browser, server, item, output)) captured++;
+      await captureScreen(browser, server, item, output);
       expect(stub.unexpectedRequests, `${item.filename}: unexpected Core API requests`).toEqual([]);
       for (const entry of servers) {
         expect(await entry.networkViolations(), `${entry.app}: unexpected server requests`).toEqual([]);
       }
     }
-    console.info(`Captured ${captured} of ${cases.length} app screenshots in ${output}`);
+    console.info(`Captured ${cases.length} app screenshots in ${output}`);
   } catch (error) {
     failed = true;
     throw error;
@@ -261,5 +307,6 @@ if (import.meta.main) {
   await captureScreens(
     resolve(process.env.FRONTEND_ROOT ?? resolve(import.meta.dir, "../../../..")),
     resolve(process.env.CAPTURE_DIR ?? ".visual/actual"),
+    captureSide(process.env.CAPTURE_SIDE),
   );
 }

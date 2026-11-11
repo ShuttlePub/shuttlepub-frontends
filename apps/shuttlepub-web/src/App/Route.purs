@@ -1,6 +1,6 @@
 module App.Route where
 
-import Prelude
+import Prelude hiding ((/))
 
 import Data.Argonaut.Decode.Class (class DecodeJson)
 import Data.Argonaut.Decode.Generic (genericDecodeJson)
@@ -8,18 +8,21 @@ import Data.Argonaut.Encode.Class (class EncodeJson)
 import Data.Argonaut.Encode.Generic (genericEncodeJson)
 import Data.Generic.Rep (class Generic)
 import Data.Show.Generic (genericShow)
-import Routing.Duplex (RouteDuplex', root)
+import Routing.Duplex (RouteDuplex', root, segment)
 import Routing.Duplex.Generic (noArgs, sum)
 import Routing.Duplex.Generic.Syntax ((/))
 
--- | Routing skeleton. Only the root exists: the screen structure (which routes
--- | there are and how they look) is decided with the mock agreement, not here.
--- | New routes are added as constructors plus a codec entry below.
--- |
--- | MuteBlockAccounts / MuteBlockDomains: the settings page "ミュート・ブロック"
--- | and its two sub-pages (D08 UI mock v5, ui-spec 1-2).
+-- | Screens of the SNS shell (ui-spec L3 navigation + L4 post detail).
+-- | Notifications / Search / Bookmarks exist as navigation targets only; their
+-- | contents are later units.
 data Route
   = Home
+  | Notifications
+  | Search
+  | Bookmarks
+  | Settings
+  | PostDetail String
+  -- | Settings page "ミュート・ブロック" and its two sub-pages (D08 UI mock v5, ui-spec 1-2).
   | MuteBlockAccounts
   | MuteBlockDomains
 
@@ -39,6 +42,11 @@ instance DecodeJson Route where
 routeCodec :: RouteDuplex' Route
 routeCodec = root $ sum
   { "Home": noArgs
+  , "Notifications": "notifications" / noArgs
+  , "Search": "search" / noArgs
+  , "Bookmarks": "bookmarks" / noArgs
+  , "Settings": "settings" / noArgs
+  , "PostDetail": "posts" / segment
   , "MuteBlockAccounts": "settings" / "mute-block" / "accounts" / noArgs
   , "MuteBlockDomains": "settings" / "mute-block" / "domains" / noArgs
   }

@@ -4,25 +4,65 @@ SNS メイン UI アプリの**基盤**です (PureScript + Flame の SSR / hydr
 ShuttlePub backend の生成 OpenAPI schema を契約として固定取り込みし、backend 実装を待たずに
 ビルド・mock 起動できます。認証/BFF の仕様は [AUTH.md](AUTH.md) を参照してください。
 
-## 現在の範囲 (F0 基盤)
+## 現在の範囲 (F0)
 
 含む: workspace / lockfile / CI 登録、OpenAPI 取込と codegen、型付き REST adapter、アプリ所有 GraphQL SDL、
-mock / real 切替、SSR + hydration、ルーティング骨格、Profile context の型・fixture、visual 経路への登録。
+mock / real 切替、SSR + hydration、Profile context の型・fixture、visual 経路への登録。
 
 追加済み: Hydra OIDC 認証ルート、session、Emumet Bearer 読取・Profile 選択 API。
 
-追加済み (D08 / personal-domain-controls-web-ui): 設定「ミュート・ブロック」画面
-(`/settings/mute-block/domains`・`/settings/mute-block/accounts`)。画面構成・文言は host の
-`intents/shuttlepub/features/personal-domain-controls-ui/ui-spec.md` (UI モック v5 合意) に従う。
-選択中 Profile の domain mute/block (Emumet domain-controls) と個別アカウントの mute/block
-(Emumet blocks/mutes) の一覧・追加・解除。Emumet で実適用されるのは Follow 制御 (block 時の
-既存関係の両方向解除・新規 Follow 拒否) だけで、投稿の表示抑制・反応拒否は ShuttlePub の後続
-実装 (未接続)。投稿・プロフィールの「…」メニューと直接 URL・引用・返信の隠し表示 (ui-spec 3-x/4-x/5-x)
-は S8 契約と SNS 本体 shell の後の別変更。
+追加済み (画面レイアウト): SNS 本体の基本レイアウト。合意済み UI 仕様
+(host `intents/shuttlepub/features/quick-reaction-ui/ui-spec.md` v6 の「基本レイアウト（L）」「画面ごとの補足」
+「余白」「実装上の注意」と `mocks/index.html`) に従います。
 
-含まない: タイムライン等の本格 UI、**ログイン/選択画面のレイアウト・画面遷移・デザイン**。
-画面構成はユーザーとのモック合意後の別 PR で実装します。いま表示するのは基盤検証用の素のプレースホルダ
-(見出しと各データ源の状態) だけで、レイアウトを決めるものではありません。
+| 画面 | パス | 内容 |
+| ---- | ---- | ---- |
+| ホーム | `/` | タイムラインタブ (ホーム / ローカル / 連合)、投稿カード。TL 上部に投稿欄は置かない (L2) |
+| 投稿詳細 | `/posts/:id` | 投稿と「返信／リアクション」タブ (既定は返信)。本文クリックと投稿時刻リンクから開く (L4) |
+| 設定 | `/settings` | 「Profile」節 (常用絵文字は quick-reaction-web-ui が差し込む) |
+| 通知 / 検索 / ブックマーク | `/notifications` `/search` `/bookmarks` | ナビゲーション先のみ (中身は後続) |
+
+- デスクトップ: ヘッダー 52px (右に通知・投稿用 Profile ボタン = L1)、サイドバー 200px (「投稿する」)、本文列最大 600px。
+- モバイル (767px 以下): ヘッダー 48px (左のアバターで Profile ボトムシート)、下部タブ 48px
+  (ホーム・検索・投稿・通知・設定 = L3)、TL は画面端まで。両方のクロームを SSR し CSS で切り替えます。
+- 投稿フォーム (L2): デスクトップは上寄せモーダル (最大 520px)、モバイルは全画面。公開範囲の 4 択は Misskey に
+  合わせた**仮置き (未決)**。Esc は公開範囲メニュー→フォームの順に閉じ、閉じたら開いたボタンへフォーカスを戻します。
+- 未認証 (real) は Profile ボタンの代わりに `/auth/login` への「ログイン」だけを出します。
+  ログイン画面そのものは認証 UI の後続変更です。
+
+データ: タイムライン・投稿・返信・投稿作成は固定 OpenAPI に endpoint が無いため、SDL の `timeline` / `post` /
+`replies` / `createPost` は**仮 (PROVISIONAL)** のアプリ所有型です (`bff/rest/posts.ts`)。mock は
+`bff/rest/post-fixtures.ts` (OpenAPI 照合の対象外) を返し、real は backend を呼ばず `NOT_IMPLEMENTED` を返します。
+`createPost` は mock でも `NOT_IMPLEMENTED` です (投稿を模擬しない)。返信・リポスト・その他・画像・CW・絵文字は
+配置のみで `aria-disabled` です。mock の Profile は 3 件で、切替は応答を返すだけで保存しません (stateless)。
+
+### 設定「ミュート・ブロック」(D08 / personal-domain-controls-web-ui)
+
+`/settings/mute-block/domains`・`/settings/mute-block/accounts` (設定 > Profile の「ミュート・ブロック」から)。
+画面構成・文言は host の `intents/shuttlepub/features/personal-domain-controls-ui/ui-spec.md` (UI モック v5 合意) に従う。
+選択中 Profile の domain mute/block (Emumet domain-controls) と個別アカウントの mute/block (Emumet blocks/mutes)
+の一覧・追加・解除。Emumet で実適用されるのは Follow 制御 (block 時の既存関係の両方向解除・新規 Follow 拒否)
+だけで、投稿の表示抑制・反応拒否は ShuttlePub の後続実装 (未接続。画面の一覧下に注記)。投稿・プロフィールの
+「…」メニューと直接 URL・引用・返信の隠し表示 (ui-spec 3-x/4-x/5-x) は S8 契約後の別変更。
+自サーバーのドメインは `EMUMET_PUBLIC_HOST` (Emumet の `PUBLIC_BASE_URL` の host。real で必須、未設定なら追加できない)
+で判定し、入力・保存のどちらでも拒否する。
+
+### クイックリアクション (D03) の差し込み口
+
+反応状態・ピッカー・常用絵文字設定・反応者一覧は quick-reaction-web-ui が実装します。レイアウトは
+`src/App/Extension/Reaction.purs` の関数を決まった位置で呼ぶだけで、中身はそのユニットが差し替えます。
+
+| 関数 | 位置 |
+| ---- | ---- |
+| `summary` | 投稿カードの本文とアクション行の間 (集計チップ C1/C3/C4) |
+| `actionButton` | アクション行 3 つ目の枠。枠 (`.sp-react-slot`) は空でも 32/36px を保つ。id は `reactionButtonId` |
+| `detailTabCount` / `detailPanel` | 投稿詳細の「リアクション」タブの件数と中身 (D1/D3) |
+| `settingsProfileRows` | 設定 > Profile の行 (S1) |
+| `overlay` | シェルの最後 (ピッカーのボトムシート・トースト) |
+
+キー操作は `App.Dom.keydownAction` (アプリ唯一の keydown ハンドラ) に集めています。Flame はイベントを
+ルートで委譲し最も近いハンドラだけを実行するため、子要素に keydown を足すとこれが動かなくなります。
+キー操作を足すときは `keydownAction` と `Client.Update` の `KeyPressed` / `escape` を拡張してください。
 
 ## セットアップ・起動
 
@@ -59,9 +99,6 @@ real の Profile context は本人所有の Emumet 統合 Account/Profile を使
 
 - `openapi/shuttlepub.json`: ShuttlePub producer (`ShuttlePub/ShuttlePub` の `openapi/shuttlepub.json`) の生成物をそのまま取り込んだもの。手編集しない。
 - `openapi/producer.lock.json`: producer の commit SHA と、取り込んだバイト列の SHA-256 / サイズ。
-- `openapi/emumet.json` / `openapi/emumet.lock.json`: 同じ方式で固定した Emumet (`ShuttlePub/Emumet` の
-  `openapi.json`)。型生成は tag `ProfilePolicy` の operation と参照 schema だけ
-  (`bff/rest/generated/emumet-api.ts`)。更新は `bun run openapi:sync -- --producer emumet --commit <SHA>`。
 
 ビルドは常に repo 内のこの 2 ファイルだけを使うためオフラインで通ります。ファイルを編集したり lock と食い違うと
 `bun run openapi:verify` / `bun test` / `bun run codegen` が失敗します (CI でも実行)。
@@ -99,17 +136,19 @@ Browser (PureScript + Flame, hydrate)
 ```
 
 - `bff/rest/fixtures.ts` の fixture は `bff/openapi/contract.ts` で pin した OpenAPI に照合され、schema に反すると `bun test` が失敗します。
-- Profile / ProfileContext はアプリ所有の型で、OpenAPI にはまだ endpoint が無いため fixture は OpenAPI 照合の対象外です。
-- `src/App/Route.purs`: ルート骨格 (現状は `/` のみ。未知のパスは共有 NotFound)。
+- Profile / ProfileContext と投稿系 (`bff/rest/posts.ts`) はアプリ所有の型で、OpenAPI にはまだ endpoint が無いため fixture は OpenAPI 照合の対象外です。
+- `src/App/Route.purs`: ルート (`/`、`/posts/:id`、`/settings`、`/notifications`、`/search`、`/bookmarks`。未知のパスは共有 NotFound)。
+- `src/App/View/*`: シェル (`Shell`)、投稿カード (`PostCard`)、画面 (`Pages`)、投稿フォーム (`Compose`)。スタイルは `src/style.css` の `sp-` クラス。
 
 ## テスト
 
 ```bash
 bun test                    # config / OpenAPI pin / contract / fixture / adapter / GraphQL
-spago test                  # route codec・model 往復・エラー写像・SSR 出力
+spago test                  # route codec・model 往復・エラー写像・時刻表示・SSR 出力
 bun run codegen:check
 bunx tsc --noEmit           # dist/server.d.ts のスタブが必要 (CI 参照)
 ```
 
-SSR → hydration の mobile / desktop 確認と、real モード (501 / 500) の表示確認は visual CI 経路で実行します
+SSR → hydration の mobile / desktop 確認、シェルのキーボード・フォーカス操作 (投稿フォーム・タブ・Profile 切替)、
+real モード (501 / 500) の表示確認は visual CI 経路で実行します
 (`apps/ui-catalog/visual/screens/shuttlepub-verify.ts`、画面撮影は `visual/screens/cases.ts` の `ShuttlePub-*`)。

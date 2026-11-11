@@ -5,6 +5,7 @@ import { resolve } from "node:path";
 import { createBooskiffClient } from "../../../booskiff-web/bff/booskiff/real.ts";
 import { startBooskiffStub } from "./booskiff-stub.ts";
 import { FIXED_TIME, SCREEN_CASES } from "./cases.ts";
+import { captureSide, featuresInShuttlePubHtml, selectCases } from "./features.ts";
 import { AVATAR_SVG, BANNER_SVG, BILLING, FILES, FOLDERS, localImage } from "./fixtures.ts";
 import { appExists, stopChild } from "./servers.ts";
 
@@ -13,7 +14,7 @@ test("screen inventory covers every app and state at desktop/mobile sizes with s
   const names = SCREEN_CASES.map((item) => item.filename);
   // Then
   expect(new Set(names).size).toBe(SCREEN_CASES.length);
-  expect(SCREEN_CASES).toHaveLength(38);
+  expect(SCREEN_CASES).toHaveLength(48);
   for (const item of SCREEN_CASES) {
     expect(item.filename).toMatch(/^(Booskiff|Emumet|ShuttlePub)-[A-Za-z0-9-]+\.png$/);
     expect(item.path).toMatch(/^\/(?!\/)/);
@@ -26,18 +27,48 @@ test("screen inventory covers every app and state at desktop/mobile sizes with s
   }
 });
 
-test("ShuttlePub cases register every route at both widths and need no login", () => {
+test("ShuttlePub cases cover the SNS shell screens at both widths and need no login", () => {
   // Given / When
   const cases = SCREEN_CASES.filter((item) => item.app === "ShuttlePub");
   // Then
-  expect(cases.map((item) => item.filename).sort()).toEqual([
-    "ShuttlePub-home-desktop.png", "ShuttlePub-home-mobile.png",
-    "ShuttlePub-mute-block-accounts-desktop.png", "ShuttlePub-mute-block-accounts-mobile.png",
-    "ShuttlePub-mute-block-block-dialog-desktop.png", "ShuttlePub-mute-block-block-dialog-mobile.png",
-    "ShuttlePub-mute-block-domains-desktop.png", "ShuttlePub-mute-block-domains-mobile.png",
-    "ShuttlePub-not-found-desktop.png", "ShuttlePub-not-found-mobile.png",
+  expect([...new Set(cases.map((item) => item.id))].sort()).toEqual([
+    "compose", "compose-visibility", "home", "mute-block-accounts", "mute-block-block-dialog", "mute-block-domains",
+    "not-found", "post-detail", "profile-menu", "settings",
   ]);
   expect(cases.every((item) => !item.authenticated)).toBe(true);
+  // Screens that main already served (as F0 placeholders) need no feature, so they
+  // are always compared; the new screens declare the SNS shell.
+  for (const item of cases) {
+    const required = "requires" in item ? item.requires : undefined;
+    expect(required).toBe(["home", "not-found"].includes(item.id) ? undefined
+      : item.id.startsWith("mute-block-") ? "mute-block-settings" : "sns-shell");
+  }
+});
+
+test("only the baseline side may skip cases whose screen feature is missing", () => {
+  // Given
+  const shuttlePub = SCREEN_CASES.filter((item) => item.app === "ShuttlePub");
+  const placeholderHtml = '<main id="app"><h1>ShuttlePub</h1><template-state></template-state></main>';
+  const shellHtml = '<main id="app" lang="ja"><div class="sp-app" data-testid="app-shell"></div></main>';
+  // When / Then
+  expect(featuresInShuttlePubHtml(placeholderHtml).size).toBe(0);
+  expect([...featuresInShuttlePubHtml(shellHtml)]).toEqual(["sns-shell"]);
+  const baseline = selectCases(shuttlePub, featuresInShuttlePubHtml(placeholderHtml), "baseline");
+  expect(baseline.capture.map((item) => item.id).sort()).toEqual(["home", "home", "not-found", "not-found"]);
+  expect(baseline.skipped).toHaveLength(shuttlePub.length - 4);
+  expect(() => selectCases(shuttlePub, featuresInShuttlePubHtml(placeholderHtml), "branch")).toThrow(/sns-shell/);
+  const muteBlockHtml = '<main id="app"><div data-testid="mute-block"></div></main>';
+  const everything = new Set([...featuresInShuttlePubHtml(shellHtml), ...featuresInShuttlePubHtml(muteBlockHtml, "/settings/mute-block/domains")]);
+  expect(selectCases(shuttlePub, everything, "branch")).toEqual({ capture: shuttlePub, skipped: [] });
+  // The mute/block marker only counts on its own page, and a shell without it skips just those cases.
+  expect(featuresInShuttlePubHtml(muteBlockHtml).size).toBe(0);
+  const shellOnly = selectCases(shuttlePub, featuresInShuttlePubHtml(shellHtml), "baseline");
+  expect(shellOnly.skipped.map((item) => item.id).every((id) => id.startsWith("mute-block-"))).toBe(true);
+  expect(shellOnly.skipped).toHaveLength(6);
+  expect(() => selectCases(shuttlePub, featuresInShuttlePubHtml(shellHtml), "branch")).toThrow(/mute-block-settings/);
+  expect(captureSide(undefined)).toBe("branch");
+  expect(captureSide("baseline")).toBe("baseline");
+  expect(() => captureSide("main")).toThrow();
 });
 
 test("app availability distinguishes a missing app directory from an existing app", async () => {

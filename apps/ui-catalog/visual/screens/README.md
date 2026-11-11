@@ -28,9 +28,13 @@ Use the same browser, OS and fonts for main and PR captures.
 `SCREEN_CASES` in `cases.ts` is the reusable, serializable inventory. Each state
 is captured at 1280×900 and 390×844, at device scale 1, with a full-page screenshot:
 
-- ShuttlePub (F0 foundation placeholder): home, 404; mute/block settings (domains, accounts,
-  block confirmation) from the BFF's stateful mock. No login; mock mode only. The home case waits for the
-  hydration marker and for the BFF rows. `shuttlepub-verify.ts` additionally checks hydration and real-mode 501/500.
+- ShuttlePub (SNS shell, host ui-spec v6): home timeline, post detail, compose form (filled), compose
+  visibility menu, Profile switcher menu (desktop dropdown / mobile bottom sheet), settings, 404. No login;
+  mock mode only. Cases wait for the hydration marker and the fixtures served through the BFF, then open
+  the overlay they photograph. The `home` case also understands the older F0 placeholder so main still
+  captures. `shuttlepub-verify.ts` additionally checks hydration, keyboard/focus behaviour and real-mode 501/500.
+  D08 mute/block settings (domains, accounts, block confirmation) come from the BFF's stateful mock and
+  require the `mute-block-settings` feature (probed on /settings/mute-block/domains).
 - Booskiff: login, populated Drive, empty Drive, selected folder, file detail, 404.
 - Emumet: login, populated accounts, new account, filled bot account form,
   account detail, profile edit form, settings, 404.
@@ -69,9 +73,7 @@ Core/OIDC integration tests or a test of mutation persistence.
 ## Adding a route or state
 
 1. Add its app, stable ID, route and authentication/data requirements to
-   `routes` in `cases.ts`. A route that the base branch does not have yet needs a `marker`
-   (a data-testid of the new page): the baseline capture then skips it when the base revision
-   renders the shared NotFound page, and the comparison reports it as a new screen. Filenames must remain unique and match
+   `routes` in `cases.ts`. Filenames must remain unique and match
    `^[A-Za-z0-9-]+\.png$`; the viewport expansion happens automatically.
 2. Extend `prepareScreen` in `capture.ts` with a meaningful ready-state assertion
    and any UI actions needed to expose the new state. Keep actions local to the
@@ -88,3 +90,7 @@ Core/OIDC integration tests or a test of mutation persistence.
 If an intentionally new route does not exist on main, introduce an explicit
 baseline case/version policy in the driver and report it as added coverage;
 do not silently accept a 404, auth redirect or empty loading state as its baseline.
+The policy in use: give the case `requires: <feature>` (`cases.ts` `ScreenFeature`) and detect the
+feature from the running app (`features.ts`). With `CAPTURE_SIDE=baseline` (the workflow's main
+capture) such a case is skipped and compare lists it as New; on the branch side (the default) a
+missing feature fails the capture.

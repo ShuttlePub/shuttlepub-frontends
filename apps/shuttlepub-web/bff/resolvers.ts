@@ -4,6 +4,7 @@ import { policyResolvers } from "./policy/resolvers.ts";
 import type { ProfilePolicySource } from "./policy/source.ts";
 import type { ProfileContextSource } from "./profile.ts";
 import { ShuttlePubApiError, type ShuttlePubApi, type ShuttlePubApiErrorKind } from "./rest/client.ts";
+import type { PostVisibility, TimelineKind } from "./rest/posts.ts";
 
 export type GraphQLContext = {
   api: ShuttlePubApi;
@@ -44,13 +45,24 @@ async function guarded<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
+const TIMELINE_KINDS: Record<string, TimelineKind> = { HOME: "home", LOCAL: "local", FEDERATED: "federated" };
+const VISIBILITIES: Record<string, PostVisibility> = { PUBLIC: "public", HOME: "home", FOLLOWERS: "followers", DIRECT: "direct" };
+
 export const resolvers = {
   Mutation: {
     ...policyResolvers.Mutation,
     selectProfile: (_root: unknown, args: { id: string }, context: GraphQLContext) =>
       guarded(() => context.profiles.selectProfile(args.id)),
+    createPost: (_root: unknown, args: { input: { text: string; visibility: string } }, context: GraphQLContext) =>
+      guarded(() => context.api.createPost({ text: args.input.text, visibility: VISIBILITIES[args.input.visibility]! })),
   },
   Query: {
+    timeline: (_root: unknown, args: { kind: string }, context: GraphQLContext) =>
+      guarded(() => context.api.getTimeline(TIMELINE_KINDS[args.kind]!)),
+    post: (_root: unknown, args: { id: string }, context: GraphQLContext) =>
+      guarded(() => context.api.getPost(args.id)),
+    replies: (_root: unknown, args: { postId: string }, context: GraphQLContext) =>
+      guarded(() => context.api.getReplies(args.postId)),
     ...policyResolvers.Query,
     availableProfiles: (_root: unknown, _args: unknown, context: GraphQLContext) =>
       guarded(() => context.profiles.availableProfiles()),
