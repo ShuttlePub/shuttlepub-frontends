@@ -43,8 +43,10 @@ fetchViewerAff :: Aff (Maybe Message)
 fetchViewerAff = do
   result <- Api.fetchViewerIsAdmin
   pure $ Just $ case result of
+    -- 401/403 は認可の結果、それ以外 (一時障害・通信失敗・契約違反) は「分からない」として扱い、混同しない
     Left Unauthenticated -> SessionExpired
-    Left _ -> Admin ViewerFailed
+    Left Forbidden -> Admin AdminForbidden
+    Left _ -> Admin ViewerUnavailable
     Right isAdmin -> Admin (ViewerLoaded isAdmin)
 
 fetchGateAff :: Aff (Maybe Message)
@@ -128,9 +130,13 @@ updateAdmin model msg =
           if granted then Tuple m ([ fetchNotificationsAff ] <> enterRouteEffects m)
           else noFx m
 
-      ViewerFailed ->
-        -- 導線を出すかのヒントが取れないときは出さない (fail closed)
-        noFx $ setAdmin model (admin { isAdmin = Just false })
+      ViewerUnavailable ->
+        case admin.isAdmin of
+          -- SSR や前回の取得で管理者と分かっている: 警告帯・状態を保ったまま、管理画面の状態だけ取り直す
+          Just true -> Tuple model ([ fetchNotificationsAff ] <> enterRouteEffects model)
+          Just false -> noFx model
+          -- まだ何も分からない: 導線は出さない (fail closed)
+          Nothing -> noFx $ setAdmin model (admin { isAdmin = Just false })
 
       RefreshAdmin ->
         Tuple (setAdmin model (admin { error = Nothing })) refreshEffects

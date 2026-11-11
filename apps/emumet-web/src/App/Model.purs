@@ -84,6 +84,9 @@ type Model =
   , page :: PageModel
   , isHydrated :: Boolean
   , session :: Maybe SessionInfo
+  -- session がクライアントの GET /auth/session で確かめられたか。SSR (管理画面) が渡した session は未確認で、
+  -- その直後の 401 (SessionFailed) は古い応答として捨てずに反映する
+  , sessionVerified :: Boolean
   , loginForm :: LoginForm
   , accounts :: RemoteData (Array AccountResponse)
   , selectedAccount :: RemoteData AccountWithDetails

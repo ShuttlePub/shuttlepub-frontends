@@ -46,6 +46,8 @@ mkUpdate nav model msg = case msg of
     in
       Tuple (m { admin = m.admin { bellOpen = false, modal = Nothing, error = Nothing } }) (fx <> enterRoute m.route m)
   SessionExpired -> resetAdmin (baseUpdate nav model msg)
+  -- 適用された SessionFailed (確認済みの session が無い) は管理画面の状態も捨てる
+  SessionFailed | not (isJust model.session && model.sessionVerified) -> resetAdmin (baseUpdate nav model msg)
   LogoutDone -> resetAdmin (baseUpdate nav model msg)
   _ -> baseUpdate nav model msg
 
@@ -103,7 +105,7 @@ baseUpdate nav model = case _ of
 
   SessionLoaded sessionInfo ->
     let
-      m = model { session = Just sessionInfo }
+      m = model { session = Just sessionInfo, sessionVerified = true }
     in
       case m.route of
         Just r | isProtectedRoute r ->
@@ -128,12 +130,13 @@ baseUpdate nav model = case _ of
         _ -> noMessages m
 
   SessionFailed ->
-    -- Ignore stale SessionFailed if we already have an active session
-    -- (e.g., startup CheckSession returns after successful LoginSuccess)
-    if isJust model.session then noMessages model
+    -- Ignore stale SessionFailed if we already have a session confirmed by this client
+    -- (e.g., startup CheckSession returns after successful LoginSuccess). A session that only came
+    -- from the admin page SSR is not confirmed yet, so its first 401 is applied.
+    if isJust model.session && model.sessionVerified then noMessages model
     else
       let
-        m = model { session = Nothing, savePending = false, editProfileForm = Nothing, editMetadataForm = Nothing }
+        m = model { session = Nothing, sessionVerified = false, savePending = false, editProfileForm = Nothing, editMetadataForm = Nothing }
       in
         case m.route of
           Just r | isProtectedRoute r ->

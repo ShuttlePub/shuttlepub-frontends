@@ -16,6 +16,8 @@ import Generated.Schema.Gql.Enum.RegistrationGateEventKind (RegistrationGateEven
 import Generated.Schema.Gql.Enum.RegistrationGateStatus (RegistrationGateStatus(..))
 import Generated.Schema.Gql.Enum.RegistrationProbeStatus (RegistrationProbeStatus(..))
 import Server (renderPage)
+import App.View (view)
+import Flame.Renderer.String as FRS
 
 assert :: String -> Boolean -> Effect Unit
 assert name ok = if ok then log ("ok - " <> name) else throw ("FAILED - " <> name)
@@ -30,6 +32,7 @@ adminModel =
   , page: pageForMaybeRoute (Just AdminRegistration)
   , isHydrated: true
   , session: Just { username: "admin" }
+  , sessionVerified: true
   , loginForm: { identifier: "", password: "" }
   , accounts: NotAsked
   , selectedAccount: NotAsked
@@ -78,6 +81,18 @@ main = do
   assert "FORBIDDEN revokes the admin hint" (forbidden.admin.isAdmin == Just false)
   assert "FORBIDDEN drops the cached gate (no warning strip)" (not (overrideShown forbidden))
   assert "a later viewer=admin does not re-open the admin screens" (reAdmitted.admin.isAdmin == Just false)
+
+  -- SSR で強制開放中と分かっている管理者: hydration 後の viewer 再取得が一時障害 (503) でも警告帯と状態を失効させない
+  let
+    fromSsr = adminModel { admin = adminModel.admin { gate = Loaded opened } }
+    afterViewer503 = fst (updateAdmin fromSsr ViewerUnavailable)
+  assert "viewer 503 after SSR keeps the admin hint" (afterViewer503.admin.isAdmin == Just true)
+  assert "viewer 503 after SSR keeps the override state" (overrideShown afterViewer503)
+  html503 <- FRS.render (view afterViewer503)
+  assert "viewer 503 after SSR still renders the warning strip" (contains (Pattern "data-testid=\"override-strip\"") html503)
+  assert "viewer 503 after SSR does not render the 404 page" (contains (Pattern "data-testid=\"admin-page\"") html503)
+  let unknown503 = fst (updateAdmin (adminModel { admin = emptyAdminModel }) ViewerUnavailable)
+  assert "viewer 503 without any prior knowledge stays fail closed" (unknown503.admin.isAdmin == Just false)
 
   -- 通知の次のページは重複を除いて後ろに足す
   let

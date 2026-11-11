@@ -183,7 +183,8 @@ derive instance Eq GateCommand
 
 data AdminMsg
   = ViewerLoaded Boolean
-  | ViewerFailed
+  -- 呼び出し者の取得が一時障害 (503・通信失敗など)。権限の判断材料ではないので、取得済みの管理者状態は失効させない
+  | ViewerUnavailable
   | RefreshAdmin
   | GateLoaded Gate
   | GateLoadFailed GateError

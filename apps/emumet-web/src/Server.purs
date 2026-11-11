@@ -46,7 +46,7 @@ renderPage urlPath adminState = do
       Just state -> AdminTypes.emptyAdminModel { isAdmin = Just state.isAdmin, forbidden = state.forbidden, gate = maybe AdminTypes.NotLoaded AdminTypes.Loaded state.gate }
       Nothing -> AdminTypes.emptyAdminModel
     session = map (\state -> { username: state.username }) ssr
-    model = { route: mRoute, page, isHydrated: false, session, loginForm: { identifier: "", password: "" }, accounts: NotAsked, selectedAccount: NotAsked, newAccountForm: { name: "", isBot: false }, editProfileForm: Nothing, editMetadataForm: Nothing, errorMessage: Nothing, savePending: false, saveGeneration: 0, admin }
+    model = { route: mRoute, page, isHydrated: false, session, sessionVerified: false, loginForm: { identifier: "", password: "" }, accounts: NotAsked, selectedAccount: NotAsked, newAccountForm: { name: "", isBot: false }, editProfileForm: Nothing, editMetadataForm: Nothing, errorMessage: Nothing, savePending: false, saveGeneration: 0, admin }
     appView = view model
     stateEl = mkStateElement model
     withState = injectState stateEl appView
