@@ -3,8 +3,10 @@ module App.Model where
 import Prelude
 
 import App.Api.Error (ApiError)
+import App.Emoji (Emoji)
 import App.Post (Post, TimelineTab(..), Visibility(..))
 import App.Profile (Profile, ProfileContext)
+import App.Reaction (DetailFilter(..), PendingRemoval, PickerState, PostReactions, QuickSettings, SettingsProblem, Toast)
 import App.Route (Route)
 import Data.Argonaut.Decode.Class (class DecodeJson)
 import Data.Argonaut.Decode.Generic (genericDecodeJson)
@@ -102,6 +104,47 @@ type Model =
   , detailTab :: DetailTab
   , compose :: Maybe ComposeState
   , profileMenu :: Maybe ProfileMenuState
+  , reaction :: ReactionModel
+  }
+
+-- | Quick reaction (D03, App.Reaction) for the acting Profile `profileId`. Everything
+-- | here belongs to that Profile and is reset when the Profile changes.
+type ReactionModel =
+  { profileId :: Maybe String
+  , settings :: RemoteData QuickSettings
+  , savingSettings :: Boolean
+  , settingsProblem :: Maybe SettingsProblem
+  , posts :: Array PostReactions
+  , postsError :: Maybe ApiError
+  -- Notes with a reaction request in flight (double-submit guard).
+  , inFlight :: Array String
+  , pendingRemoval :: Maybe PendingRemoval
+  , picker :: Maybe PickerState
+  , chipMenu :: Maybe Int
+  , dragFrom :: Maybe Int
+  , toast :: Maybe Toast
+  , toastSeq :: Int
+  , detailFilter :: DetailFilter
+  , customEmojis :: RemoteData (Array Emoji)
+  }
+
+initialReactionModel :: ReactionModel
+initialReactionModel =
+  { profileId: Nothing
+  , settings: NotAsked
+  , savingSettings: false
+  , settingsProblem: Nothing
+  , posts: []
+  , postsError: Nothing
+  , inFlight: []
+  , pendingRemoval: Nothing
+  , picker: Nothing
+  , chipMenu: Nothing
+  , dragFrom: Nothing
+  , toast: Nothing
+  , toastSeq: 0
+  , detailFilter: AllReactors
+  , customEmojis: NotAsked
   }
 
 -- | Initial model used by SSR (and as the base for tests). Data is requested by
@@ -122,6 +165,7 @@ initialModel route =
   , detailTab: RepliesTab
   , compose: Nothing
   , profileMenu: Nothing
+  , reaction: initialReactionModel
   }
 
 emptyCompose :: String -> ComposeState

@@ -70,6 +70,7 @@ Bun.serve({
       return app.auth ? app.auth.handle(req) : new Response(null, { status: 404 });
     }
     if (url.pathname === "/graphql") return app.handleGraphql(req);
+    if (url.pathname === "/__mock/reset" && app.handleMockReset) return app.handleMockReset(req);
 
     const response = await serveSSR(url);
     return config.mode === "real" ? privateResponse(response) : response;

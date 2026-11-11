@@ -258,6 +258,17 @@ async function verifyBreakpointCrossing(page: Page) {
   await expect(dialog).toHaveCount(0);
   await expect(visible(page, "投稿する")).toBeFocused();
   await expectScrollLocked(page, false);
+  // And back: opened on mobile, closed on desktop -> focus on the sidebar button.
+  await visible(page, "投稿する").click();
+  await expect(dialog.getByRole("textbox", { name: "投稿内容" })).toBeFocused();
+  await page.setViewportSize({ width: desktop.width, height: desktop.height });
+  await expect(dialog.getByRole("textbox", { name: "投稿内容" })).toBeFocused();
+  await expectTabStaysInside(page, dialog);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(visible(page, "投稿する")).toBeFocused();
+  await expect(page.locator("#sp-compose-desktop")).toBeFocused();
+  await expectScrollLocked(page, false);
   // Profile dropdown on desktop -> bottom sheet on mobile -> dropdown again.
   await page.setViewportSize({ width: desktop.width, height: desktop.height });
   await visible(page, /投稿用 Profile を切り替え/).click();
@@ -279,12 +290,294 @@ async function verifyBreakpointCrossing(page: Page) {
   await expect(visible(page, /投稿用 Profile を切り替え/)).toBeFocused();
 }
 
+async function resetMock(server: AppServer) {
+  const response = await fetch(`${server.url}/__mock/reset`, { method: "POST" });
+  expect(response.status, "mock reset").toBe(204);
+}
+
+/** GraphQL operation names the page sent, in order (to prove what was and was not sent). */
+function recordOperations(page: Page): string[] {
+  const sent: string[] = [];
+  page.on("request", (request) => {
+    if (!request.url().endsWith("/graphql") || request.method() !== "POST") return;
+    const match = /^\s*(?:query|mutation)\s+(\w+)/.exec(String(request.postDataJSON()?.query ?? ""));
+    if (match) sent.push(match[1]!);
+  });
+  return sent;
+}
+
+/**
+ * Quick reaction on the timeline (ui-spec v6 C / P, 実装上の注意 1-4, 6), by keyboard:
+ * picker opens from the reaction button (popover / bottom sheet) with the favourites
+ * on top; picking reacts and moves focus to my chip (first); my chip removes it, the
+ * reaction button comes back focused and the undo toast appears; undo with the picker
+ * open closes the picker and restores the reaction; the removal is sent only when the
+ * toast goes away; an unavailable favourite cannot be picked.
+ */
+async function verifyQuickReaction(page: Page, viewport: Viewport) {
+  const sent = recordOperations(page);
+  await page.goto("/", { waitUntil: "networkidle" });
+  await expect(page.getByTestId("timeline")).toHaveAttribute("data-state", "loaded");
+  const articles = page.locator("#content article");
+  const mika = articles.nth(0);
+  const sora = articles.nth(1);
+  await expect(mika.getByTestId("reactions")).toBeVisible();
+  // C1: a reacted post shows my chip first and no reaction button, and the cell keeps
+  // its width so the other actions stand where they stand on an unreacted post.
+  const soraMine = page.locator("#react-mine-post-sora-zine");
+  await expect(sora.getByTestId("reactions").locator(".sp-rchip").first()).toHaveAttribute("id", "react-mine-post-sora-zine");
+  await expect(soraMine).toHaveAttribute("aria-pressed", "true");
+  await expect(page.locator("#react-post-sora-zine")).toHaveCount(0);
+  const cells = (article: Locator) => article.locator(".sp-actions > *").evaluateAll((elements) =>
+    elements.map((element) => Math.round(element.getBoundingClientRect().x)));
+  const reacted = await cells(sora);
+  await expect(soraMine).not.toHaveAttribute("aria-busy", "true");
+  await soraMine.click();
+  await expect(page.locator("#react-post-sora-zine")).toBeFocused();
+  expect(await cells(sora), "action cells stay put when the reaction button comes back").toEqual(reacted);
+  await page.getByTestId("reaction-toast").getByRole("button", { name: "元に戻す" }).click();
+  await expect(soraMine).toBeFocused();
+  expect(await cells(sora), "and when it goes away again").toEqual(reacted);
+
+  // P5 / P1 / 注意 6: Enter opens the picker; Esc closes it and focus returns.
+  const button = page.locator("#react-post-mika-picker");
+  await button.focus();
+  await page.keyboard.press("Enter");
+  const picker = page.getByTestId("picker");
+  await expect(picker).toBeVisible();
+  if (viewport.name === "mobile") {
+    await expect(picker).toHaveAttribute("aria-modal", "true");
+    await expect(picker).toBeFocused();
+    await expectScrollLocked(page, true);
+    await expectTabStaysInside(page, picker);
+  } else {
+    await expect(page.locator("#sp-picker-search")).toBeFocused();
+    await expectScrollLocked(page, false);
+  }
+  const favorites = picker.getByTestId("picker-favorites");
+  await expect(favorites.getByRole("button")).toHaveCount(5);
+  await expect(favorites.getByRole("button", { name: ":old_blob:（利用不可）" })).toHaveAttribute("aria-disabled", "true");
+  await expect(favorites.getByRole("link", { name: "常用絵文字を設定" })).toBeVisible();
+  // P4: searching hides the favourites row.
+  await picker.getByRole("searchbox", { name: "絵文字を検索" }).fill("ねこ");
+  await expect(favorites).toHaveCount(0);
+  await expect(picker.getByTestId("picker-grid").getByRole("button", { name: "ねこ" })).toBeVisible();
+  await picker.getByRole("searchbox", { name: "絵文字を検索" }).fill("");
+  // Category tabs move with the arrow keys (data-tablist="picker").
+  await picker.getByRole("tab", { name: "顔" }).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(picker.getByRole("tab", { name: "手・人" })).toHaveAttribute("aria-selected", "true");
+  await expect(picker.getByRole("tab", { name: "手・人" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(picker).toHaveCount(0);
+  await expect(button).toBeFocused();
+  await expectScrollLocked(page, false);
+
+  // P2: an unavailable favourite is not picked; the toast says why and offers 入れ替える.
+  await page.keyboard.press("Enter");
+  // aria-disabled (not disabled): it stays focusable so the reason can be announced.
+  await favorites.getByRole("button", { name: ":old_blob:（利用不可）" }).focus();
+  await page.keyboard.press("Enter");
+  const toast = page.getByTestId("reaction-toast");
+  await expect(toast).toContainText("利用できません");
+  await expect(toast.getByRole("button", { name: "入れ替える" })).toBeVisible();
+  await expect(picker).toBeVisible();
+  expect(sent.filter((name) => name === "SetNoteReaction"), "nothing sent for an unavailable emoji").toEqual([]);
+
+  // Pick a favourite by keyboard: 2 operations, focus lands on my (first) chip.
+  await favorites.getByRole("button", { name: "いいね" }).focus();
+  await page.keyboard.press("Enter");
+  const mine = page.locator("#react-mine-post-mika-picker");
+  await expect(picker).toHaveCount(0);
+  await expect(mine).toBeFocused();
+  await expect(mine).toContainText("4");
+  await expect(mika.getByTestId("reactions").locator(".sp-rchip").first()).toHaveAttribute("id", "react-mine-post-mika-picker");
+  await expect(button).toHaveCount(0);
+  await expect(mine).not.toHaveAttribute("aria-busy", "true");
+  expect(sent.filter((name) => name === "SetNoteReaction")).toHaveLength(1);
+
+  // C2: my chip removes; the reaction button returns focused; undo toast.
+  await page.keyboard.press("Enter");
+  await expect(mine).toHaveCount(0);
+  await expect(button).toBeFocused();
+  await expect(toast).toContainText("取り消しました");
+  // 注意 1: undo while the picker of the same post is open closes the picker.
+  await page.keyboard.press("Enter");
+  await expect(picker).toBeVisible();
+  await toast.getByRole("button", { name: "元に戻す" }).click();
+  await expect(picker).toHaveCount(0);
+  await expect(page.locator(".sp-sheet-backdrop, .sp-clickaway")).toHaveCount(0);
+  await expect(mine).toBeFocused();
+  await expect(toast).toHaveCount(0);
+  await expectScrollLocked(page, false);
+  expect(sent.filter((name) => name === "RemoveNoteReaction"), "undo sends nothing").toEqual([]);
+
+  // D03 q09: the removal is sent when the toast goes away, not before.
+  await mine.click();
+  await expect(toast).toContainText("取り消しました");
+  expect(sent.filter((name) => name === "RemoveNoteReaction")).toEqual([]);
+  await page.mouse.move(0, 0);
+  await expect(toast).toHaveCount(0, { timeout: 10_000 });
+  await expect.poll(() => sent.filter((name) => name === "RemoveNoteReaction").length).toBe(1);
+  await page.reload({ waitUntil: "networkidle" });
+  await expect(page.locator("#react-post-mika-picker")).toBeVisible();
+  await expect(page.locator("#react-mine-post-mika-picker")).toHaveCount(0);
+
+  // C3: someone's chip reacts with the same emoji while not reacted.
+  await page.locator("#content article").nth(0).getByRole("button", { name: /^いいね でリアクション/ }).click();
+  await expect(page.locator("#react-mine-post-mika-picker")).toBeFocused();
+  await expect(page.locator("#content article").nth(0).getByRole("button", { name: /でリアクション/ })).toHaveCount(0);
+  // Remove again and leave the screen: navigation confirms the removal at once.
+  await expect(page.locator("#react-mine-post-mika-picker")).not.toHaveAttribute("aria-busy", "true");
+  await page.locator("#react-mine-post-mika-picker").click();
+  await page.locator("#content article").nth(1).getByRole("link").first().click();
+  await expect(page).toHaveURL(/\/posts\/post-sora-zine$/);
+  await expect.poll(() => sent.filter((name) => name === "RemoveNoteReaction").length).toBe(2);
+  await expect(page.getByTestId("reaction-toast")).toHaveCount(0);
+
+  // D1 / D3: the reactions tab opens on 「すべて」, me first with 「あなた」; pressing the
+  // selected toggle again closes the list.
+  await page.getByRole("tab", { name: /リアクション/ }).click();
+  const all = page.getByRole("button", { name: /^すべて/ });
+  await expect(all).toHaveAttribute("aria-pressed", "true");
+  const list = page.getByTestId("reactor-list");
+  await expect(list.locator("li").first()).toContainText("あなた");
+  await expect(list.locator("li").first()).toContainText("Fixture Profile");
+  await all.click();
+  await expect(all).toHaveAttribute("aria-pressed", "false");
+  await expect(list).toHaveCount(0);
+  await page.getByRole("button", { name: "キラキラ 2" }).click();
+  await expect(list.locator("li")).toHaveCount(2);
+  await page.getByRole("tab", { name: /返信/ }).click();
+  await page.getByRole("tab", { name: /リアクション/ }).click();
+  await expect(all).toHaveAttribute("aria-pressed", "true");
+  console.info(`OK quick reaction keyboard / focus / undo / delayed removal at ${viewport.name}`);
+}
+
+/**
+ * 設定 > Profile 常用絵文字 (S2-S6) by keyboard: the unavailable favourite shows 「利用不可」
+ * and its menu starts with 入れ替え; 左へ moves it; 削除 is immediate with an undo toast.
+ */
+async function verifyFavoritesSettings(page: Page, viewport: Viewport) {
+  await page.goto("/settings", { waitUntil: "networkidle" });
+  const chips = page.getByTestId("favorites");
+  await expect(chips).toHaveAttribute("data-state", "loaded");
+  const chip = (index: number) => page.locator(`#sp-fav-chip-${index}`);
+  await expect(chips.getByText("利用不可")).toBeVisible();
+  await expect(page.locator("#sp-fav-add")).toHaveCount(0);
+  await chip(4).focus();
+  await page.keyboard.press("Enter");
+  const menu = page.getByTestId("favorite-menu");
+  await expect(menu.getByRole("menuitem").first()).toHaveText("入れ替え");
+  await expect(menu.getByRole("menuitem").first()).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(menu.getByRole("menuitem", { name: "左へ" })).toBeFocused();
+  if (viewport.name === "mobile") await expectScrollLocked(page, true);
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(chip(4)).toBeFocused();
+  // 左へ keeps the unavailable favourite (moving is allowed, S4).
+  await page.keyboard.press("Enter");
+  await menu.getByRole("menuitem", { name: "左へ" }).click();
+  await expect(chip(3)).toBeFocused();
+  await expect(chip(3)).toHaveAttribute("aria-label", ":old_blob:（利用不可）");
+  await expect(chips).toHaveAttribute("aria-busy", "false");
+  // 削除 then 元に戻す (S2).
+  await chip(0).click();
+  await menu.getByRole("menuitem", { name: "削除" }).click();
+  await expect(page.locator("#sp-fav-add")).toBeFocused();
+  await expect(chips.locator(".sp-fchip").first()).toHaveAttribute("aria-label", "おめでとう");
+  const toast = page.getByTestId("reaction-toast");
+  await expect(toast).toContainText("削除しました");
+  await expect(chips).toHaveAttribute("aria-busy", "false");
+  await toast.getByRole("button", { name: "元に戻す" }).click();
+  await expect(chip(0)).toHaveAttribute("aria-label", "いいね");
+  await expect(chip(0)).toBeFocused();
+  // ＋ adds through the picker (dialog / sheet); taken emoji cannot be picked again.
+  await expect(chips).toHaveAttribute("aria-busy", "false");
+  await chip(1).click();
+  await menu.getByRole("menuitem", { name: "削除" }).click();
+  await expect(chips).toHaveAttribute("aria-busy", "false");
+  await page.locator("#sp-fav-add").click();
+  const picker = page.getByRole("dialog", { name: "常用絵文字を追加" });
+  await expect(picker).toHaveAttribute("aria-modal", "true");
+  await expectScrollLocked(page, true);
+  await picker.getByRole("tab", { name: "手・人" }).click();
+  await expect(picker.getByRole("button", { name: "いいね" })).toBeDisabled();
+  await picker.getByRole("button", { name: "ピース" }).click();
+  await expect(picker).toHaveCount(0);
+  await expect(page.locator("#sp-fav-chip-4")).toBeFocused();
+  await expect(page.locator("#sp-fav-chip-4")).toHaveAttribute("aria-label", "ピース");
+  await expectScrollLocked(page, false);
+  // S3: drag to reorder (desktop pointer).
+  if (viewport.name === "desktop") {
+    await chip(0).dragTo(chip(2));
+    await expect(chip(2)).toHaveAttribute("aria-label", "いいね");
+    await expect(chips).toHaveAttribute("aria-busy", "false");
+  }
+  console.info(`OK favourites settings keyboard / menu / undo at ${viewport.name}`);
+}
+
+/**
+ * Two sessions (devices) acting as the same Profile share its favourites and its
+ * reactions through the stateful mock; the stale one gets 409 and can save again.
+ */
+async function verifySharedAcrossSessions(browser: Browser, server: AppServer) {
+  const deviceA = await openPage(browser, server, VIEWPORTS[0]);
+  const deviceB = await openPage(browser, server, VIEWPORTS[1]);
+  try {
+    for (const device of [deviceA, deviceB]) {
+      await device.page.goto("/settings", { waitUntil: "networkidle" });
+      await expect(device.page.getByTestId("favorites")).toHaveAttribute("data-state", "loaded");
+    }
+    // A deletes 🙏 (revision 3 -> 4).
+    await deviceA.page.locator("#sp-fav-chip-3").click();
+    await deviceA.page.getByTestId("favorite-menu").getByRole("menuitem", { name: "削除" }).click();
+    await expect(deviceA.page.getByTestId("favorites")).toHaveAttribute("aria-busy", "false");
+    await expect(deviceA.page.locator(".sp-fchip:not(.sp-fchip-add)")).toHaveCount(4);
+    // B still shows revision 3; its edit is refused as stale and shows the stored list.
+    await deviceB.page.locator("#sp-fav-chip-0").click();
+    await deviceB.page.getByTestId("favorite-menu").getByRole("menuitem", { name: "右へ" }).click();
+    const problem = deviceB.page.getByTestId("favorites-problem");
+    await expect(problem).toHaveAttribute("data-error", "revision_conflict");
+    await expect(deviceB.page.locator(".sp-fchip:not(.sp-fchip-add)")).toHaveCount(4);
+    await problem.getByRole("button", { name: "もう一度保存" }).click();
+    await expect(problem).toHaveCount(0);
+    await expect(deviceB.page.getByTestId("favorites")).toHaveAttribute("aria-busy", "false");
+    // A new session sees what B saved.
+    await deviceA.page.reload({ waitUntil: "networkidle" });
+    await expect(deviceA.page.locator("#sp-fav-chip-0")).toHaveAttribute("aria-label", "おめでとう");
+    await expect(deviceA.page.locator("#sp-fav-chip-1")).toHaveAttribute("aria-label", "いいね");
+    // Reactions are shared too, and a Profile switch does not mix Profiles.
+    await deviceA.page.goto("/", { waitUntil: "networkidle" });
+    await deviceA.page.locator("#react-post-aoi-profiles").click();
+    await deviceA.page.getByTestId("picker").getByTestId("picker-favorites").getByRole("button").first().click();
+    await expect(deviceA.page.locator("#react-mine-post-aoi-profiles")).not.toHaveAttribute("aria-busy", "true");
+    await deviceB.page.goto("/", { waitUntil: "networkidle" });
+    await expect(deviceB.page.locator("#react-mine-post-aoi-profiles")).toBeVisible();
+    await visible(deviceB.page, /投稿用 Profile を切り替え/).click();
+    await deviceB.page.getByTestId("profile-menu").getByRole("menuitemradio", { name: /Fixture Dev/ }).click();
+    await expect(deviceB.page.locator("#react-mine-post-aoi-profiles")).toHaveCount(0);
+    await expect(deviceB.page.locator("#react-mine-post-sora-zine")).toHaveCount(0);
+    await deviceB.page.locator("#react-post-aoi-profiles").click();
+    // P3: Fixture Dev never saved favourites: no favourites row, no link.
+    await expect(deviceB.page.getByTestId("picker")).toBeVisible();
+    await expect(deviceB.page.getByTestId("picker-favorites")).toHaveCount(0);
+    expect([...deviceA.errors, ...deviceB.errors], "two sessions: browser errors").toEqual([]);
+    console.info("OK two sessions share a Profile's favourites and reactions; stale saves get 409 and retry");
+  } finally {
+    await deviceA.context.close();
+    await deviceB.context.close();
+  }
+}
+
 async function verifyMock(browser: Browser, frontendRoot: string, coreURL: string) {
   const server = await startApp(frontendRoot, "ShuttlePub", coreURL);
   try {
     await server.waitUntilReady();
     await verifySsrDocument(server);
     for (const viewport of VIEWPORTS) {
+      await resetMock(server);
       const { context, page, errors } = await openPage(browser, server, viewport);
       try {
         await page.goto("/", { waitUntil: "networkidle" });
@@ -299,12 +592,16 @@ async function verifyMock(browser: Browser, frontendRoot: string, coreURL: strin
         await verifyPostDetail(page);
         await verifyProfileSwitcher(page, viewport);
         if (viewport.name === "desktop") await verifyBreakpointCrossing(page);
+        await verifyQuickReaction(page, viewport);
+        await verifyFavoritesSettings(page, viewport);
         expect(errors, `mock ${viewport.name}: browser errors`).toEqual([]);
         console.info(`OK mock mode hydrates and keeps the shell's keyboard/focus rules at ${viewport.name} (${viewport.width}x${viewport.height})`);
       } finally {
         await context.close();
       }
     }
+    await resetMock(server);
+    await verifySharedAcrossSessions(browser, server);
     expect(await server.networkViolations(), "mock mode must not fetch anything server-side").toEqual([]);
   } finally {
     await server.stop();

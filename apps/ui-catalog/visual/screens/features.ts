@@ -13,6 +13,7 @@ export function captureSide(value: string | undefined): CaptureSide {
 export function featuresInShuttlePubHtml(html: string): Set<ScreenFeature> {
   const features = new Set<ScreenFeature>();
   if (html.includes('data-testid="app-shell"')) features.add("sns-shell");
+  if (html.includes('class="sp-reaction-layer"')) features.add("quick-reaction");
   return features;
 }
 

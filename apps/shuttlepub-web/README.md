@@ -36,22 +36,46 @@ mock / real 切替、SSR + hydration、Profile context の型・fixture、visual
 `createPost` は mock でも `NOT_IMPLEMENTED` です (投稿を模擬しない)。返信・リポスト・その他・画像・CW・絵文字は
 配置のみで `aria-disabled` です。mock の Profile は 3 件で、切替は応答を返すだけで保存しません (stateless)。
 
-### クイックリアクション (D03) の差し込み口
+### クイックリアクション (D03, quick-reaction-web-ui)
 
-反応状態・ピッカー・常用絵文字設定・反応者一覧は quick-reaction-web-ui が実装します。レイアウトは
-`src/App/Extension/Reaction.purs` の関数を決まった位置で呼ぶだけで、中身はそのユニットが差し替えます。
+ui-spec v6 の C (投稿カードの反応状態)・P (ピッカー)・D (投稿詳細)・S (常用絵文字の設定) を
+`src/App/Extension/Reaction.purs` (表示)・`src/Client/Reaction.purs` (状態遷移)・`src/App/Reaction.purs`
+(規則) で実装しています。レイアウト側は下表の関数を決まった位置で呼ぶだけです。
 
 | 関数 | 位置 |
 | ---- | ---- |
-| `summary` | 投稿カードの本文とアクション行の間 (集計チップ C1/C3/C4) |
-| `actionButton` | アクション行 3 つ目の枠。枠 (`.sp-react-slot`) は空でも 32/36px を保つ。id は `reactionButtonId` |
-| `detailTabCount` / `detailPanel` | 投稿詳細の「リアクション」タブの件数と中身 (D1/D3) |
-| `settingsProfileRows` | 設定 > Profile の行 (S1) |
-| `overlay` | シェルの最後 (ピッカーのボトムシート・トースト) |
+| `summary` | 投稿カードの本文とアクション行の間 (集計チップ。自分のチップは常に左端・上位 8 種 + 「+N」) |
+| `actionButton` | アクション行 3 つ目の枠。反応済みの間は出さず、枠 (`.sp-react-slot`) は 32/36px を保つ。デスクトップのポップオーバー |
+| `detailTabCount` / `detailPanel` | 投稿詳細の「リアクション」タブの件数と中身 (開くと「すべて」、自分を先頭に「あなた」) |
+| `settingsProfileRows` | 設定 > Profile の「常用絵文字」(チップ + 「＋」、メニュー、ドラッグ、利用不可表示) |
+| `overlay` | シェルの最後 (モバイルのボトムシート・常用絵文字ピッカー・チップメニュー・トースト) |
+
+- 1 Profile・1 投稿・1 反応。ピッカーから置き換えず、自分のチップで解除してから選び直します。
+- 解除は画面上で即時に反映し、DELETE は「元に戻す」トーストが消えた時点で送ります (D03 q09)。元に戻すと
+  何も送りません。画面遷移では即時に、タブを閉じる時は `pagehide` + `keepalive` で送ります。
+- 反応・常用絵文字の保存は 1 件ずつ (送信中は押せない)。失敗は元に戻して表示し、常用絵文字の 409 は
+  保存されている内容を読み直して「もう一度保存」を出します。422 (利用できない絵文字) は再送しません。
+- 応答は送ったときの Profile に紐づき、Profile を切り替えると未送信の解除を送ったうえで状態をすべて捨てます。
+
+データ: S3 契約 (`openapi/shuttlepub.json` の `quick-reaction` タグ。常用絵文字 GET/PUT、Note ごとの反応
+GET/PUT/DELETE) を `bff/rest/quick-reaction.ts` で扱います。real は `SHUTTLEPUB_API_URL` の backend へ利用者の
+Bearer で送り、`501` は `NOT_IMPLEMENTED`、`409` は `REVISION_CONFLICT`、`422` は `EMOJI_UNAVAILABLE` になります。
+**実保存の backend はまだ無いため、real では常用絵文字・反応は未実装エラーとして表示されます** (完成とは表示しません)。
+他の人の反応 (集計・反応者) とカスタム絵文字一覧は契約に無いため**仮 (PROVISIONAL)** の型
+(`bff/rest/reactions.ts`) で、real は `NOT_IMPLEMENTED` です。投稿の `noteId` (UUID) は S3 の `note_id` です。
+開発用の旧 API `POST /api/notes/{id}/reactions` は使いません (テストで検査)。
+
+mock は S3 の振る舞いを再現する**状態を持つ** mock (`QuickReactionStore`) で、Profile ごとの常用絵文字と反応を
+プロセス内に保持します。同じ Profile として動く複数のセッション (端末) は同じ状態を見ます。初期値は
+`bff/rest/reaction-fixtures.ts` (Profile 1: 常用 5 件・うち 1 件利用不可、Profile 2: 未設定、Profile 3: 3 件)。
+`POST /__mock/reset` (mock のみ) で初期値に戻ります (テスト・撮影用)。
 
 キー操作は `App.Dom.keydownAction` (アプリ唯一の keydown ハンドラ) に集めています。Flame はイベントを
 ルートで委譲し最も近いハンドラだけを実行するため、子要素に keydown を足すとこれが動かなくなります。
-キー操作を足すときは `keydownAction` と `Client.Update` の `KeyPressed` / `escape` を拡張してください。
+キー操作を足すときは `keydownAction` と `Client.Update` の `KeyPressed` / `escape` を拡張してください
+(ピッカーのカテゴリタブは `data-tablist="picker"`)。
+フォーカス中の要素を描画で取り除くと、その focusout が描画の途中で古い model のまま update を再入させます。
+トーストのボタンは押した時点で blur してから取り除きます (`App.ReactionDom.blurTarget`)。
 
 ## セットアップ・起動
 
@@ -99,8 +123,14 @@ real の Profile context は本人所有の Emumet 統合 Account/Profile を使
 bun run openapi:sync -- --commit <40桁 SHA>
 # ローカルの ShuttlePub clone から取得 (その commit の内容。working tree は読まない)
 bun run openapi:sync -- --commit <40桁 SHA> --producer-dir /path/to/ShuttlePub [--ref <branch>]
+bun run openapi:sync-scenarios -- --producer-dir /path/to/ShuttlePub
 bun run codegen
 ```
+
+- `openapi/quick-reaction-scenarios/`: producer が S3 契約の説明として持つリクエスト/応答のシナリオ
+  (`server/tests/fixtures/quick_reaction/scenarios/*.json`) を同じ commit からそのまま取り込んだもの。
+  `scenarios.lock.json` が commit と各ファイルの SHA-256 を持ち、`openapi:verify` と `bun test` が照合します。
+  `bff/rest/quick-reaction-scenarios.test.ts` が全ステップを OpenAPI に照合し、mock に再生して一致を確認します。
 
 ## codegen
 
@@ -119,8 +149,8 @@ SDL から消えた型の旧ファイルは自動削除せず、検出して失�
 ```text
 Browser (PureScript + Flame, hydrate)
   → Bun BFF  /graphql (bff/schema.graphql, graphql-yoga)
-      → mock: bff/rest/mock.ts (fixtures.ts)
-      → real: bff/rest/real.ts (openapi-fetch + 生成型, 応答を contract で検証)
+      → mock: bff/rest/mock.ts (fixtures.ts、S3 は状態を持つ quick-reaction.ts)
+      → real: bff/rest/real.ts (openapi-fetch / fetch + 生成型, 応答を contract で検証)
           → ShuttlePub backend REST (/api/v1/...)
 ```
 
@@ -132,12 +162,13 @@ Browser (PureScript + Flame, hydrate)
 ## テスト
 
 ```bash
-bun test                    # config / OpenAPI pin / contract / fixture / adapter / GraphQL
-spago test                  # route codec・model 往復・エラー写像・時刻表示・SSR 出力
+bun test                    # config / OpenAPI pin / contract / fixture / adapter / GraphQL / S3 シナリオ再生
+spago test                  # route codec・model 往復・エラー写像・時刻表示・SSR 出力・クイックリアクションの状態遷移
 bun run codegen:check
 bunx tsc --noEmit           # dist/server.d.ts のスタブが必要 (CI 参照)
 ```
 
 SSR → hydration の mobile / desktop 確認、シェルのキーボード・フォーカス操作 (投稿フォーム・タブ・Profile 切替)、
-real モード (501 / 500) の表示確認は visual CI 経路で実行します
+クイックリアクション (キーボードでの反応・解除・「元に戻す」でピッカーが閉じること・トースト消滅後の DELETE・
+常用絵文字の設定・2 セッションでの共有と 409)、real モード (501 / 500) の表示確認は visual CI 経路で実行します
 (`apps/ui-catalog/visual/screens/shuttlepub-verify.ts`、画面撮影は `visual/screens/cases.ts` の `ShuttlePub-*`)。

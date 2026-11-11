@@ -1,4 +1,5 @@
 @import "@shuttlepub/styles";
+@import "./reaction.css";
 @source "./**/*.purs";
 @source "../../../packages/ui/src/**/*.purs";
 

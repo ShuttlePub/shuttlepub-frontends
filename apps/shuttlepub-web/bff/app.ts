@@ -14,6 +14,12 @@ export type App = {
   profiles: ProfileContextSource;
   auth?: Auth;
   handleGraphql: (request: Request) => Promise<Response>;
+  /**
+   * Mock mode only: POST /__mock/reset restores the stateful mock (quick reaction
+   * favourites / reactions) to its fixtures. Tests and the visual capture use it to
+   * start every case from the same state. Real mode has no such route.
+   */
+  handleMockReset?: (request: Request) => Response;
 };
 export type AppDeps = {
   fetch?: (request: Request) => Promise<Response>;
@@ -23,12 +29,24 @@ export type AppDeps = {
 };
 
 export function createApp(config: AppConfig, deps: AppDeps = {}): App {
-  const api: ShuttlePubApi = config.mode === "mock" ? createMockApi()
+  const mockApi = config.mode === "mock" ? createMockApi() : undefined;
+  const api: ShuttlePubApi = config.mode === "mock" ? mockApi!
     : createRealApi({ baseUrl: config.apiUrl, ...(deps.fetch === undefined ? {} : { fetch: deps.fetch }) });
   const auth = config.mode === "real" && deps.auth ? createAuth(deps.auth, { fetch: deps.authFetch }) : undefined;
   const profiles = config.mode === "mock" ? createMockProfileContext() : createRealProfileContext();
-  const mockHandler = createGraphqlHandler({ api, profiles });
+  // Without a session there is no bearer token: real S3 operations are UNAUTHENTICATED.
+  const viewerAuth = config.mode === "mock"
+    ? async () => ({ accessToken: undefined })
+    : async (): Promise<{ accessToken: string | undefined }> => { throw new AuthError("UNAUTHENTICATED", 401); };
+  const mockHandler = createGraphqlHandler({ api, profiles, viewerAuth });
   return { config, api, profiles, ...(auth ? { auth } : {}),
+    ...(mockApi ? {
+      handleMockReset(request: Request) {
+        if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
+        mockApi.reset();
+        return new Response(null, { status: 204 });
+      },
+    } : {}),
     async handleGraphql(request) {
       if (config.mode === "mock") return mockHandler(request);
       // All POSTs are protected, including GraphQL queries. GET mutations are rejected by Yoga.
@@ -51,7 +69,8 @@ export function createApp(config: AppConfig, deps: AppDeps = {}): App {
         async invalidated() { cookies.push(await auth.clearSession()); },
       });
       try {
-        const response = await createGraphqlHandler({ api, profiles: requestProfiles })(request);
+        const response = await createGraphqlHandler({ api, profiles: requestProfiles,
+          viewerAuth: async () => ({ accessToken: (await getSession()).accessToken }) })(request);
         return privateResponse(withCookies(response, cookies));
       } catch (error) {
         return privateResponse(withCookies(Response.json({ error: error instanceof AuthError ? error.code : "UPSTREAM_UNAVAILABLE" }, { status: 502 }), cookies));

@@ -4,6 +4,8 @@
 
 import type { components } from "./generated/shuttlepub-api.ts";
 import type { CreatePostInput, Post, TimelineKind } from "./posts.ts";
+import type { EmojiRef, EmojiView, QuickReactionSettings, ReactionState, UpdateQuickReactionSettings } from "./quick-reaction.ts";
+import type { NoteReactionSummary } from "./reactions.ts";
 
 export type ApiStatus = components["schemas"]["ApiStatus"];
 export type ErrorBody = components["schemas"]["ErrorBody"];
@@ -13,8 +15,12 @@ export type ApiMode = "mock" | "real";
 export type ShuttlePubApiErrorKind =
   /** The backend (or this app, for features that need an unbuilt dependency) says it is not implemented. HTTP 501. */
   | "not_implemented"
-  /** The backend answered with an error status other than 501. */
+  /** The backend answered with an error status other than 501 (and other than the two below). */
   | "upstream_error"
+  /** 409 revision_conflict: the settings changed since they were read (currentRevision is set). */
+  | "revision_conflict"
+  /** 422 emoji_unavailable: the emoji cannot be newly used; nothing was changed. */
+  | "emoji_unavailable"
   /** The backend could not be reached (connection refused, DNS, timeout...). */
   | "unavailable"
   /** The backend answered 2xx with a body that violates the pinned OpenAPI contract. */
@@ -30,15 +36,25 @@ export class ShuttlePubApiError extends Error {
   readonly status: number | undefined;
   /** Upstream ErrorBody, when the backend sent a contract-shaped one. */
   readonly body: ErrorBody | undefined;
+  /** revision_conflict only: the revision the backend has stored. */
+  readonly currentRevision: number | undefined;
 
-  constructor(kind: ShuttlePubApiErrorKind, message: string, options: { status?: number; body?: ErrorBody; cause?: unknown } = {}) {
+  constructor(
+    kind: ShuttlePubApiErrorKind,
+    message: string,
+    options: { status?: number; body?: ErrorBody; cause?: unknown; currentRevision?: number } = {},
+  ) {
     super(message, options.cause === undefined ? undefined : { cause: options.cause });
     this.name = "ShuttlePubApiError";
     this.kind = kind;
     this.status = options.status;
     this.body = options.body;
+    this.currentRevision = options.currentRevision;
   }
 }
+
+/** Credentials of the signed-in viewer for bearer_auth operations (unused by mock). */
+export type ViewerAuth = { accessToken: string | undefined };
 
 export interface ShuttlePubApi {
   /** Fixed for the lifetime of the process. */
@@ -56,6 +72,23 @@ export interface ShuttlePubApi {
   getReplies(postId: string): Promise<Post[]>;
   /** Not implemented in either mode until the backend publishes a contract. */
   createPost(input: CreatePostInput): Promise<Post>;
+
+  /**
+   * Quick reaction (S3 contract, quick-reaction.ts). `profile` is the acting
+   * Profile's profile_nanoid. Each resolves only with a contract-conformant 200 body;
+   * 409 / 422 reject as revision_conflict / emoji_unavailable, 501 as not_implemented.
+   */
+  getQuickReactionSettings(auth: ViewerAuth, profile: string): Promise<QuickReactionSettings>;
+  putQuickReactionSettings(auth: ViewerAuth, profile: string, body: UpdateQuickReactionSettings): Promise<QuickReactionSettings>;
+  getNoteReaction(auth: ViewerAuth, profile: string, noteId: string): Promise<ReactionState>;
+  putNoteReaction(auth: ViewerAuth, profile: string, noteId: string, emoji: EmojiRef): Promise<ReactionState>;
+  deleteNoteReaction(auth: ViewerAuth, profile: string, noteId: string): Promise<ReactionState>;
+  /**
+   * PROVISIONAL (reactions.ts): other people's reactions and the custom emoji
+   * catalogue. No endpoint exists; real mode rejects with not_implemented.
+   */
+  getReactionSummaries(auth: ViewerAuth, profile: string, noteIds: string[]): Promise<NoteReactionSummary[]>;
+  getCustomEmojis(auth: ViewerAuth): Promise<EmojiView[]>;
 }
 
 /** Error for an operation whose endpoint is not in the pinned OpenAPI schema. */

@@ -13,8 +13,10 @@ export type DataState = "populated" | "empty";
  * as a New image. On the branch side a missing feature fails the capture.
  *  - sns-shell: the ShuttlePub SNS layout (ui-spec v6), detected by the SSR marker
  *    data-testid="app-shell".
+ *  - quick-reaction: the D03 quick reaction UI (picker, chips, favourites), detected by
+ *    its SSR layer class="sp-reaction-layer".
  */
-export type ScreenFeature = "sns-shell";
+export type ScreenFeature = "sns-shell" | "quick-reaction";
 
 const routes = [
   { app: "Booskiff", id: "login", path: "/login", authenticated: false, data: "populated" },
@@ -40,6 +42,14 @@ const routes = [
   { app: "ShuttlePub", id: "compose-visibility", path: "/", authenticated: false, data: "populated", requires: "sns-shell" },
   { app: "ShuttlePub", id: "profile-menu", path: "/", authenticated: false, data: "populated", requires: "sns-shell" },
   { app: "ShuttlePub", id: "settings", path: "/settings", authenticated: false, data: "populated", requires: "sns-shell" },
+  // Quick reaction (D03, ui-spec v6 C / P / D / S): picker with favourites, picker without
+  // favourites (P3), the undo toast after removing my reaction (C2), the reactor list (D1 / D3)
+  // and the favourite chip menu with an unavailable favourite (S3 / S4).
+  { app: "ShuttlePub", id: "reaction-picker", path: "/", authenticated: false, data: "populated", requires: "quick-reaction" },
+  { app: "ShuttlePub", id: "reaction-picker-no-favorites", path: "/", authenticated: false, data: "populated", requires: "quick-reaction" },
+  { app: "ShuttlePub", id: "reaction-undo", path: "/", authenticated: false, data: "populated", requires: "quick-reaction" },
+  { app: "ShuttlePub", id: "reaction-detail", path: "/posts/post-kei-release", authenticated: false, data: "populated", requires: "quick-reaction" },
+  { app: "ShuttlePub", id: "reaction-settings-menu", path: "/settings", authenticated: false, data: "populated", requires: "quick-reaction" },
   { app: "ShuttlePub", id: "not-found", path: "/visual-route-not-found", authenticated: false, data: "populated" },
 ] as const satisfies readonly {
   app: ScreenApp; id: string; path: string; authenticated: boolean; data: DataState; requires?: ScreenFeature;

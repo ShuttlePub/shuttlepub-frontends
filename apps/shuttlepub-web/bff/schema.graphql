@@ -35,7 +35,7 @@ type ProfileContext {
 # The pinned OpenAPI schema has no timeline/post endpoint yet. These types are owned by
 # this app so the screen layout can be built against mock fixtures; in real mode every
 # field below fails with extensions.code = NOT_IMPLEMENTED (no invented data).
-# Reaction data (D03) is deliberately absent: the quick-reaction UI adds it later.
+# Reaction data (D03) is added by the quick-reaction section below.
 
 """PROVISIONAL. Which timeline to read."""
 enum TimelineKind {
@@ -62,6 +62,8 @@ type PostAuthor {
 """PROVISIONAL. A post as shown on a timeline or the post detail screen."""
 type Post {
   id: ID!
+  """The ShuttlePub Note id (UUID) behind the post: the noteId of the quick reaction operations."""
+  noteId: ID!
   author: PostAuthor!
   text: String!
   """ISO 8601 instant."""
@@ -79,11 +81,92 @@ input CreatePostInput {
   visibility: PostVisibility!
 }
 
+# --- Quick reaction (D03) ------------------------------------------------------------
+# Maps the S3 contract (operations tagged quick-reaction in openapi/shuttlepub.json):
+# per posting Profile favourites (GET/PUT .../quick-reaction-settings) and the
+# Profile's single reaction on a Note (GET/PUT/DELETE .../notes/{note_id}/reaction).
+# profileId is the acting Profile (it must be one of availableProfiles). A 409 is
+# extensions.code = REVISION_CONFLICT (with extensions.currentRevision), a 422 is
+# EMOJI_UNAVAILABLE, a 501 is NOT_IMPLEMENTED. ReactionGroup / Reactor and
+# customEmojis are PROVISIONAL: no endpoint exists, real mode answers NOT_IMPLEMENTED.
+
+"""EmojiRef.type."""
+enum EmojiKind {
+  UNICODE
+  CUSTOM
+}
+
+"""EmojiUnavailableReason."""
+enum EmojiUnavailableReason {
+  DELETED
+  DISABLED
+}
+
+"""Maps EmojiView. value is the Unicode sequence (UNICODE) or the stable custom emoji id (CUSTOM)."""
+type Emoji {
+  kind: EmojiKind!
+  value: String!
+  """Custom emoji only, without colons."""
+  shortcode: String
+  """Custom emoji only, absent once deleted."""
+  imageUrl: String
+  available: Boolean!
+  unavailableReason: EmojiUnavailableReason
+}
+
+"""Maps EmojiRef."""
+input EmojiInput {
+  kind: EmojiKind!
+  value: String!
+}
+
+"""Maps QuickReactionSettings of one Profile. revision 0 = never saved."""
+type QuickReactionSettings {
+  profileId: ID!
+  revision: Int!
+  favorites: [Emoji!]!
+}
+
+"""Maps ReactionState: the acting Profile's reaction on a Note (null = not reacted)."""
+type NoteReaction {
+  profileId: ID!
+  noteId: ID!
+  emoji: Emoji
+}
+
+"""PROVISIONAL. Someone who reacted. handle is user@host without the leading @."""
+type Reactor {
+  id: ID!
+  handle: String!
+  displayName: String!
+}
+
+"""PROVISIONAL. One emoji's reactions by other people (the acting Profile's own excluded)."""
+type ReactionGroup {
+  emoji: Emoji!
+  count: Int!
+  reactors: [Reactor!]!
+}
+
+"""Reactions on a Note seen by one Profile: mine (S3) and other people's (PROVISIONAL)."""
+type PostReactions {
+  profileId: ID!
+  noteId: ID!
+  mine: Emoji
+  others: [ReactionGroup!]!
+}
+
 type Mutation {
   """Select an identity from the current viewer's owned Emumet accounts (integrated Profile API)."""
   selectProfile(id: ID!): ProfileContext!
   """PROVISIONAL. Always NOT_IMPLEMENTED (both modes) until the backend publishes a contract."""
   createPost(input: CreatePostInput!): Post!
+  """PUT .../quick-reaction-settings (full replacement guarded by expectedRevision)."""
+  updateQuickReactionSettings(profileId: ID!, expectedRevision: Int!, favorites: [EmojiInput!]!): QuickReactionSettings!
+  """PUT .../notes/{noteId}/reaction."""
+  setNoteReaction(profileId: ID!, noteId: ID!, emoji: EmojiInput!): NoteReaction!
+  """DELETE .../notes/{noteId}/reaction (succeeds also for an unavailable emoji)."""
+  removeNoteReaction(profileId: ID!, noteId: ID!): NoteReaction!
 }
 
 type Query {
@@ -97,4 +180,10 @@ type Query {
   post(id: ID!): Post
   """PROVISIONAL. Direct replies, oldest first."""
   replies(postId: ID!): [Post!]!
+  """GET .../quick-reaction-settings."""
+  quickReactionSettings(profileId: ID!): QuickReactionSettings!
+  """Reactions on each Note (at most 100), in the order asked."""
+  postReactions(profileId: ID!, noteIds: [ID!]!): [PostReactions!]!
+  """PROVISIONAL. The server's custom emoji (available or not)."""
+  customEmojis: [Emoji!]!
 }

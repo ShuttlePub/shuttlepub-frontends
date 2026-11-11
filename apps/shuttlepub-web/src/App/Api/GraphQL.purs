@@ -7,14 +7,22 @@ module App.Api.GraphQL
   , fetchPostDetail
   , selectProfile
   , createPost
+  , fetchQuickSettings
+  , saveQuickSettings
+  , fetchPostReactions
+  , fetchCustomEmojis
+  , setNoteReaction
+  , removeNoteReaction
   ) where
 
 import Prelude
 
 import App.Api.Error (ApiError(..), fromGqlCode)
+import App.Emoji (Emoji, EmojiKind(..), UnavailableReason(..))
 import App.Model (ApiStatus, PostDetailData)
 import App.Post (Author, Post, TimelineTab(..), Visibility(..))
 import App.Profile (Profile, ProfileContext)
+import App.Reaction (PostReactions, QuickSettings)
 import Data.Argonaut.Decode (class DecodeJson, decodeJson, printJsonDecodeError)
 import Data.Array (head)
 import Data.Either (Either(..))
@@ -24,6 +32,8 @@ import Effect.Aff (Aff, message, try)
 import Foreign.Object as FO
 import Generated.Schema.Gql (Mutation, Query)
 import Generated.Schema.Gql.Enum.ApiMode (ApiMode)
+import Generated.Schema.Gql.Enum.EmojiKind as GqlEmojiKind
+import Generated.Schema.Gql.Enum.EmojiUnavailableReason as GqlReason
 import Generated.Schema.Gql.Enum.PostVisibility as GqlVisibility
 import Generated.Schema.Gql.Enum.TimelineKind as GqlTimeline
 import GraphQL.Client.Args (Args(..))
@@ -111,6 +121,7 @@ authorSelection = { id: unit, handle: unit, displayName: unit }
 
 postSelection
   :: { id :: Unit
+     , noteId :: Unit
      , author :: { id :: Unit, handle :: Unit, displayName :: Unit }
      , text :: Unit
      , createdAt :: Unit
@@ -121,6 +132,7 @@ postSelection
      }
 postSelection =
   { id: unit
+  , noteId: unit
   , author: authorSelection
   , text: unit
   , createdAt: unit
@@ -134,6 +146,7 @@ type RawAuthor = { id :: ID, handle :: String, displayName :: String }
 
 type RawPost =
   { id :: ID
+  , noteId :: ID
   , author :: RawAuthor
   , text :: String
   , createdAt :: String
@@ -149,6 +162,7 @@ toAuthor a = { id: unwrap a.id, handle: a.handle, displayName: a.displayName }
 toPost :: RawPost -> Post
 toPost p =
   { id: unwrap p.id
+  , noteId: unwrap p.noteId
   , author: toAuthor p.author
   , text: p.text
   , createdAt: p.createdAt
@@ -191,3 +205,111 @@ createPost input =
   run (\(raw :: { createPost :: RawPost }) -> toPost raw.createPost)
     $ fullRes <$> mutationJson identity mutationClient "CreatePost"
         { createPost: { input: { text: input.text, visibility: postVisibility input.visibility } } `Args` postSelection }
+
+-- Quick reaction (D03). profileId is always the acting Profile the client holds, so
+-- a response is applied only if that Profile is still the acting one.
+
+type EmojiSelection =
+  { kind :: Unit, value :: Unit, shortcode :: Unit, imageUrl :: Unit, available :: Unit, unavailableReason :: Unit }
+
+emojiSelection :: EmojiSelection
+emojiSelection = { kind: unit, value: unit, shortcode: unit, imageUrl: unit, available: unit, unavailableReason: unit }
+
+type RawEmoji =
+  { kind :: GqlEmojiKind.EmojiKind
+  , value :: String
+  , shortcode :: Maybe String
+  , imageUrl :: Maybe String
+  , available :: Boolean
+  , unavailableReason :: Maybe GqlReason.EmojiUnavailableReason
+  }
+
+toEmoji :: RawEmoji -> Emoji
+toEmoji raw =
+  { kind: case raw.kind of
+      GqlEmojiKind.UNICODE -> UnicodeEmoji
+      GqlEmojiKind.CUSTOM -> CustomEmoji
+  , value: raw.value
+  , shortcode: raw.shortcode
+  , imageUrl: raw.imageUrl
+  , available: raw.available
+  , unavailableReason: raw.unavailableReason <#> case _ of
+      GqlReason.DELETED -> Deleted
+      GqlReason.DISABLED -> Disabled
+  }
+
+emojiInput :: Emoji -> { kind :: GqlEmojiKind.EmojiKind, value :: String }
+emojiInput emoji =
+  { kind: case emoji.kind of
+      UnicodeEmoji -> GqlEmojiKind.UNICODE
+      CustomEmoji -> GqlEmojiKind.CUSTOM
+  , value: emoji.value
+  }
+
+type RawSettings = { profileId :: ID, revision :: Int, favorites :: Array RawEmoji }
+
+settingsSelection :: { profileId :: Unit, revision :: Unit, favorites :: EmojiSelection }
+settingsSelection = { profileId: unit, revision: unit, favorites: emojiSelection }
+
+toSettings :: RawSettings -> QuickSettings
+toSettings raw = { profileId: unwrap raw.profileId, revision: raw.revision, favorites: map toEmoji raw.favorites }
+
+fetchQuickSettings :: String -> Aff (Either ApiError QuickSettings)
+fetchQuickSettings profileId =
+  run (\(raw :: { quickReactionSettings :: RawSettings }) -> toSettings raw.quickReactionSettings)
+    $ queryFullRes decodeJson identity queryClient "QuickReactionSettings"
+        { quickReactionSettings: { profileId: ID profileId } `Args` settingsSelection }
+
+-- | PUT with the revision the client last saw (409 is RevisionConflict).
+saveQuickSettings :: String -> Int -> Array Emoji -> Aff (Either ApiError QuickSettings)
+saveQuickSettings profileId revision favorites =
+  run (\(raw :: { updateQuickReactionSettings :: RawSettings }) -> toSettings raw.updateQuickReactionSettings)
+    $ fullRes <$> mutationJson identity mutationClient "UpdateQuickReactionSettings"
+        { updateQuickReactionSettings:
+            { profileId: ID profileId, expectedRevision: revision, favorites: map emojiInput favorites } `Args` settingsSelection
+        }
+
+type RawPostReactions =
+  { noteId :: ID
+  , mine :: Maybe RawEmoji
+  , others :: Array { emoji :: RawEmoji, count :: Int, reactors :: Array { id :: ID, handle :: String, displayName :: String } }
+  }
+
+fetchPostReactions :: String -> Array String -> Aff (Either ApiError (Array PostReactions))
+fetchPostReactions profileId noteIds =
+  run (\(raw :: { postReactions :: Array RawPostReactions }) -> map convert raw.postReactions)
+    $ queryFullRes decodeJson identity queryClient "PostReactions"
+        { postReactions: { profileId: ID profileId, noteIds: map ID noteIds } `Args`
+            { noteId: unit
+            , mine: emojiSelection
+            , others: { emoji: emojiSelection, count: unit, reactors: { id: unit, handle: unit, displayName: unit } }
+            }
+        }
+  where
+  convert raw =
+    { noteId: unwrap raw.noteId
+    , mine: map toEmoji raw.mine
+    , others: raw.others <#> \group ->
+        { emoji: toEmoji group.emoji
+        , count: group.count
+        , reactors: group.reactors <#> \reactor -> { id: unwrap reactor.id, handle: reactor.handle, displayName: reactor.displayName }
+        }
+    }
+
+-- | PROVISIONAL: the server's custom emoji (real mode: NotImplemented).
+fetchCustomEmojis :: Aff (Either ApiError (Array Emoji))
+fetchCustomEmojis =
+  run (\(raw :: { customEmojis :: Array RawEmoji }) -> map toEmoji raw.customEmojis)
+    $ queryFullRes decodeJson identity queryClient "CustomEmojis" { customEmojis: emojiSelection }
+
+setNoteReaction :: String -> String -> Emoji -> Aff (Either ApiError (Maybe Emoji))
+setNoteReaction profileId noteId emoji =
+  run (\(raw :: { setNoteReaction :: { emoji :: Maybe RawEmoji } }) -> map toEmoji raw.setNoteReaction.emoji)
+    $ fullRes <$> mutationJson identity mutationClient "SetNoteReaction"
+        { setNoteReaction: { profileId: ID profileId, noteId: ID noteId, emoji: emojiInput emoji } `Args` { emoji: emojiSelection } }
+
+removeNoteReaction :: String -> String -> Aff (Either ApiError Unit)
+removeNoteReaction profileId noteId =
+  run (\(_ :: { removeNoteReaction :: { noteId :: ID } }) -> unit)
+    $ fullRes <$> mutationJson identity mutationClient "RemoveNoteReaction"
+        { removeNoteReaction: { profileId: ID profileId, noteId: ID noteId } `Args` { noteId: unit } }
