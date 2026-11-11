@@ -622,6 +622,11 @@ testQueuedProfileRoundTrip = do
     done = saved afterFirst mika (Right (Just party))
   assertTrue "lane drained" (Array.null done.reactionWrites.notes)
   assertEqual "final server response is PUT2" (mineOn done mika.noteId) (Just party)
+  let
+    Tuple failedSecond retryRead = QR.update afterFirst (ReactionSaved afterFirst.reaction.epoch (requestOf afterFirst mika.noteId) mika Nothing (Left (UpstreamError "PUT2 failed")))
+    serverTruth = step failedSecond (PostReactionsLoaded failedSecond.reaction.epoch (readSnapshot failedSecond) (Right (setMineIn mika.noteId (Just thumbs) reactions)))
+  assertTrue "failed PUT2 revalidates the successful PUT1 (timer, focus, GET)" (length retryRead == 3 && Array.null failedSecond.reactionWrites.notes)
+  assertEqual "PUT2 failure restores server truth from PUT1" (mineOn serverTruth mika.noteId) (Just thumbs)
   -- Failure cleanup is also before PUT2, even after A -> B -> A.
   let
     reselected = step (step ready (RemoveMine sora)) (ReactWithChip sora thumbs)

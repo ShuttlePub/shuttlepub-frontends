@@ -548,6 +548,15 @@ update model = case _ of
                 _, _ -> Tuple next []
             )
         # andThen (finishNote write)
+        # andThen
+            ( \next -> case result of
+                -- After A -> B -> A an earlier PUT may already have succeeded.
+                -- Without a replaced removal there is no DELETE cleanup, so a
+                -- failed queued PUT must revalidate rather than assume no reaction.
+                Left _ | visibleWrite next write && isNothing write.removal ->
+                  Tuple next (loadPosts next.reaction.epoch write.profileId [ post.noteId ] next)
+                _ -> Tuple next []
+            )
 
   RemovalSent epoch request removal result -> case noteAnswer model epoch request removal.post.noteId of
     Nothing -> Tuple model []
