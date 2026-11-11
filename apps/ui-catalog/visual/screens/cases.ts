@@ -27,11 +27,18 @@ const routes = [
   { app: "ShuttlePub", id: "not-found", path: "/visual-route-not-found", authenticated: false, data: "populated" },
   // D08 mute/block settings (personal-domain-controls-web-ui, UI mock v5): both sub-pages
   // with the stateful mock's seed, and the block confirmation with detached follows.
-  { app: "ShuttlePub", id: "mute-block-domains", path: "/settings/mute-block/domains", authenticated: false, data: "populated" },
-  { app: "ShuttlePub", id: "mute-block-accounts", path: "/settings/mute-block/accounts", authenticated: false, data: "populated" },
-  { app: "ShuttlePub", id: "mute-block-block-dialog", path: "/settings/mute-block/domains", authenticated: false, data: "populated" },
+  // marker: these routes are new, so a baseline revision without them is skipped (see capture.ts).
+  { app: "ShuttlePub", id: "mute-block-domains", path: "/settings/mute-block/domains", authenticated: false, data: "populated", marker: "mute-block" },
+  { app: "ShuttlePub", id: "mute-block-accounts", path: "/settings/mute-block/accounts", authenticated: false, data: "populated", marker: "mute-block" },
+  { app: "ShuttlePub", id: "mute-block-block-dialog", path: "/settings/mute-block/domains", authenticated: false, data: "populated", marker: "mute-block" },
 ] as const satisfies readonly {
   app: ScreenApp; id: string; path: string; authenticated: boolean; data: DataState;
+  /**
+   * data-testid that only exists once the route exists. A revision whose SSR shows the
+   * shared NotFound page instead (the baseline before the route was added) skips the case,
+   * so the comparison reports a new screen instead of failing the baseline capture.
+   */
+  marker?: string;
 }[];
 
 const viewports = [

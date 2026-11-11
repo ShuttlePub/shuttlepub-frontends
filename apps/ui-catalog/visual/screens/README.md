@@ -69,7 +69,9 @@ Core/OIDC integration tests or a test of mutation persistence.
 ## Adding a route or state
 
 1. Add its app, stable ID, route and authentication/data requirements to
-   `routes` in `cases.ts`. Filenames must remain unique and match
+   `routes` in `cases.ts`. A route that the base branch does not have yet needs a `marker`
+   (a data-testid of the new page): the baseline capture then skips it when the base revision
+   renders the shared NotFound page, and the comparison reports it as a new screen. Filenames must remain unique and match
    `^[A-Za-z0-9-]+\.png$`; the viewport expansion happens automatically.
 2. Extend `prepareScreen` in `capture.ts` with a meaningful ready-state assertion
    and any UI actions needed to expose the new state. Keep actions local to the

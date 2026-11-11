@@ -108,7 +108,8 @@ async function prepareScreen(page: Page, item: ScreenCase) {
   return expectedPath;
 }
 
-async function captureScreen(browser: Browser, server: AppServer, item: ScreenCase, output: string) {
+/** Resolves to false when the case's route does not exist in this revision (see ScreenCase marker). */
+async function captureScreen(browser: Browser, server: AppServer, item: ScreenCase, output: string): Promise<boolean> {
   const context = await browser.newContext({
     baseURL: server.url, viewport: { width: item.viewport.width, height: item.viewport.height },
     deviceScaleFactor: 1, locale: "en-US", timezoneId: "UTC", colorScheme: "dark",
@@ -181,6 +182,12 @@ async function captureScreen(browser: Browser, server: AppServer, item: ScreenCa
     expect(documentResponse?.status(), `${item.filename}: SSR`).toBe(200);
     expect((await sessionResponse).status()).toBe(item.app === "ShuttlePub" || item.authenticated ? 200 : 401);
     await expect(page.locator("main#app")).toBeVisible();
+    if ("marker" in item && await page.getByTestId(item.marker).count() === 0) {
+      // Only an unknown route may be skipped: the revision must render the shared NotFound page.
+      await expect(page.getByText("Page not found.", { exact: true })).toBeVisible();
+      console.info(`Skipped ${item.filename}: the route does not exist in this revision`);
+      return false;
+    }
     await expect(page.locator("html")).toHaveAttribute("data-color", "catppuccin-mocha");
     await expect(page.locator("html")).toHaveAttribute("data-shape", "rounded");
     const expectedPath = await prepareScreen(page, item);
@@ -198,6 +205,7 @@ async function captureScreen(browser: Browser, server: AppServer, item: ScreenCa
     await Promise.all(responseChecks);
     expect(errors, `${item.filename}: errors during screenshot`).toEqual([]);
     console.info(`Captured ${item.filename}`);
+    return true;
   } finally {
     await context.close();
   }
@@ -218,19 +226,20 @@ export async function captureScreens(frontendRoot: string, output: string) {
     await Promise.all(servers.map((server) => server.waitUntilReady()));
     const capturedApps = new Set<ScreenApp>(servers.map((server) => server.app));
     const cases = SCREEN_CASES.filter((item) => capturedApps.has(item.app));
+    let captured = 0;
     browser = await chromium.launch({
       ...(process.env.PLAYWRIGHT_CHROMIUM_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH } : {}),
     });
     for (const item of cases) {
       const server = servers.find((entry) => entry.app === item.app)!;
       stub.setState(item.data);
-      await captureScreen(browser, server, item, output);
+      if (await captureScreen(browser, server, item, output)) captured++;
       expect(stub.unexpectedRequests, `${item.filename}: unexpected Core API requests`).toEqual([]);
       for (const entry of servers) {
         expect(await entry.networkViolations(), `${entry.app}: unexpected server requests`).toEqual([]);
       }
     }
-    console.info(`Captured ${cases.length} app screenshots in ${output}`);
+    console.info(`Captured ${captured} of ${cases.length} app screenshots in ${output}`);
   } catch (error) {
     failed = true;
     throw error;
