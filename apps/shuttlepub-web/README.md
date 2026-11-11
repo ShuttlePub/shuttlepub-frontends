@@ -168,8 +168,8 @@ Browser (PureScript + Flame, hydrate)
 
 - `bff/rest/fixtures.ts` の fixture は `bff/openapi/contract.ts` で pin した OpenAPI に照合され、schema に反すると `bun test` が失敗します。
 - Profile / ProfileContext と投稿系 (`bff/rest/posts.ts`) はアプリ所有の型で、OpenAPI にはまだ endpoint が無いため fixture は OpenAPI 照合の対象外です。
-- `src/App/Route.purs`: ルート (`/`、`/posts/:id`、`/settings`、`/notifications`、`/search`、`/bookmarks`。未知のパスは共有 NotFound)。
-- `src/App/View/*`: シェル (`Shell`)、投稿カード (`PostCard`)、画面 (`Pages`)、投稿フォーム (`Compose`)。スタイルは `src/style.css` の `sp-` クラス。
+- `src/App/Route.purs`: ルート (`/`、`/posts/:id`、`/settings`、`/notifications`、`/search`、`/bookmarks`、`/login`。未知のパスは共有 NotFound)。
+- `src/App/View/*`: シェル (`Shell`)、投稿カード (`PostCard`)、画面 (`Pages`)、投稿フォーム (`Compose`)、ログイン画面と通知行 (`Auth`、[AUTH.md](AUTH.md))。スタイルは `src/style.css` の `sp-` クラス。
 
 ## テスト
 
@@ -182,7 +182,8 @@ bunx tsc --noEmit           # dist/server.d.ts のスタブが必要 (CI 参照)
 
 SSR → hydration の mobile / desktop 確認、シェルのキーボード・フォーカス操作 (投稿フォーム・タブ・Profile 切替)、
 クイックリアクション (キーボードでの反応・解除・「元に戻す」でピッカーが閉じること・トースト消滅後の DELETE・
-常用絵文字の設定・2 セッションでの共有と 409)、real モード (501 / 500) の表示確認は visual CI 経路で実行します
+常用絵文字の設定・2 セッションでの共有と 409)、real モード (501 / 500) の表示確認、
+ログイン UI (未ログイン・期限切れ・`/login` と拒否) は visual CI 経路で実行します
 (`apps/ui-catalog/visual/screens/shuttlepub-verify.ts`、画面撮影は `visual/screens/cases.ts` の `ShuttlePub-*`)。
 
 ### クイックリアクションの通信寿命

@@ -16,10 +16,14 @@
 //    the status failure is displayed with its code, the timeline (no endpoint in the
 //    pinned OpenAPI) is displayed as not implemented, the unauthenticated viewer gets
 //    the login entry, and the page never shows mock data.
+//  - real mode, signed out (FA login UI): login entries return to the current screen,
+//    the login button runs the real BFF authorize/callback against a simulated provider
+//    denial and lands on /login?error=denied, and a stale session shows as expired once.
 import { isAbsolute, resolve } from "node:path";
 import { chromium, expect, type Browser, type Locator, type Page } from "@playwright/test";
 import { startBooskiffStub } from "./booskiff-stub.ts";
 import { appExists, startApp, type AppServer } from "./servers.ts";
+import { SHUTTLEPUB_LOOPBACK_SESSION_COOKIE, startShuttlePubStub } from "./shuttlepub-stub.ts";
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 900 },
@@ -808,6 +812,144 @@ async function verifyRealFailure(browser: Browser, frontendRoot: string, status:
   }
 }
 
+/**
+ * FA login UI against the real-mode BFF, with a stub provider that denies the
+ * authorization request:
+ *  - a signed-out viewer gets the header entry and the notice, both returning to the
+ *    current screen; posting stays disabled; the login button is keyboard reachable;
+ *  - /login -> "Emumet でログイン" -> real /auth/login (PKCE/state) -> provider denial
+ *    -> real /auth/callback -> /login?error=denied, with no session created;
+ *  - an unknown ?error= value shows nothing;
+ *  - a stale session cookie is reported as expired once, and cleared by the BFF.
+ */
+async function verifySignedOut(browser: Browser, frontendRoot: string) {
+  const backend = startShuttlePubStub({ authorize: "deny" });
+  const server = await startApp(frontendRoot, "ShuttlePub", backend.url, { env: backend.env });
+  try {
+    await server.waitUntilReady();
+    for (const viewport of VIEWPORTS) {
+      const { context, page, errors } = await openPage(browser, server, viewport);
+      try {
+        await page.goto("/posts/post-sora-zine", { waitUntil: "networkidle" });
+        const shell = page.getByTestId("app-shell");
+        await expect(shell).toHaveAttribute("data-hydration", "hydrated");
+        await expect(shell).toHaveAttribute("data-api-mode", "real");
+        const returnHere = "/auth/login?return_to=%2Fposts%2Fpost-sora-zine";
+        await expect(page.getByTestId("login-link").filter({ visible: true })).toHaveAttribute("href", returnHere);
+        const notice = page.getByTestId("auth-notice");
+        await expect(notice).toHaveAttribute("data-state", "signed-out");
+        const noticeLogin = notice.getByRole("link", { name: "ログイン" });
+        await expect(noticeLogin).toHaveAttribute("href", returnHere);
+        await expect(visible(page, "投稿する")).toBeDisabled();
+        await expect(page.getByText("ログアウト")).toHaveCount(0);
+
+        await page.goto("/login", { waitUntil: "networkidle" });
+        await expect(shell).toHaveAttribute("data-hydration", "hydrated");
+        await expect(page.getByTestId("auth-notice")).toHaveCount(0);
+        const start = page.getByTestId("login-start");
+        await expect(start).toHaveAttribute("href", "/auth/login");
+        await start.focus();
+        await expect(start).toBeFocused();
+        // The stub provider denies THIS authorization request (state echoed back).
+        const before = backend.authorizeRequests.length;
+        await page.keyboard.press("Enter");
+        await expect(page).toHaveURL(`${server.url}/login?error=denied`);
+        const authorize = backend.authorizeRequests[before];
+        expect(backend.authorizeRequests).toHaveLength(before + 1);
+        expect(authorize?.searchParams.get("code_challenge_method")).toBe("S256");
+        expect(authorize?.searchParams.get("prompt")).toBe("login");
+        await expect(shell).toHaveAttribute("data-hydration", "hydrated");
+        await expect(page.getByTestId("login-error")).toHaveAttribute("data-state", "denied");
+        await expect(page.getByText("PROVIDER_TEXT")).toHaveCount(0);
+        expect((await context.cookies()).map((cookie) => cookie.name)).not.toContain(SHUTTLEPUB_LOOPBACK_SESSION_COOKIE);
+
+        await page.goto("/login?error=%3Cb%3Eforged%3C%2Fb%3E", { waitUntil: "networkidle" });
+        await expect(shell).toHaveAttribute("data-hydration", "hydrated");
+        await expect(page.getByTestId("login-error")).toHaveCount(0);
+        await expect(page.getByText("forged")).toHaveCount(0);
+
+        await context.addCookies([{ name: SHUTTLEPUB_LOOPBACK_SESSION_COOKIE, value: "stale-session", url: server.url }]);
+        await page.goto("/", { waitUntil: "networkidle" });
+        await expect(page.getByTestId("auth-notice")).toHaveAttribute("data-state", "expired");
+        expect((await context.cookies()).map((cookie) => cookie.name)).not.toContain(SHUTTLEPUB_LOOPBACK_SESSION_COOKIE);
+        await page.reload({ waitUntil: "networkidle" });
+        await expect(page.getByTestId("auth-notice")).toHaveAttribute("data-state", "signed-out");
+        expect(errors, `signed-out ${viewport.name}: browser errors`).toEqual([]);
+        console.info(`OK real mode signed-out / denied / expired login UI at ${viewport.name}`);
+      } finally {
+        await context.close();
+      }
+    }
+    expect(backend.unexpectedRequests, "a viewer without a session never reaches Emumet or the token/IdP APIs").toEqual([]);
+    expect(await server.networkViolations(), "real mode may only reach the configured backend").toEqual([]);
+  } finally {
+    await server.stop();
+    backend.stop();
+  }
+}
+
+/**
+ * Focus around session changes inside the Profile switcher (mock mode, with the BFF's
+ * answers for one request replaced in the browser), at both widths:
+ *  - the menu opened from the "Profile を選ぶ" notice returns focus to it when cancelled,
+ *    and to the header switcher when a chosen Profile resolved the notice;
+ *  - on /login, a session lost while switching leaves focus on the login button.
+ */
+async function verifySessionFocus(browser: Browser, frontendRoot: string, coreURL: string) {
+  const server = await startApp(frontendRoot, "ShuttlePub", coreURL);
+  const gqlError = (code: string) => ({ status: 200, contentType: "application/json",
+    body: JSON.stringify({ data: null, errors: [{ message: code, extensions: { code } }] }) });
+  try {
+    await server.waitUntilReady();
+    for (const viewport of VIEWPORTS) {
+      const { context, page, errors } = await openPage(browser, server, viewport);
+      try {
+        // The selected Profile vanished: only the profileContext read says so.
+        await page.route(`${server.url}/graphql`, async (route) => {
+          const body = route.request().postData() ?? "";
+          if (body.includes("profileContext") && !body.includes("selectProfile")) return route.fulfill(gqlError("PROFILE_UNAVAILABLE"));
+          return route.continue();
+        });
+        await page.goto("/", { waitUntil: "networkidle" });
+        await expect(page.getByTestId("app-shell")).toHaveAttribute("data-hydration", "hydrated");
+        const notice = page.getByTestId("auth-notice");
+        await expect(notice).toHaveAttribute("data-state", "profile-unavailable");
+        const choose = notice.getByRole("button", { name: "Profile を選ぶ" });
+        await choose.click();
+        const menu = page.getByTestId("profile-menu");
+        await expect(menu.getByRole("menuitemradio")).toHaveCount(3);
+        await expect(choose).toHaveAttribute("aria-expanded", "true");
+        await page.keyboard.press("Escape");
+        await expect(menu).toHaveCount(0);
+        await expect(choose).toBeFocused();
+        await choose.click();
+        await menu.getByRole("menuitemradio", { name: /Fixture Dev/ }).click();
+        await expect(notice).toHaveCount(0);
+        await expect(visible(page, /投稿用 Profile を切り替え（現在: Fixture Dev）/)).toBeFocused();
+        await page.unroute(`${server.url}/graphql`);
+
+        // On /login (signed in), the session ends while switching.
+        await page.route(`${server.url}/graphql`, async (route) =>
+          (route.request().postData() ?? "").includes("selectProfile") ? route.fulfill(gqlError("UNAUTHENTICATED")) : route.continue());
+        await page.goto("/login", { waitUntil: "networkidle" });
+        await expect(page.getByTestId("login-state")).toHaveAttribute("data-state", "signed-in");
+        await visible(page, /投稿用 Profile を切り替え/).click();
+        await menu.getByRole("menuitemradio", { name: /Fixture Dev/ }).click();
+        await expect(menu).toHaveCount(0);
+        await expect(page.getByTestId("login-start")).toBeFocused();
+        await expect(page.getByTestId("login-link").filter({ visible: true })).toHaveCount(1);
+        await page.unroute(`${server.url}/graphql`);
+        expect(errors, `session focus ${viewport.name}: browser errors`).toEqual([]);
+        console.info(`OK focus follows the session state in the Profile switcher at ${viewport.name}`);
+      } finally {
+        await context.close();
+      }
+    }
+  } finally {
+    await server.stop();
+  }
+}
+
 export async function verifyShuttlePub(frontendRoot: string) {
   if (!isAbsolute(frontendRoot)) throw new Error("FRONTEND_ROOT must be an absolute path");
   if (!(await appExists(frontendRoot, "ShuttlePub"))) throw new Error(`apps/shuttlepub-web is missing in ${frontendRoot}`);
@@ -821,6 +963,8 @@ export async function verifyShuttlePub(frontendRoot: string) {
     await verifyMock(browser, frontendRoot, unusedCore.url);
     await verifyRealFailure(browser, frontendRoot, 501);
     await verifyRealFailure(browser, frontendRoot, 500);
+    await verifySignedOut(browser, frontendRoot);
+    await verifySessionFocus(browser, frontendRoot, unusedCore.url);
     expect(unusedCore.unexpectedRequests).toEqual([]);
     console.info("ShuttlePub hydration, shell behaviour and mock/real checks passed");
   } finally {

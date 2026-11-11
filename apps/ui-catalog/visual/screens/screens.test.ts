@@ -14,7 +14,7 @@ test("screen inventory covers every app and state at desktop/mobile sizes with s
   const names = SCREEN_CASES.map((item) => item.filename);
   // Then
   expect(new Set(names).size).toBe(SCREEN_CASES.length);
-  expect(SCREEN_CASES).toHaveLength(52);
+  expect(SCREEN_CASES).toHaveLength(62);
   for (const item of SCREEN_CASES) {
     expect(item.filename).toMatch(/^(Booskiff|Emumet|ShuttlePub)-[A-Za-z0-9-]+\.png$/);
     expect(item.path).toMatch(/^\/(?!\/)/);
@@ -27,44 +27,53 @@ test("screen inventory covers every app and state at desktop/mobile sizes with s
   }
 });
 
-test("ShuttlePub cases cover the SNS shell screens at both widths and need no login", () => {
-  // Given / When
+test("ShuttlePub cases cover the SNS shell, quick reactions and login at both widths", () => {
   const cases = SCREEN_CASES.filter((item) => item.app === "ShuttlePub");
-  // Then
   expect([...new Set(cases.map((item) => item.id))].sort()).toEqual([
-    "compose", "compose-visibility", "home", "not-found", "post-detail", "profile-menu",
+    "compose", "compose-visibility", "home", "home-session-expired", "home-signed-out",
+    "login", "login-denied", "login-failed", "not-found", "post-detail", "profile-menu",
     "reaction-detail", "reaction-picker", "reaction-picker-no-favorites", "reaction-settings-menu", "reaction-undo", "settings",
   ]);
   expect(cases.every((item) => !item.authenticated)).toBe(true);
-  // Screens that main already served (as F0 placeholders) need no feature, so they
-  // are always compared; the new screens declare the SNS shell or the quick reaction UI.
   for (const item of cases) {
     const required = "requires" in item ? item.requires : undefined;
-    const expected = ["home", "not-found"].includes(item.id) ? undefined : item.id.startsWith("reaction-") ? "quick-reaction" : "sns-shell";
-    expect(required).toBe(expected);
+    const viewer = "viewer" in item ? item.viewer : undefined;
+    if (["home", "not-found"].includes(item.id)) expect(required).toBeUndefined();
+    else expect(required).toBe(viewer ? "sns-login" : item.id.startsWith("reaction-") ? "quick-reaction" : "sns-shell");
+    // Only login states use the real-mode BFF without a session / with a stale one.
+    expect(viewer === undefined).toBe(!/^(login|home-signed-out|home-session-expired)/.test(item.id));
   }
+  expect(cases.filter((item) => "viewer" in item && item.viewer === "session-expired").map((item) => item.id))
+    .toEqual(["home-session-expired", "home-session-expired"]);
 });
 
 test("only the baseline side may skip cases whose screen feature is missing", () => {
-  // Given
   const shuttlePub = SCREEN_CASES.filter((item) => item.app === "ShuttlePub");
   const placeholderHtml = '<main id="app"><h1>ShuttlePub</h1><template-state></template-state></main>';
   const shellHtml = '<main id="app" lang="ja"><div class="sp-app" data-testid="app-shell"></div></main>';
-  const reactionHtml = '<main id="app" lang="ja"><div class="sp-app" data-testid="app-shell"><div class="sp-reaction-layer"></div></div></main>';
-  // When / Then
+  const reactionHtml = '<div class="sp-reaction-layer"></div>';
+  const loginHtml = '<div class="sp-page sp-page-login" data-testid="login-page"></div>';
+  const withLogin = featuresInShuttlePubHtml(shellHtml + loginHtml);
+  const withReaction = featuresInShuttlePubHtml(shellHtml + reactionHtml);
+  const allFeatures = featuresInShuttlePubHtml(shellHtml + reactionHtml + loginHtml);
   expect(featuresInShuttlePubHtml(placeholderHtml).size).toBe(0);
   expect([...featuresInShuttlePubHtml(shellHtml)]).toEqual(["sns-shell"]);
+  expect([...withLogin].sort()).toEqual(["sns-login", "sns-shell"]);
+  expect([...withReaction].sort()).toEqual(["quick-reaction", "sns-shell"]);
   const baseline = selectCases(shuttlePub, featuresInShuttlePubHtml(placeholderHtml), "baseline");
   expect(baseline.capture.map((item) => item.id).sort()).toEqual(["home", "home", "not-found", "not-found"]);
   expect(baseline.skipped).toHaveLength(shuttlePub.length - 4);
-  expect(() => selectCases(shuttlePub, featuresInShuttlePubHtml(placeholderHtml), "branch")).toThrow(/sns-shell/);
-  // A baseline with the shell but before the quick reaction UI skips only the reaction cases.
+  // Feature combinations must not silently drop either concurrent UI's cases.
   const shellOnly = selectCases(shuttlePub, featuresInShuttlePubHtml(shellHtml), "baseline");
-  expect(shellOnly.skipped.every((item) => item.id.startsWith("reaction-"))).toBe(true);
-  expect(shellOnly.skipped).toHaveLength(10);
-  expect(() => selectCases(shuttlePub, featuresInShuttlePubHtml(shellHtml), "branch")).toThrow(/quick-reaction/);
-  expect([...featuresInShuttlePubHtml(reactionHtml)].sort()).toEqual(["quick-reaction", "sns-shell"]);
-  expect(selectCases(shuttlePub, featuresInShuttlePubHtml(reactionHtml), "branch")).toEqual({ capture: shuttlePub, skipped: [] });
+  expect(shellOnly.skipped).toHaveLength(20);
+  expect(selectCases(shuttlePub, withLogin, "baseline").skipped.every((item) => item.id.startsWith("reaction-"))).toBe(true);
+  expect(selectCases(shuttlePub, withLogin, "baseline").skipped).toHaveLength(10);
+  expect(selectCases(shuttlePub, withReaction, "baseline").skipped.every((item) => "requires" in item && item.requires === "sns-login")).toBe(true);
+  expect(selectCases(shuttlePub, withReaction, "baseline").skipped).toHaveLength(10);
+  expect(() => selectCases(shuttlePub, featuresInShuttlePubHtml(placeholderHtml), "branch")).toThrow(/sns-shell/);
+  expect(() => selectCases(shuttlePub, withLogin, "branch")).toThrow(/quick-reaction/);
+  expect(() => selectCases(shuttlePub, withReaction, "branch")).toThrow(/sns-login/);
+  expect(selectCases(shuttlePub, allFeatures, "branch")).toEqual({ capture: shuttlePub, skipped: [] });
   expect(captureSide(undefined)).toBe("branch");
   expect(captureSide("baseline")).toBe("baseline");
   expect(() => captureSide("main")).toThrow();

@@ -25,17 +25,23 @@ services:
     environment:
       DSN: postgres://e2e:e2e-only@postgres:5432/hydra?sslmode=disable
       SECRETS_SYSTEM: ${REAL_E2E_SECRET:?run scripts/e2e-real.sh}
+      # Ory env overrides of hydra.yml, so scripts/e2e-real.sh can move the stack's ports
+      # (defaults equal the file's values).
+      SERVE_PUBLIC_PORT: "${SHUTTLEPUB_E2E_HYDRA_PORT:-4544}"
+      URLS_SELF_ISSUER: http://127.0.0.1:${SHUTTLEPUB_E2E_HYDRA_PORT:-4544}
+      URLS_LOGIN: http://127.0.0.1:${SHUTTLEPUB_E2E_PROVIDER_PORT:-3232}/login
+      URLS_CONSENT: http://127.0.0.1:${SHUTTLEPUB_E2E_PROVIDER_PORT:-3232}/consent
     volumes:
       - ./hydra.yml:/config/hydra.yml:ro
     command: serve all -c /config/hydra.yml --dev
     ports:
-      - "127.0.0.1:4544:4544"
-      - "127.0.0.1:3231:3231"
+      - "127.0.0.1:${SHUTTLEPUB_E2E_HYDRA_PORT:-4544}:${SHUTTLEPUB_E2E_HYDRA_PORT:-4544}"
+      - "127.0.0.1:${SHUTTLEPUB_E2E_WEB_PORT:-3231}:${SHUTTLEPUB_E2E_WEB_PORT:-3231}"
     depends_on:
       hydra-migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4544/health/ready"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:${SHUTTLEPUB_E2E_HYDRA_PORT:-4544}/health/ready"]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -52,6 +58,8 @@ services:
     environment:
       DSN: postgres://e2e:e2e-only@postgres:5432/kratos?sslmode=disable
       SECRETS_COOKIE: ${REAL_E2E_SECRET}
+      SELFSERVICE_DEFAULT_BROWSER_RETURN_URL: http://127.0.0.1:${SHUTTLEPUB_E2E_WEB_PORT:-3231}/
+      SELFSERVICE_FLOWS_LOGIN_UI_URL: http://127.0.0.1:${SHUTTLEPUB_E2E_WEB_PORT:-3231}/auth/login
     volumes:
       - ./kratos.yml:/config/kratos.yml:ro
       - ../../booskiff-web/e2e/real/identity.schema.json:/config/identity.schema.json:ro
@@ -82,7 +90,7 @@ services:
         condition: service_healthy
   client:
     image: oryd/hydra:v2.3.0
-    command: ["create", "oauth2-client", "--endpoint", "http://hydra:4445", "--id", "shuttlepub-bff", "--secret", "${REAL_E2E_SECRET}", "--grant-type", "authorization_code,refresh_token", "--response-type", "code", "--scope", "openid,profile,email,offline_access", "--audience", "account", "--redirect-uri", "http://127.0.0.1:3231/auth/callback", "--token-endpoint-auth-method", "client_secret_basic"]
+    command: ["create", "oauth2-client", "--endpoint", "http://hydra:4445", "--id", "shuttlepub-bff", "--secret", "${REAL_E2E_SECRET}", "--grant-type", "authorization_code,refresh_token", "--response-type", "code", "--scope", "openid,profile,email,offline_access", "--audience", "account", "--redirect-uri", "http://127.0.0.1:${SHUTTLEPUB_E2E_WEB_PORT:-3231}/auth/callback", "--token-endpoint-auth-method", "client_secret_basic"]
     depends_on:
       hydra:
         condition: service_healthy
@@ -91,17 +99,17 @@ services:
       context: ../../..
       dockerfile: apps/booskiff-web/e2e/real/Provider.Containerfile
     environment:
-      PROVIDER_ORIGIN: http://127.0.0.1:3232
+      PROVIDER_ORIGIN: http://127.0.0.1:${SHUTTLEPUB_E2E_PROVIDER_PORT:-3232}
       PROVIDER_REMEMBER_LOGIN: "true"
     ports:
-      - "127.0.0.1:3232:3232"
+      - "127.0.0.1:${SHUTTLEPUB_E2E_PROVIDER_PORT:-3232}:${SHUTTLEPUB_E2E_PROVIDER_PORT:-3232}"
     depends_on:
       kratos:
         condition: service_healthy
       hydra:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "bun", "-e", "fetch('http://localhost:3232/health').then(r => process.exit(r.ok ? 0 : 1))"]
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:${SHUTTLEPUB_E2E_PROVIDER_PORT:-3232}/health').then(r => process.exit(r.ok ? 0 : 1))"]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -110,7 +118,7 @@ services:
     network_mode: service:hydra
     environment:
       DATABASE_URL: postgres://e2e:e2e-only@postgres:5432/emumet
-      HYDRA_ISSUER_URL: http://127.0.0.1:4544
+      HYDRA_ISSUER_URL: http://127.0.0.1:${SHUTTLEPUB_E2E_HYDRA_PORT:-4544}
       HYDRA_ADMIN_URL: http://127.0.0.1:4445
       KRATOS_PUBLIC_URL: http://kratos:4433
       EXPECTED_AUDIENCE: account
@@ -128,13 +136,13 @@ services:
       dockerfile: apps/shuttlepub-web/e2e/Web.Containerfile
     network_mode: service:hydra
     environment:
-      PORT: "3231"
-      APP_ORIGIN: http://127.0.0.1:3231
+      PORT: "${SHUTTLEPUB_E2E_WEB_PORT:-3231}"
+      APP_ORIGIN: http://127.0.0.1:${SHUTTLEPUB_E2E_WEB_PORT:-3231}
       SHUTTLEPUB_API_MODE: real
       SHUTTLEPUB_API_URL: http://127.0.0.1:8099
       EMUMET_API_URL: http://127.0.0.1:8080
       KRATOS_PUBLIC_URL: http://kratos:4433
-      HYDRA_PUBLIC_URL: http://127.0.0.1:4544
+      HYDRA_PUBLIC_URL: http://127.0.0.1:${SHUTTLEPUB_E2E_HYDRA_PORT:-4544}
       HYDRA_CLIENT_ID: shuttlepub-bff
       HYDRA_CLIENT_SECRET: ${REAL_E2E_SECRET}
       SHUTTLEPUB_COOKIE_SECRET_BASE64: ${REAL_E2E_COOKIE_SECRET}
@@ -150,7 +158,7 @@ services:
       client:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "bun", "-e", "fetch('http://localhost:3231/').then(r => process.exit(r.ok ? 0 : 1))"]
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:${SHUTTLEPUB_E2E_WEB_PORT:-3231}/').then(r => process.exit(r.ok ? 0 : 1))"]
       interval: 2s
       timeout: 3s
       retries: 30

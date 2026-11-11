@@ -9,11 +9,12 @@ export function captureSide(value: string | undefined): CaptureSide {
   throw new Error(`CAPTURE_SIDE must be "branch" or "baseline", got ${JSON.stringify(value)}`);
 }
 
-/** SSR markers proving a feature exists in the running app (see cases.ts ScreenFeature). */
+/** SSR markers proving a feature exists in the running app (see cases.ts ScreenFeature). Pass the HTML of `/` and `/login`. */
 export function featuresInShuttlePubHtml(html: string): Set<ScreenFeature> {
   const features = new Set<ScreenFeature>();
   if (html.includes('data-testid="app-shell"')) features.add("sns-shell");
   if (html.includes('class="sp-reaction-layer"')) features.add("quick-reaction");
+  if (html.includes('data-testid="login-page"')) features.add("sns-login");
   return features;
 }
 

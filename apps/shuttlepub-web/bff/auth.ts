@@ -26,6 +26,13 @@ export function safeAppReturnTo(value: string | null): string {
   } catch { return "/"; }
 }
 
+/** The only failure destinations of a browser callback (App.Route Login). */
+export const LOGIN_ERROR_PATHS = { denied: "/login?error=denied", failed: "/login?error=failed" } as const;
+
+function acceptsHtml(request: Request): boolean {
+  return (request.headers.get("accept") ?? "").toLowerCase().includes("text/html");
+}
+
 export function checkOrigin(request: Request, origin: string): Response | null {
   return request.headers.get("origin") === origin
     ? null : Response.json({ error: "FORBIDDEN" }, { status: 403 });
@@ -112,7 +119,10 @@ export function createAuth(config: AuthConfig, deps: AuthDependencies = {}) {
   async function resolveSession(req: Request, cookies: string[]): Promise<ViewerSession> {
     const session = await readSession(req);
     if (!session) {
-      if (parseCookieValue(req.headers.get("cookie"), sessionCookieName)) cookies.push(await clearSession());
+      if (parseCookieValue(req.headers.get("cookie"), sessionCookieName)) {
+        cookies.push(await clearSession());
+        throw new AuthError("UNAUTHENTICATED", 401, "SESSION_EXPIRED");
+      }
       throw new AuthError("UNAUTHENTICATED", 401);
     }
     try {
@@ -137,7 +147,7 @@ export function createAuth(config: AuthConfig, deps: AuthDependencies = {}) {
       return session;
     } catch {
       cookies.push(await clearSession());
-      throw new AuthError("UNAUTHENTICATED", 401);
+      throw new AuthError("UNAUTHENTICATED", 401, "SESSION_EXPIRED");
     }
   }
   async function start(req: Request): Promise<Response> {
@@ -158,6 +168,7 @@ export function createAuth(config: AuthConfig, deps: AuthDependencies = {}) {
   async function callback(req: Request): Promise<Response> {
     const headers = new Headers();
     let matchedState = false;
+    let denied = false;
     try {
       const url = new URL(req.url);
       const code = url.searchParams.get("code");
@@ -167,6 +178,8 @@ export function createAuth(config: AuthConfig, deps: AuthDependencies = {}) {
       const pending = cookie ? await unsealWithKey<Pending>(await oauthKey, cookie) : null;
       if (!pending || pending.state !== state || pending.expiresAt <= now() || !pending.nonce || !pending.codeVerifier) throw new Error();
       matchedState = true;
+      // Only the provider's own denial of THIS pending flow is reported as a denial.
+      denied = url.searchParams.get("error") === "access_denied";
       headers.append("Set-Cookie", clearOAuth());
       if (url.searchParams.has("error") || !code || url.searchParams.getAll("code").length !== 1) throw new Error();
       const tokens = await tokenRequest(new URLSearchParams({ grant_type: "authorization_code", code,
@@ -188,6 +201,12 @@ export function createAuth(config: AuthConfig, deps: AuthDependencies = {}) {
     } catch {
       // An unsolicited GET callback must not provide a cross-site logout primitive.
       if (matchedState) headers.append("Set-Cookie", await clearSession());
+      if (acceptsHtml(req)) {
+        // A browser navigation lands on the login screen with a fixed reason. Nothing
+        // from the callback URL or the provider (error_description etc.) is reflected.
+        headers.set("Location", LOGIN_ERROR_PATHS[denied ? "denied" : "failed"]);
+        return new Response(null, { status: 302, headers });
+      }
       return Response.json({ error: "UNAUTHENTICATED" }, { status: 401, headers });
     }
   }

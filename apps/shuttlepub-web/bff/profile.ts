@@ -71,7 +71,7 @@ export function createRealProfileContext(deps?: RealProfileDeps): ProfileContext
       } catch { throw new AuthError("UPSTREAM_UNAVAILABLE", 502); }
       if (response.status === 401) {
         await deps!.invalidated?.();
-        throw new AuthError("UNAUTHENTICATED", 401);
+        throw new AuthError("UNAUTHENTICATED", 401, "SESSION_EXPIRED");
       }
       if (response.status === 403) throw new AuthError("FORBIDDEN", 403);
       if (!response.ok) throw new AuthError("UPSTREAM_UNAVAILABLE", 502);

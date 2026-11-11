@@ -17,7 +17,7 @@ module App.Api.GraphQL
 
 import Prelude
 
-import App.Api.Error (ApiError(..), fromGqlCode)
+import App.Api.Error (ApiError(..), fromGqlCode, withReason)
 import App.Emoji (Emoji, EmojiKind(..), UnavailableReason(..))
 import App.Model (ApiStatus, PostDetailData)
 import App.Post (Author, Post, TimelineTab(..), Visibility(..))
@@ -65,10 +65,11 @@ gqlResToEither { data_, errors } = case errors of
     Right value -> Right value
 
 errorFromGql :: GqlError -> ApiError
-errorFromGql { message: text, extensions } = fromGqlCode (extensions >>= extensionCode) text
+errorFromGql { message: text, extensions } =
+  withReason (extensions >>= extension "reason") (fromGqlCode (extensions >>= extension "code") text)
   where
-  extensionCode exts = FO.lookup "code" exts >>= \json -> case decodeJson json of
-    Right code -> Just code
+  extension key exts = FO.lookup key exts >>= \json -> case decodeJson json of
+    Right value -> Just value
     Left _ -> Nothing
 
 -- | Runs a request and maps transport failures to NetworkError.
