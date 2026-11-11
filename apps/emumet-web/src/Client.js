@@ -19,3 +19,6 @@ export const initThemeSelector = () => {
     }
   });
 };
+
+// Flame の document keydown 購読はイベントそのものを渡すので、押されたキーだけを取り出す
+export const eventKey = (event) => (typeof event.key === "string" ? event.key : "");

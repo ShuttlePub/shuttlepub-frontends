@@ -16,18 +16,21 @@ import Flame.Subscription.Document as FSD
 import Routing.Duplex (parse)
 import Routing.PushState (makeInterface, paths)
 import Web.DOM.ParentNode (QuerySelector(..))
+import Web.Event.Event (Event)
 
 appId :: AppId String Message
 appId = AppId "ratcap"
 
 foreign import initThemeSelector :: Effect Unit
 
+foreign import eventKey :: Event -> String
+
 main :: Effect Unit
 main = do
   nav <- makeInterface
 
   _model <- resumeMount (QuerySelector "main#app") appId
-    { view, update: mkUpdate nav, subscribe: [ FSD.onKeydown (Admin <<< KeyPressed) ] }
+    { view, update: mkUpdate nav, subscribe: [ FSD.onKeydown' (Admin <<< KeyPressed <<< eventKey) ] }
 
   initThemeSelector
 
