@@ -1,6 +1,6 @@
 import createClient from "openapi-fetch";
 import { describeViolations, violationsForResponse } from "../openapi/contract.ts";
-import { ShuttlePubApiError, type ApiStatus, type ErrorBody, type ShuttlePubApi } from "./client.ts";
+import { ShuttlePubApiError, missingEndpoint, type ApiStatus, type ErrorBody, type ShuttlePubApi } from "./client.ts";
 import type { paths } from "./generated/shuttlepub-api.ts";
 
 export type RealApiOptions = {
@@ -73,6 +73,20 @@ export function createRealApi(options: RealApiOptions): ShuttlePubApi {
         body?.message ?? `ShuttlePub API answered HTTP ${response.status}`,
         { status: response.status, ...(body === undefined ? {} : { body }) },
       );
+    },
+    // No endpoint for these exists in the pinned schema: never guess a path, never
+    // fall back to fixtures.
+    async getTimeline() {
+      throw missingEndpoint("getTimeline");
+    },
+    async getPost() {
+      throw missingEndpoint("getPost");
+    },
+    async getReplies() {
+      throw missingEndpoint("getReplies");
+    },
+    async createPost() {
+      throw missingEndpoint("createPost");
     },
   };
 }

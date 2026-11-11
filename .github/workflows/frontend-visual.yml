@@ -102,6 +102,9 @@ jobs:
         env:
           FRONTEND_ROOT: ${{ github.workspace }}/baseline
           CAPTURE_DIR: ${{ github.workspace }}/current/apps/ui-catalog/.visual/expected
+          # Only the baseline may skip cases whose screen feature main does not have yet
+          # (visual/screens/features.ts); they are reported as New.
+          CAPTURE_SIDE: baseline
       - name: Capture branch application screens
         run: bun visual/screens/capture.ts
         working-directory: current/apps/ui-catalog

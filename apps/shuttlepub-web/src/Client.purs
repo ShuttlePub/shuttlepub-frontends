@@ -2,6 +2,7 @@ module Client where
 
 import Prelude
 
+import App.Dom (isMobileViewport, nowMillis, onViewportChange)
 import App.Message (Message(..))
 import App.Route (routeCodec)
 import App.View (view)
@@ -11,6 +12,7 @@ import Data.Maybe (Maybe)
 import Effect (Effect)
 import Flame (AppId(..), resumeMount)
 import Flame.Subscription (send)
+import Flame.Subscription.Document as Document
 import Routing.Duplex (parse)
 import Routing.PushState (makeInterface, paths)
 import Web.DOM.ParentNode (QuerySelector(..))
@@ -23,9 +25,17 @@ main = do
   nav <- makeInterface
 
   _model <- resumeMount (QuerySelector "main#app") appId
-    { view, update: mkUpdate nav, subscribe: [] }
+    { view
+    , update: mkUpdate nav
+    -- Keys pressed inside the app are handled by the shell's own keydown handler
+    -- (which stops propagation); this only sees Escape with focus outside the app.
+    , subscribe: [ Document.onKeydown \key -> if key == "Escape" then DocumentEscape else NoOp ]
+    }
 
-  send appId Hydrated
+  now <- nowMillis
+  isMobile <- isMobileViewport
+  send appId (Hydrated now isMobile)
+  onViewportChange \mobile -> send appId (ViewportChanged mobile)
 
   void $ paths handlePath nav
   where

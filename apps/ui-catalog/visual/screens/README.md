@@ -28,8 +28,11 @@ Use the same browser, OS and fonts for main and PR captures.
 `SCREEN_CASES` in `cases.ts` is the reusable, serializable inventory. Each state
 is captured at 1280×900 and 390×844, at device scale 1, with a full-page screenshot:
 
-- ShuttlePub (F0 foundation placeholder): home, 404. No login; mock mode only. The home case waits for the
-  hydration marker and for the BFF rows. `shuttlepub-verify.ts` additionally checks hydration and real-mode 501/500.
+- ShuttlePub (SNS shell, host ui-spec v6): home timeline, post detail, compose form (filled), compose
+  visibility menu, Profile switcher menu (desktop dropdown / mobile bottom sheet), settings, 404. No login;
+  mock mode only. Cases wait for the hydration marker and the fixtures served through the BFF, then open
+  the overlay they photograph. The `home` case also understands the older F0 placeholder so main still
+  captures. `shuttlepub-verify.ts` additionally checks hydration, keyboard/focus behaviour and real-mode 501/500.
 - Booskiff: login, populated Drive, empty Drive, selected folder, file detail, 404.
 - Emumet: login, populated accounts, new account, filled bot account form,
   account detail, profile edit form, settings, 404.
@@ -93,3 +96,7 @@ Core/OIDC integration tests or a test of mutation persistence.
 If an intentionally new route does not exist on main, introduce an explicit
 baseline case/version policy in the driver and report it as added coverage;
 do not silently accept a 404, auth redirect or empty loading state as its baseline.
+The policy in use: give the case `requires: <feature>` (`cases.ts` `ScreenFeature`) and detect the
+feature from the running app (`features.ts`). With `CAPTURE_SIDE=baseline` (the workflow's main
+capture) such a case is skipped and compare lists it as New; on the branch side (the default) a
+missing feature fails the capture.
