@@ -43,7 +43,7 @@ header =
 -- | "＋": opens the create modal (the /accounts/new page is this list with the modal open).
 newAccountButton :: Html Message
 newAccountButton =
-  Link.link Route.AccountNew
+  Link.plainLink "inline-block" Route.AccountNew
     [ HE.span
         [ HA.class' ("inline-flex h-9 w-9 items-center justify-center text-xl leading-none font-medium text-bg-secondary " <> T.bgAccent <> " " <> T.hoverBgAccent <> " " <> T.roundedTheme <> " transition-colors")
         , HA.createAttribute "role" "img"
@@ -76,7 +76,7 @@ accountCard host (AccountResponse acc) =
   let
     title = fromMaybe (fromMaybe acc.id acc.profileUsername) acc.displayName
   in
-    Link.link (Route.AccountDetail acc.id)
+    Link.plainLink "block" (Route.AccountDetail acc.id)
       [ HE.div [ HA.class' (T.surface <> " p-3 sm:px-4 hover:border-accent transition-colors cursor-pointer") ]
           [ HE.div [ HA.class' "flex items-center gap-3" ]
               [ avatar title

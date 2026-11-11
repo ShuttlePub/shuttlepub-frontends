@@ -78,6 +78,7 @@ verdictOfSet m = map (_.username.verdict) m.setUsernameDialog
 
 run :: Effect Unit
 run = do
+  let typedNewForCheck = base { newAccountForm = emptyNewAccountForm { name = "N", username = { value: "alice", verdict: Unverified } } }
   -- a late rejection must not change another operation's state
   let rejected = UsernameRejected ForNewAccount
   let inFlight = creating 5 true
@@ -111,6 +112,18 @@ run = do
     (let m = step setInFlight (UrlChanged (Just (AccountDetail "acc_2"))) in m.setUsernameDialog == Nothing && not m.savePending && m.saveGeneration > 7)
   check "so a late rejection after switching accounts changes nothing" true
     (let switched = step setInFlight (UrlChanged (Just (AccountDetail "acc_2"))) in (step switched (UsernameRejected ForExistingProfile 7 (Just "acc_1") "bob" Taken)).setUsernameDialog == Nothing)
+
+  -- a late validation answer must not touch a confirmation or a request in flight
+  check "a late check answer is ignored under the create confirmation" true
+    (let m = step (creating 1 false) (UsernameChecked ForNewAccount "alice" Taken) in verdictOfNew m == Verified)
+  check "a late check answer is ignored while the create is in flight" true
+    (let m = step inFlight (UsernameChecked ForNewAccount "alice" Taken) in verdictOfNew m == Verified)
+  check "a late check answer is ignored under the set confirmation" true
+    (let m = step (setting "acc_1" 1 false) (UsernameChecked ForExistingProfile "bob" Taken) in verdictOfSet m == Just Verified)
+  check "a check answer for the typed value still applies on the input step" true
+    (let m = step typedNewForCheck (UsernameChecked ForNewAccount "alice" Taken) in verdictOfNew m == Taken)
+  check "a check answer for an older value is ignored on the input step" true
+    (let m = step typedNewForCheck (UsernameChecked ForNewAccount "alic" Taken) in verdictOfNew m == Unverified)
 
   -- back / cancel while a request is in flight are refused; back otherwise returns to the input
   check "Back is refused while the create is in flight" true

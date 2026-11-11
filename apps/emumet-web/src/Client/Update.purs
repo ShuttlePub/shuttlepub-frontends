@@ -246,7 +246,9 @@ mkUpdate nav model = case _ of
     else noMessages model
 
   UsernameChecked target value verdict ->
-    noMessages $ withVerdict target value verdict model
+    -- A late answer must not change the verdict under an open confirmation or a request in flight.
+    if usernameLocked model target then noMessages model
+    else noMessages $ withVerdict target value verdict model
 
   UsernameRejected target gen owner value verdict ->
     -- Apply only to the operation that is still current: same generation, same page/dialog,
@@ -676,6 +678,12 @@ hostLoaded model = case model.instanceHost of
 -- | Add the instance host fetch to the page's initial commands.
 withHost :: Model -> Array (Aff (Maybe Message)) -> Array (Aff (Maybe Message))
 withHost model cmds = if needsHost model then cmds <> [ fetchInstanceHostAff ] else cmds
+
+-- | The value is frozen: the confirmation step is showing, or its request is in flight.
+usernameLocked :: Model -> UsernameTarget -> Boolean
+usernameLocked model = case _ of
+  ForNewAccount -> model.newAccountForm.step == StepConfirm || model.savePending
+  ForExistingProfile -> model.savePending || map (_.step) model.setUsernameDialog == Just StepConfirm
 
 -- | The account a username dialog belongs to (Nothing for the create modal).
 usernameOwner :: Model -> UsernameTarget -> Maybe String
