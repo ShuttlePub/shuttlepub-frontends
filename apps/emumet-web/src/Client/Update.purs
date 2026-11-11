@@ -17,7 +17,8 @@ import Data.Either (Either(..))
 import Data.Maybe (Maybe(..), fromMaybe, isJust, isNothing)
 import Data.String.Common (trim)
 import Data.Tuple (Tuple(..))
-import Effect.Aff (Aff)
+import Effect.Aff (Aff, delay)
+import Data.Time.Duration (Milliseconds(..))
 import Effect.Class (liftEffect)
 import Flame (Update, noMessages)
 import Foreign (unsafeToForeign)
@@ -48,6 +49,13 @@ mkUpdate nav model msg = case msg of
   SessionExpired -> resetAdmin (baseUpdate nav model msg)
   -- 適用された SessionFailed (確認済みの session が無い) は管理画面の状態も捨てる
   SessionFailed | not (isJust model.session && model.sessionVerified) -> resetAdmin (baseUpdate nav model msg)
+  SessionUnavailable ->
+    if isJust model.session && not model.sessionVerified then
+      -- SSR (管理画面) が渡した未確認の session と管理画面の状態 (警告帯を含む) は、一時障害では捨てずに保ち、少し待って照合し直す
+      Tuple model [ delay (Milliseconds 5000.0) $> Just CheckSession ]
+    else if isJust model.session then noMessages model
+    -- 既知の session が無いときは従来どおり (SessionFailed と同じ扱い)
+    else resetAdmin (baseUpdate nav model SessionFailed)
   LogoutDone -> resetAdmin (baseUpdate nav model msg)
   _ -> baseUpdate nav model msg
 
@@ -444,6 +452,7 @@ baseUpdate nav model = case _ of
 
   -- mkUpdate が先に処理する
   Admin _ -> noMessages model
+  SessionUnavailable -> noMessages model
 
 -- Helper: find metadata by nanoid
 findMetadata :: String -> Array MetadataResponse -> Maybe MetadataResponse
@@ -463,7 +472,10 @@ checkSessionAff = do
     Right (SessionResponse r) ->
       if r.authenticated then SessionLoaded { username: r.username }
       else SessionFailed
-    Left _ -> SessionFailed
+    -- 401/403 だけが「セッションが無い」という答え。5xx・通信失敗・decode 失敗は答えが得られていない
+    Left (HttpError 401 _) -> SessionFailed
+    Left (HttpError 403 _) -> SessionFailed
+    Left _ -> SessionUnavailable
 
 fetchAccountsAff :: Aff (Maybe Message)
 fetchAccountsAff = do
