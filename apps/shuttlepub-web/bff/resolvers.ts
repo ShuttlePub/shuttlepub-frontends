@@ -21,7 +21,9 @@ export const ERROR_CODES: Record<ShuttlePubApiErrorKind, string> = {
  * originalError is intentionally not attached: Yoga masks errors that wrap a non-GraphQL error.
  */
 export function toGraphQLError(error: unknown): unknown {
-  if (error instanceof AuthError) return new GraphQLError(error.code, { extensions: { code: error.code } });
+  if (error instanceof AuthError) {
+    return new GraphQLError(error.code, { extensions: { code: error.code, ...(error.reason ? { reason: error.reason } : {}) } });
+  }
   if (!(error instanceof ShuttlePubApiError)) return error;
   return new GraphQLError(error.message, {
     extensions: {

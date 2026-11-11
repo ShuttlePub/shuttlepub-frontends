@@ -29,10 +29,14 @@ Use the same browser, OS and fonts for main and PR captures.
 is captured at 1280×900 and 390×844, at device scale 1, with a full-page screenshot:
 
 - ShuttlePub (SNS shell, host ui-spec v6): home timeline, post detail, compose form (filled), compose
-  visibility menu, Profile switcher menu (desktop dropdown / mobile bottom sheet), settings, 404. No login;
-  mock mode only. Cases wait for the hydration marker and the fixtures served through the BFF, then open
+  visibility menu, Profile switcher menu (desktop dropdown / mobile bottom sheet), settings, 404, in mock
+  mode. Cases wait for the hydration marker and the fixtures served through the BFF, then open
   the overlay they photograph. The `home` case also understands the older F0 placeholder so main still
-  captures. `shuttlepub-verify.ts` additionally checks hydration, keyboard/focus behaviour and real-mode 501/500.
+  captures. The FA login UI (`/login`, its denied / failed reasons, the signed-out and session-expired home)
+  is captured with a `viewer` against a second, real-mode BFF whose backend is `shuttlepub-stub.ts`
+  (no IdP is contacted; only the expected UNAUTHENTICATED / NOT_IMPLEMENTED GraphQL errors are allowed).
+  `shuttlepub-verify.ts` additionally checks hydration, keyboard/focus behaviour, real-mode 501/500 and
+  the login flow up to a stub provider's denial.
 - Booskiff: login, populated Drive, empty Drive, selected folder, file detail, 404.
 - Emumet: login, populated accounts, new account, filled bot account form,
   account detail, profile edit form, settings, 404. The username screens

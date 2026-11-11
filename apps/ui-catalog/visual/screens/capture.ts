@@ -2,10 +2,16 @@ import { mkdir } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 import { chromium, expect, type Browser, type Page } from "@playwright/test";
 import { startBooskiffStub } from "./booskiff-stub.ts";
-import { EXPECTED_GRAPHQL_CODES, FIXED_TIME, MOCK_IDENTIFIER, MOCK_PASSWORD, MUTATES_SERVER, SCREEN_CASES, type ScreenApp, type ScreenCase } from "./cases.ts";
+import { EXPECTED_GRAPHQL_CODES, FIXED_TIME, MOCK_IDENTIFIER, MOCK_PASSWORD, MUTATES_SERVER, SCREEN_CASES, type ScreenApp, type ScreenCase, type ScreenViewer } from "./cases.ts";
 import { localImage } from "./fixtures.ts";
 import { captureSide, featuresInEmumetHtml, featuresInShuttlePubHtml, selectCases, type CaptureSide } from "./features.ts";
 import { startApp, type AppServer } from "./servers.ts";
+import { SHUTTLEPUB_LOOPBACK_SESSION_COOKIE, startShuttlePubStub } from "./shuttlepub-stub.ts";
+
+/** The real-mode viewer a ShuttlePub case is captured as (cases.ts ScreenViewer), if any. */
+function viewerOf(item: ScreenCase): ScreenViewer | undefined {
+  return "viewer" in item ? item.viewer : undefined;
+}
 
 async function prepareScreen(page: Page, item: ScreenCase) {
   const content = page.locator("#content");
@@ -13,7 +19,7 @@ async function prepareScreen(page: Page, item: ScreenCase) {
   // App chrome/copy changes should produce a visual diff, not make the current
   // driver incompatible with main. Wait for structure and seeded data instead.
   await expect(content.locator("h1")).toBeVisible();
-  if (item.id === "login") {
+  if (item.id === "login" && item.app !== "ShuttlePub") {
     await expect(content.locator('form input[type="email"]')).toBeVisible();
     await expect(content.locator('form input[type="password"]')).toBeVisible();
     await expect(content.locator('form button[type="submit"]')).toBeVisible();
@@ -53,7 +59,8 @@ async function prepareScreen(page: Page, item: ScreenCase) {
   } else if (item.app === "ShuttlePub") {
     const shell = page.getByTestId("app-shell");
     if (await shell.count()) {
-      await prepareShuttlePubShell(page, item);
+      if (viewerOf(item)) await prepareShuttlePubSignedOut(page, item);
+      else await prepareShuttlePubShell(page, item);
     } else if (item.id === "home") {
       // F0 foundation placeholder (baseline revisions before the SNS shell).
       // The marker flips only after Flame resumed the SSR DOM, and the three rows
@@ -212,7 +219,43 @@ async function prepareShuttlePubShell(page: Page, item: ScreenCase) {
   }
 }
 
+/**
+ * ShuttlePub login UI (FA) against the real-mode BFF: no session, or a stale cookie the
+ * BFF clears. The header offers the login entry, posting stays disabled and the screen
+ * explains the state. Login links are asserted to start the BFF's OIDC login.
+ */
+async function prepareShuttlePubSignedOut(page: Page, item: ScreenCase) {
+  const shell = page.getByTestId("app-shell");
+  const content = page.locator("#content");
+  await expect(shell).toHaveAttribute("data-hydration", "hydrated");
+  await expect(shell).toHaveAttribute("data-api-mode", "real");
+  await expect(page.getByTestId("api-status")).toHaveAttribute("data-state", "loaded");
+  await expect(page.getByTestId("login-link").filter({ visible: true })).toHaveCount(1);
+  await expect(page.getByTestId("login-link").filter({ visible: true })).toHaveAttribute("href", "/auth/login");
+  await expect(page.getByRole("button", { name: "投稿する" }).filter({ visible: true })).toBeDisabled();
+  await expect(page.getByText("Fixture Profile")).toHaveCount(0);
+  if (item.path.startsWith("/login")) {
+    await expect(page.getByTestId("login-page")).toBeVisible();
+    await expect(page.getByTestId("login-start")).toHaveAttribute("href", "/auth/login");
+    const reason = new URL(item.path, "http://visual.invalid").searchParams.get("error");
+    if (reason) await expect(page.getByTestId("login-error")).toHaveAttribute("data-state", reason);
+    else await expect(page.getByTestId("login-error")).toHaveCount(0);
+    await expect(page.getByTestId("auth-notice")).toHaveCount(0);
+  } else {
+    const notice = page.getByTestId("auth-notice");
+    await expect(notice).toHaveAttribute("data-state", viewerOf(item) === "session-expired" ? "expired" : "signed-out");
+    await expect(notice.getByRole("link")).toHaveAttribute("href", "/auth/login");
+    // No timeline endpoint in the pinned OpenAPI: shown as such, never as mock posts.
+    await expect(page.getByTestId("timeline")).toHaveAttribute("data-error", "not_implemented");
+    await expect(content.locator("article")).toHaveCount(0);
+  }
+}
+
 async function captureScreen(browser: Browser, server: AppServer, item: ScreenCase, output: string) {
+  const viewer = viewerOf(item);
+  // A real-mode viewer without a usable session: the BFF answers these GraphQL errors
+  // by design (and the client displays them). Any other code still fails the capture.
+  const expectedGraphqlCodes = viewer ? new Set(["UNAUTHENTICATED", "NOT_IMPLEMENTED"]) : new Set<string>(EXPECTED_GRAPHQL_CODES[item.id] ?? []);
   const context = await browser.newContext({
     baseURL: server.url, viewport: { width: item.viewport.width, height: item.viewport.height },
     deviceScaleFactor: 1, locale: "en-US", timezoneId: "UTC", colorScheme: "dark",
@@ -251,6 +294,10 @@ async function captureScreen(browser: Browser, server: AppServer, item: ScreenCa
         await loginPage.close();
       }
     }
+    if (viewer === "session-expired") {
+      // A session cookie the BFF can no longer open (as after expiry or a key change).
+      await context.addCookies([{ name: SHUTTLEPUB_LOOPBACK_SESSION_COOKIE, value: "visual-stale-session", url: server.url }]);
+    }
     const page = await context.newPage();
     page.setDefaultTimeout(15_000);
     await page.clock.setFixedTime(new Date(FIXED_TIME));
@@ -272,10 +319,9 @@ async function captureScreen(browser: Browser, server: AppServer, item: ScreenCa
         errors.push(`HTTP ${response.status()}: ${response.url()}`);
       }
       if (response.url() === `${server.url}/graphql`) {
-        const allowed = EXPECTED_GRAPHQL_CODES[item.id] ?? [];
-        responseChecks.push(response.json().then((body: { errors?: { extensions?: { code?: string } }[] }) => {
-          const unexpected = (body.errors ?? []).filter((error) => !allowed.includes(error.extensions?.code ?? ""));
-          if (unexpected.length) errors.push(`GraphQL: ${JSON.stringify(unexpected)}`);
+        responseChecks.push(response.json().then((body: { errors?: { extensions?: { code?: unknown } }[] }) => {
+          const unexpected = body.errors?.filter((error) => !expectedGraphqlCodes.has(String(error.extensions?.code)));
+          if (unexpected?.length) errors.push(`GraphQL: ${JSON.stringify(unexpected)}`);
         }).catch((error: unknown) => { errors.push(`Invalid GraphQL response: ${String(error)}`); }));
       }
     });
@@ -313,6 +359,7 @@ export async function captureScreens(frontendRoot: string, output: string, side:
   if (!isAbsolute(frontendRoot) || !isAbsolute(output)) throw new Error("FRONTEND_ROOT and CAPTURE_DIR must be absolute paths");
   await mkdir(output, { recursive: true });
   const stub = startBooskiffStub();
+  let shuttlePubStub: ReturnType<typeof startShuttlePubStub> | undefined;
   const servers: AppServer[] = [];
   let browser: Browser | undefined;
   let failed = false;
@@ -325,22 +372,32 @@ export async function captureScreens(frontendRoot: string, output: string, side:
     const capturedApps = new Set<ScreenApp>(servers.map((server) => server.app));
     const shuttlePub = servers.find((server) => server.app === "ShuttlePub")!;
     const emumet = servers.find((server) => server.app === "Emumet")!;
+    const shuttlePubHtml = await Promise.all(["/", "/login"].map(async (path) => (await fetch(`${shuttlePub.url}${path}`)).text()));
     const features = new Set([
-      ...featuresInShuttlePubHtml(await (await fetch(`${shuttlePub.url}/`)).text()),
+      ...featuresInShuttlePubHtml(shuttlePubHtml.join("\n")),
       ...featuresInEmumetHtml(await (await fetch(`${emumet.url}/accounts/new`)).text()),
     ]);
     const { capture: cases, skipped } = selectCases(SCREEN_CASES.filter((item) => capturedApps.has(item.app)), features, side);
     for (const item of skipped) {
       console.info(`Skipped ${item.filename}: this baseline does not have "${"requires" in item ? item.requires : ""}" yet (reported as New)`);
     }
+    // Real-mode ShuttlePub (cases.ts ScreenViewer) runs as a second server, only when needed.
+    let shuttlePubReal: AppServer | undefined;
+    if (cases.some((item) => viewerOf(item))) {
+      shuttlePubStub = startShuttlePubStub();
+      shuttlePubReal = await startApp(frontendRoot, "ShuttlePub", shuttlePubStub.url, { env: shuttlePubStub.env });
+      servers.push(shuttlePubReal);
+      await shuttlePubReal.waitUntilReady();
+    }
     browser = await chromium.launch({
       ...(process.env.PLAYWRIGHT_CHROMIUM_PATH ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH } : {}),
     });
     for (const item of cases) {
-      const server = servers.find((entry) => entry.app === item.app)!;
+      const server = viewerOf(item) ? shuttlePubReal! : servers.find((entry) => entry.app === item.app)!;
       stub.setState(item.data);
       await captureScreen(browser, server, item, output);
       expect(stub.unexpectedRequests, `${item.filename}: unexpected Core API requests`).toEqual([]);
+      expect(shuttlePubStub?.unexpectedRequests ?? [], `${item.filename}: unexpected ShuttlePub backend/IdP requests`).toEqual([]);
       for (const entry of servers) {
         expect(await entry.networkViolations(), `${entry.app}: unexpected server requests`).toEqual([]);
       }
@@ -360,6 +417,7 @@ export async function captureScreens(frontendRoot: string, output: string, side:
   } finally {
     const cleanup = await Promise.allSettled([browser?.close(), ...servers.map((server) => server.stop())]);
     stub.stop();
+    shuttlePubStub?.stop();
     if (failed) {
       for (const server of servers) console.error(`${server.app} server log:\n${await server.logs()}`);
     }

@@ -15,6 +15,7 @@ module App.Dom
   , initialOf
   , avatarColor
   , scrollToTop
+  , encodeQueryComponent
   ) where
 
 import Prelude
@@ -44,3 +45,4 @@ foreign import relativeTime :: Number -> String -> String
 foreign import fullDateTime :: String -> String
 foreign import initialOf :: String -> String
 foreign import avatarColor :: String -> String
+foreign import encodeQueryComponent :: String -> String

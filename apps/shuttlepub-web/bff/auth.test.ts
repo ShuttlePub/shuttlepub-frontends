@@ -221,6 +221,49 @@ describe("OIDC BFF security boundary", () => {
     expect((await f.auth.handle(req("/auth/session", { headers: { Cookie: sessionCookie } }))).status).toBe(200);
     expect((await f.callback(pending)).status).toBe(302);
   });
+  test("browser callback failures land on /login with a fixed reason and the same fail-closed cookies", async () => {
+    const html = { Accept: "text/html,application/xhtml+xml,*/*;q=0.8" };
+    const f = await fixture();
+    // The provider denied THIS pending flow: the only case reported as a denial.
+    const denied = await f.start();
+    const deniedResponse = await f.auth.handle(req("/auth/callback?error=access_denied&error_description=SECRET_DESCRIPTION&state=" +
+      encodeURIComponent(denied.authorize.searchParams.get("state")!), { headers: { ...html, Cookie: denied.pending } }));
+    expect(deniedResponse.status).toBe(302);
+    expect(deniedResponse.headers.get("location")).toBe("/login?error=denied");
+    expect(deniedResponse.headers.getSetCookie()).toContainEqual(expect.stringContaining(f.auth.sessionCookieName + "=;"));
+    expect(deniedResponse.headers.getSetCookie()).toContainEqual(expect.stringContaining(f.auth.oauthCookieName + "=;"));
+    expect(f.exchanges).toBe(0);
+    // Any other provider error with a matching state is a generic failure.
+    const other = await f.start();
+    const otherResponse = await f.auth.handle(req("/auth/callback?error=server_error&state=" +
+      encodeURIComponent(other.authorize.searchParams.get("state")!), { headers: { ...html, Cookie: other.pending } }));
+    expect(otherResponse.headers.get("location")).toBe("/login?error=failed");
+    // Token/ID-token validation failures after a matching state.
+    const signed = await f.start();
+    f.setMode("signature");
+    const invalid = await f.auth.handle(req("/auth/callback?code=code&state=" +
+      encodeURIComponent(signed.authorize.searchParams.get("state")!), { headers: { ...html, Cookie: signed.pending } }));
+    expect(invalid.status).toBe(302);
+    expect(invalid.headers.get("location")).toBe("/login?error=failed");
+    expect(invalid.headers.getSetCookie()).toContainEqual(expect.stringContaining(f.auth.sessionCookieName + "=;"));
+    expect(invalid.headers.getSetCookie().some(value => value.startsWith(f.auth.sessionCookieName + "=") && !value.includes("Max-Age=0"))).toBe(false);
+    f.setMode("ok");
+    // Unsolicited browser callbacks (even claiming a denial) neither log out nor report a denial.
+    const sessionCookie = await f.login();
+    const foreign = await f.start();
+    for (const path of ["/auth/callback?error=access_denied", "/auth/callback?error=access_denied&state=foreign", "/auth/callback?code=invalid&state=foreign"]) {
+      const response = await f.auth.handle(req(path, { headers: { ...html, Cookie: sessionCookie + "; " + foreign.pending } }));
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe("/login?error=failed");
+      expect(response.headers.getSetCookie()).toHaveLength(0);
+      expect(await response.text()).toBe("");
+    }
+    expect((await f.auth.handle(req("/auth/session", { headers: { Cookie: sessionCookie } }))).status).toBe(200);
+    // Non-browser clients keep the fixed JSON 401.
+    const api = await f.auth.handle(req("/auth/callback?error=access_denied", { headers: { Accept: "application/json" } }));
+    expect(api.status).toBe(401);
+    expect(await api.json()).toEqual({ error: "UNAUTHENTICATED" });
+  });
   test("logout revokes both tokens, clears cookies even when Kratos is unavailable", async () => {
     const f = await fixture();
     const session = await f.login();
@@ -403,7 +446,13 @@ describe("authenticated Emumet Profile context", () => {
       expect(body.data).toBeNull();
       expect(body.errors[0].extensions.code).toBe(code);
       expect(JSON.stringify(body)).not.toContain("SENSITIVE_ERROR_BODY");
-      if (status === 401) expect(result.headers.get("set-cookie")).toContain("Max-Age=0");
+      if (status === 401) {
+        expect(result.headers.get("set-cookie")).toContain("Max-Age=0");
+        // Emumet rejected a session the BFF still held: the UI asks to log in again.
+        expect(body.errors[0].extensions.reason).toBe("SESSION_EXPIRED");
+      } else {
+        expect(body.errors[0].extensions.reason).toBeUndefined();
+      }
     });
   }
   test("unavailable/malformed/moderated data and unauthenticated access never fall back to mock", async () => {
@@ -424,7 +473,14 @@ describe("authenticated Emumet Profile context", () => {
     const app = createApp({ mode: "real", apiUrl: "https://backend.example" }, {
       auth: f.config, emumetFetch: (async () => { called = true; throw new Error("unavailable"); }) as FetchLike,
     });
-    expect((await (await graphql(app, "", "{ availableProfiles { id } }")).json()).errors[0].extensions.code).toBe("UNAUTHENTICATED");
+    const anonymous = await (await graphql(app, "", "{ availableProfiles { id } }")).json();
+    expect(anonymous.errors[0].extensions).toEqual({ code: "UNAUTHENTICATED" });
+    expect(called).toBe(false);
+    // A session cookie the BFF can no longer use (expired, rotated key, tampered) is
+    // cleared and reported as expired, still without any upstream call.
+    const stale = await graphql(app, f.auth.sessionCookieName + "=not-a-valid-session", "{ availableProfiles { id } }");
+    expect((await stale.json()).errors[0].extensions).toEqual({ code: "UNAUTHENTICATED", reason: "SESSION_EXPIRED" });
+    expect(stale.headers.getSetCookie()).toContainEqual(expect.stringContaining(f.auth.sessionCookieName + "=;"));
     expect(called).toBe(false);
     expect((await (await graphql(app, session, "{ availableProfiles { id } }")).json()).errors[0].extensions.code).toBe("UPSTREAM_UNAVAILABLE");
   });
