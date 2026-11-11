@@ -3,72 +3,64 @@ module App.View.AccountNew where
 import Prelude
 
 import App.Message (Message(..))
-import App.Model (NewAccountForm)
-import ShuttlePub.UI.Theme as T
-import Data.Maybe (Maybe(..))
+import App.Model (DialogStep(..), NewAccountForm, RemoteData)
+import App.Username (isAvailable)
+import App.View.UsernameUi as U
+import Data.Maybe (Maybe)
 import Data.String.Common (trim)
 import Flame (Html)
 import Flame.Html.Attribute as HA
 import Flame.Html.Element as HE
+import ShuttlePub.UI.Theme as T
 
-view :: NewAccountForm -> Maybe String -> Boolean -> Html Message
-view form errorMsg savePending =
-  HE.div [ HA.class' "space-y-8 max-w-lg mx-auto" ]
-    [ HE.h1 [ HA.class' ("text-4xl font-bold tracking-tight " <> T.textHeading) ]
-        [ HE.text "New Account" ]
-    , errorBanner errorMsg
-    , formSection form savePending
-    ]
-
-errorBanner :: Maybe String -> Html Message
-errorBanner = case _ of
-  Nothing -> HE.div [ HA.class' "hidden" ] []
-  Just msg ->
-    HE.div [ HA.class' ("px-4 py-3 text-sm " <> T.roundedTheme <> " " <> T.textError <> " border " <> T.borderTheme <> " bg-red-500/10") ]
-      [ HE.text msg ]
-
-formSection :: NewAccountForm -> Boolean -> Html Message
-formSection form savePending =
-  HE.div [ HA.class' (T.surface <> " p-6 space-y-5") ]
-    [ fieldGroup "Name" "Account handle (e.g. alice)"
-        [ HE.input
-            [ HA.class' (inputClass <> " w-full")
-            , HA.type' "text"
-            , HA.placeholder "alice"
-            , HA.value form.name
-            , HA.onInput SetNewAccountName
+-- | The create modal, shown over the account list. First the inputs; Create then
+-- | switches to the "cannot be changed" confirmation in the same dialog.
+modal :: NewAccountForm -> Maybe String -> RemoteData String -> Boolean -> Html Message
+modal form errorMsg host savePending =
+  case form.step of
+    StepConfirm ->
+      U.modalFrame "new-account-title" "confirm"
+        (U.confirmBody "new-account-title" "この ID で作成しますか？" (if savePending then "作成中..." else "作成") (U.hostText host) form.username.value BackNewAccount SubmitNewAccount)
+    StepInput ->
+      U.modalFrame "new-account-title" "input"
+        [ U.modalTitle "new-account-title" "New Account"
+        , U.errorBanner errorMsg
+        , HE.div [ HA.class' "space-y-3 sm:space-y-4" ]
+            [ accountNameField form
+            , U.usernameInput "new" false form.username host SetNewAccountUsername
+            , botField form
+            ]
+        , U.buttonRow
+            [ U.outlineButton "キャンセル" CloseNewAccount
+            , U.primaryButton "作成" (not canReview) ReviewNewAccount
             ]
         ]
-    , fieldGroup "Type" "Is this a bot account?"
-        [ HE.label [ HA.class' ("flex items-center gap-3 cursor-pointer " <> T.textSecondary) ]
-            [ HE.input
-                [ HA.class' ("w-4 h-4 " <> T.bgAccent)
-                , HA.type' "checkbox"
-                , HA.checked form.isBot
-                , HA.onCheck SetNewAccountIsBot
-                ]
-            , HE.text "This is a bot account"
-            ]
-        ]
-    , HE.div [ HA.class' "pt-2" ]
-        [ HE.button
-            [ HA.class' ("w-full px-4 py-2.5 text-sm font-medium text-white " <> T.bgAccent <> " " <> T.hoverBgAccent <> " " <> T.roundedTheme <> " transition-colors" <> if savePending then " opacity-50 cursor-not-allowed" else "")
-            , HA.onClick SubmitNewAccount
-            , HA.disabled (trim form.name == "" || savePending)
-            ]
-            [ HE.text (if savePending then "Creating..." else "Create Account") ]
-        ]
-    ]
+  where
+  canReview = trim form.name /= "" && isAvailable form.username.value form.username.verdict && U.hostReady host && not savePending
 
-fieldGroup :: String -> String -> Array (Html Message) -> Html Message
-fieldGroup label hint children =
+accountNameField :: NewAccountForm -> Html Message
+accountNameField form =
   HE.div [ HA.class' "space-y-1.5" ]
-    [ HE.label [ HA.class' ("block text-sm font-medium " <> T.textPrimary) ]
-        [ HE.text label ]
-    , HE.div [] children
-    , HE.p [ HA.class' ("text-xs " <> T.textMuted) ]
-        [ HE.text hint ]
+    [ HE.label [ HA.for "new-account-name", HA.class' ("block text-sm font-medium " <> T.textPrimary) ] [ HE.text "Account 名" ]
+    , HE.input
+        [ HA.id "new-account-name"
+        , HA.type' "text"
+        , HA.class' ("w-full px-3 py-2 text-sm border " <> T.borderTheme <> " " <> T.bgSurface <> " " <> T.textPrimary <> " " <> T.roundedTheme <> " focus:outline-none focus:ring-2 focus:ring-accent/50")
+        , HA.value form.name
+        , HA.onInput SetNewAccountName
+        , HA.createAttribute "autocomplete" "off"
+        , HA.createAttribute "data-initial-focus" "true"
+        ]
     ]
 
-inputClass :: String
-inputClass = "px-3 py-2 text-sm border " <> T.borderTheme <> " " <> T.bgSurface <> " " <> T.textPrimary <> " " <> T.roundedTheme <> " focus:outline-none focus:ring-2 focus:ring-accent/50"
+botField :: NewAccountForm -> Html Message
+botField form =
+  HE.label [ HA.class' ("flex cursor-pointer items-center gap-2.5 text-sm " <> T.textSecondary) ]
+    [ HE.input
+        [ HA.class' "h-4 w-4 accent-accent"
+        , HA.type' "checkbox"
+        , HA.checked form.isBot
+        , HA.onCheck SetNewAccountIsBot
+        ]
+    , HE.text "Bot"
+    ]

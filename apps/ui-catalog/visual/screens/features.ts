@@ -16,6 +16,13 @@ export function featuresInShuttlePubHtml(html: string): Set<ScreenFeature> {
   return features;
 }
 
+/** SSR marker of the Emumet username dialog on /accounts/new (the create modal is part of the SSR page). */
+export function featuresInEmumetHtml(html: string): Set<ScreenFeature> {
+  const features = new Set<ScreenFeature>();
+  if (html.includes("data-username-dialog")) features.add("emumet-username-ui");
+  return features;
+}
+
 /**
  * Splits cases into those to capture and those the checkout cannot serve yet.
  * Skipping is an explicit baseline-only policy: the skipped images show up as New in

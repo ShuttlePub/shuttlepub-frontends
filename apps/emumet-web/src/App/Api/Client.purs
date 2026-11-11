@@ -20,12 +20,31 @@ data ApiError
   = NetworkError String
   | HttpError Int String
   | DecodeError String
+  -- | A GraphQL error the BFF classified with extensions.code (username
+  -- | rejections, forbidden, unsupported, ...). The message is user-facing.
+  | CodedError String String
 
 printApiError :: ApiError -> String
 printApiError = case _ of
+  CodedError code msg -> codedErrorMessage code msg
   NetworkError msg -> "Network error: " <> msg
   HttpError code msg -> "HTTP " <> show code <> ": " <> msg
   DecodeError msg -> "Decode error: " <> msg
+
+-- | User-facing text for a classified BFF error.
+codedErrorMessage :: String -> String -> String
+codedErrorMessage code fallback = case code of
+  "USERNAME_INVALID_FORMAT" -> "先頭は a〜z か 0〜9、以降は a〜z、0〜9、. _ - が使えます"
+  "USERNAME_RESERVED" -> "利用できません"
+  "USERNAME_TAKEN" -> "利用できません"
+  "USERNAME_ALREADY_SET" -> "ユーザー名はすでに設定されています (変更できません)"
+  "USERNAME_CONFLICT" -> "ユーザー名を設定できませんでした (使用済みか、すでに設定されています)"
+  "ACCOUNT_RESTRICTED" -> "このアカウントは停止中のため設定できません"
+  "FORBIDDEN" -> "この操作は許可されていません"
+  "BAD_REQUEST" -> "入力内容を確認してください"
+  "TEMPORARILY_UNAVAILABLE" -> "一時的に利用できません。しばらくしてからやり直してください"
+  "UNSUPPORTED" -> "この操作は現在サポートされていません"
+  _ -> fallback
 
 -- | Make a request and decode JSON response
 request :: forall a. DecodeJson a => AX.Request Json -> Aff (Either ApiError a)

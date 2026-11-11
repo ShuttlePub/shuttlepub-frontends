@@ -5,18 +5,20 @@ import Prelude
 import App.Api.GraphQL.Types (AccountResponse(..), MetadataResponse(..), ProfileResponse(..))
 import App.Format (formatDate)
 import App.Message (Message(..))
-import App.Model (AccountWithDetails, EditMetadataForm, EditProfileForm, RemoteData(..))
+import App.Model (AccountWithDetails, DialogStep(..), EditMetadataForm, EditProfileForm, RemoteData(..), SetUsernameDialog)
+import App.Username (isAvailable)
+import App.View.UsernameUi as U
 import ShuttlePub.UI.Theme as T
 import Data.Array (null) as Array
-import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.String.CodeUnits (take)
 import Data.String.Common (toUpper, trim)
 import Flame (Html)
 import Flame.Html.Attribute as HA
 import Flame.Html.Element as HE
 
-view :: RemoteData AccountWithDetails -> Maybe EditProfileForm -> Maybe EditMetadataForm -> Maybe String -> Boolean -> Html Message
-view detail editProfile editMetadata errorMsg savePending =
+view :: RemoteData AccountWithDetails -> Maybe EditProfileForm -> Maybe EditMetadataForm -> Maybe SetUsernameDialog -> RemoteData String -> Maybe String -> Boolean -> Html Message
+view detail editProfile editMetadata setDialog host errorMsg savePending =
   case detail of
     NotAsked ->
       HE.text ""
@@ -30,23 +32,63 @@ view detail editProfile editMetadata errorMsg savePending =
         , errorBanner errorMsg
         ]
     Loaded d ->
-      detailView d editProfile editMetadata errorMsg savePending
+      detailView d editProfile editMetadata setDialog host errorMsg savePending
 
-detailView :: AccountWithDetails -> Maybe EditProfileForm -> Maybe EditMetadataForm -> Maybe String -> Boolean -> Html Message
-detailView d editProfile editMetadata errorMsg savePending =
+detailView :: AccountWithDetails -> Maybe EditProfileForm -> Maybe EditMetadataForm -> Maybe SetUsernameDialog -> RemoteData String -> Maybe String -> Boolean -> Html Message
+detailView d editProfile editMetadata setDialog host errorMsg savePending =
   let
     AccountResponse acc = d.account
   in
-    HE.div [ HA.class' "space-y-6" ]
-      [ bannerSection d.profile
-      , profileHeader acc d.profile
-      , errorBanner errorMsg
-      , case editProfile of
-          Just form -> editProfileSection form savePending
-          Nothing -> profileSection d.profile
-      , metadataSection d.metadata editMetadata savePending
-      , accountInfoSection acc
-      ]
+    HE.div [ HA.class' "space-y-2.5 sm:space-y-4" ]
+      ( unsetNotice d.profile
+          <>
+            [ bannerSection d.profile
+            , profileHeader (U.hostText host) acc d.profile
+            , case setDialog of
+                Just _ -> HE.div [ HA.class' "hidden" ] []
+                Nothing -> errorBanner errorMsg
+            , case editProfile of
+                Just form -> editProfileSection form savePending
+                Nothing -> profileSection d.profile
+            , metadataSection d.metadata editMetadata savePending
+            , accountInfoSection acc
+            ]
+          <> case setDialog of
+            Just dialog -> [ setUsernameModal dialog host errorMsg savePending ]
+            Nothing -> []
+      )
+
+-- | One-line, non-dismissible notice for a profile that has no username yet.
+unsetNotice :: Maybe ProfileResponse -> Array (Html Message)
+unsetNotice = case _ of
+  Just (ProfileResponse { username: Nothing }) ->
+    [ HE.div
+        [ HA.class' ("flex items-center gap-3 border border-warning/35 bg-warning/10 px-3 py-2 text-sm " <> T.roundedTheme)
+        , HA.createAttribute "role" "status"
+        ]
+        [ HE.span [ HA.class' "flex-1" ] [ HE.text "⚠ ユーザー名が未設定です" ]
+        , HE.button [ HA.type' "button", HA.class' (T.textAccent <> " underline hover:opacity-80"), HA.onClick OpenSetUsername ] [ HE.text "設定する" ]
+        ]
+    ]
+  _ -> []
+
+-- | The one-time username dialog: inputs, then the "cannot be changed" confirmation.
+setUsernameModal :: SetUsernameDialog -> RemoteData String -> Maybe String -> Boolean -> Html Message
+setUsernameModal dialog host errorMsg savePending =
+  case dialog.step of
+    StepConfirm ->
+      U.modalFrame "set-username-title" "confirm"
+        (U.confirmBody "set-username-title" "このユーザー名にしますか？" (if savePending then "設定中..." else "設定") (U.hostText host) dialog.username.value BackSetUsername ConfirmSetUsername)
+    StepInput ->
+      U.modalFrame "set-username-title" "input"
+        [ U.modalTitle "set-username-title" "ユーザー名を設定"
+        , U.errorBanner errorMsg
+        , U.usernameInput "set" true dialog.username host SetSetUsernameInput
+        , U.buttonRow
+            [ U.outlineButton "キャンセル" CloseSetUsername
+            , U.primaryButton "設定" (not (isAvailable dialog.username.value dialog.username.verdict && U.hostReady host) || savePending) ReviewSetUsername
+            ]
+        ]
 
 errorBanner :: Maybe String -> Html Message
 errorBanner = case _ of
@@ -65,30 +107,39 @@ bannerSection profile =
   in
     case bannerUrl of
       Just url ->
-        HE.div [ HA.class' ("w-full h-48 bg-cover bg-center " <> T.roundedThemeLg), HA.createAttribute "style" ("background-image: url(" <> url <> ")") ]
+        HE.div [ HA.class' ("w-full h-24 sm:h-32 bg-cover bg-center " <> T.roundedThemeLg), HA.createAttribute "style" ("background-image: url(" <> url <> ")") ]
           []
       Nothing ->
-        HE.div [ HA.class' ("w-full h-48 bg-gradient-to-r from-accent/30 to-accent/10 " <> T.roundedThemeLg) ]
+        HE.div [ HA.class' ("w-full h-24 sm:h-32 bg-gradient-to-r from-accent/30 to-accent/10 " <> T.roundedThemeLg) ]
           []
 
 -- Icon + display name + @handle
-profileHeader :: forall r. { name :: String, isBot :: Boolean | r } -> Maybe ProfileResponse -> Html Message
-profileHeader acc profile =
+profileHeader :: forall r. Maybe String -> { name :: String, isBot :: Boolean | r } -> Maybe ProfileResponse -> Html Message
+profileHeader host acc profile =
   let
     displayName = case profile of
-      Just (ProfileResponse p) -> fromMaybe acc.name p.displayName
-      Nothing -> acc.name
+      Just (ProfileResponse p) -> fromMaybe (fromMaybe "名前未設定" p.username) p.displayName
+      Nothing -> "名前未設定"
     iconUrl = case profile of
       Just (ProfileResponse p) -> p.iconUrl
       Nothing -> Nothing
+    username = case profile of
+      Just (ProfileResponse p) -> p.username
+      Nothing -> Nothing
+    hasProfile = case profile of
+      Just _ -> true
+      Nothing -> false
   in
-    HE.div [ HA.class' "flex items-end gap-4 -mt-10 px-4" ]
-      [ iconView iconUrl acc.name
-      , HE.div [ HA.class' "pb-1" ]
-          [ HE.h1 [ HA.class' ("text-2xl font-bold " <> T.textHeading) ]
+    HE.div [ HA.class' "flex items-end gap-3 -mt-8 px-3" ]
+      [ iconView iconUrl displayName
+      , HE.div [ HA.class' "pb-1 min-w-0" ]
+          [ HE.h1 [ HA.class' ("text-lg sm:text-xl font-bold " <> T.textHeading) ]
               [ HE.text displayName ]
-          , HE.div [ HA.class' ("flex items-center gap-2 " <> T.textMuted) ]
-              [ HE.text ("@" <> acc.name)
+          , HE.div [ HA.class' "flex items-center gap-2 text-sm" ]
+              [ case username of
+                  Just name -> HE.span [ HA.class' ("font-mono break-all " <> T.textMuted) ] [ HE.text ("@" <> name <> maybe "" (\h -> "@" <> h) host) ]
+                  Nothing | hasProfile -> HE.span [ HA.class' T.textWarning ] [ HE.text "ユーザー名未設定" ]
+                  Nothing -> HE.text ""
               , if acc.isBot then HE.span [ HA.class' ("px-2 py-0.5 text-xs font-medium " <> T.bgAccent <> " text-white " <> T.roundedTheme) ]
                   [ HE.text "Bot" ]
                 else HE.text ""
@@ -100,15 +151,15 @@ iconView :: Maybe String -> String -> Html Message
 iconView mbUrl name =
   case mbUrl of
     Just url ->
-      HE.img [ HA.class' ("w-20 h-20 border-4 border-bg-primary object-cover " <> T.roundedThemeLg), HA.src url, HA.alt name ]
+      HE.img [ HA.class' ("w-14 h-14 sm:w-16 sm:h-16 border-4 border-bg-primary object-cover " <> T.roundedThemeLg), HA.src url, HA.alt name ]
     Nothing ->
-      HE.div [ HA.class' ("w-20 h-20 border-4 border-bg-primary flex items-center justify-center text-2xl font-bold text-white " <> T.bgAccent <> " " <> T.roundedThemeLg) ]
+      HE.div [ HA.class' ("w-14 h-14 sm:w-16 sm:h-16 border-4 border-bg-primary flex items-center justify-center text-xl font-bold text-bg-secondary " <> T.bgAccent <> " " <> T.roundedThemeLg) ]
         [ HE.text (toUpper (take 1 name)) ]
 
 -- Summary / bio (read-only) with edit button
 profileSection :: Maybe ProfileResponse -> Html Message
 profileSection profile =
-  HE.div [ HA.class' (T.surface <> " p-5") ]
+  HE.div [ HA.class' (T.surface <> " p-3 sm:p-4") ]
     [ HE.div [ HA.class' "flex items-center justify-between mb-2" ]
         [ HE.h2 [ HA.class' ("text-lg font-semibold " <> T.textHeading) ]
             [ HE.text "Profile" ]
@@ -121,7 +172,8 @@ profileSection profile =
     , case profile of
         Just (ProfileResponse p) ->
           HE.div [ HA.class' "space-y-2" ]
-            [ profileRow "Display Name" (fromMaybe "—" p.displayName)
+            [ usernameRow p.username
+            , profileRow "Display Name" (fromMaybe "—" p.displayName)
             , profileRow "Summary" (fromMaybe "—" p.summary)
             , profileRow "Icon URL" (fromMaybe "—" p.iconUrl)
             , profileRow "Banner URL" (fromMaybe "—" p.bannerUrl)
@@ -129,6 +181,36 @@ profileSection profile =
         Nothing ->
           HE.p [ HA.class' (T.textMuted <> " text-sm") ]
             [ HE.text "No profile set. Click Edit to create one." ]
+    ]
+
+-- | Set: "@name" with a lock (it can never change). Unset: a button that opens the one-time dialog.
+usernameRow :: Maybe String -> Html Message
+usernameRow = case _ of
+  Just name ->
+    profileRowHtml "ユーザー名"
+      ( HE.span [ HA.class' "flex items-center gap-1.5" ]
+          [ HE.span [ HA.class' "font-mono" ] [ HE.text ("@" <> name) ]
+          , HE.span [ HA.createAttribute "title" "変更不可", HA.createAttribute "aria-label" "変更不可" ] [ HE.text "🔒" ]
+          ]
+      )
+  Nothing ->
+    profileRowHtml "ユーザー名"
+      ( HE.button
+          [ HA.type' "button"
+          , HA.class' ("px-3 py-1 text-xs font-medium " <> T.textAccent <> " border " <> T.borderTheme <> " " <> T.roundedTheme <> " hover:opacity-80 transition-opacity")
+          , HA.createAttribute "data-dialog-return" "true"
+          , HA.onClick OpenSetUsername
+          ]
+          [ HE.text "設定" ]
+      )
+
+profileRowHtml :: String -> Html Message -> Html Message
+profileRowHtml label value =
+  HE.div [ HA.class' ("flex items-start gap-3 py-1.5 border-b last:border-0 " <> T.borderTheme) ]
+    [ HE.span [ HA.class' ("text-sm font-medium min-w-[100px] shrink-0 " <> T.textMuted) ]
+        [ HE.text label ]
+    , HE.span [ HA.class' ("text-sm break-all " <> T.textPrimary) ]
+        [ value ]
     ]
 
 profileRow :: String -> String -> Html Message
@@ -143,7 +225,7 @@ profileRow label value =
 -- Profile edit form (inline)
 editProfileSection :: EditProfileForm -> Boolean -> Html Message
 editProfileSection form savePending =
-  HE.div [ HA.class' (T.surface <> " p-5") ]
+  HE.div [ HA.class' (T.surface <> " p-3 sm:p-4") ]
     [ HE.div [ HA.class' "flex items-center justify-between mb-4" ]
         [ HE.h2 [ HA.class' ("text-lg font-semibold " <> T.textHeading) ]
             [ HE.text "Edit Profile" ]
@@ -199,7 +281,7 @@ editTextarea label value handler =
 -- Metadata key-value pairs with CRUD
 metadataSection :: Array MetadataResponse -> Maybe EditMetadataForm -> Boolean -> Html Message
 metadataSection metadata editForm savePending =
-  HE.div [ HA.class' (T.surface <> " p-5") ]
+  HE.div [ HA.class' (T.surface <> " p-3 sm:p-4") ]
     [ HE.div [ HA.class' "flex items-center justify-between mb-3" ]
         [ HE.h2 [ HA.class' ("text-lg font-semibold " <> T.textHeading) ]
             [ HE.text "Metadata" ]
@@ -294,16 +376,16 @@ editMetadataSection form savePending =
     ]
 
 -- Account settings / info
-accountInfoSection :: forall r. { id :: String, publicKey :: String, createdAt :: String | r } -> Html Message
+accountInfoSection :: forall r. { id :: String, name :: String, publicKey :: Maybe String, createdAt :: String | r } -> Html Message
 accountInfoSection acc =
-  HE.div [ HA.class' (T.surface <> " p-5") ]
+  HE.div [ HA.class' (T.surface <> " p-3 sm:p-4") ]
     [ HE.h2 [ HA.class' ("text-lg font-semibold mb-3 " <> T.textHeading) ]
         [ HE.text "Account Info" ]
     , HE.div [ HA.class' "space-y-2" ]
-        [ infoRow "ID" acc.id
-        , infoRow "Public Key" acc.publicKey
-        , infoRow "Created" (formatDate acc.createdAt)
-        ]
+        ( [ infoRow "Account 名" acc.name, infoRow "ID" acc.id ]
+            <> maybe [] (\key -> if key == "" then [] else [ infoRow "Public Key" key ]) acc.publicKey
+            <> [ infoRow "Created" (formatDate acc.createdAt) ]
+        )
     ]
 
 infoRow :: String -> String -> Html Message

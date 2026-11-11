@@ -3,7 +3,7 @@
 // ワイヤ形式は snake_case、DTO (client.ts) は camelCase。境界で相互変換する。
 //
 // Account / Profile / Metadata はすべて AccountResponse (`/api/v1/accounts`) から作る:
-//   Account   id / name / is_bot / created_at / moderation (Account 単位の鍵は返らないため publicKey は常に空文字)
+//   Account   id / name / is_bot / created_at / moderation (Account 単位の鍵は返らないため publicKey は常に null)
 //   Profile   profile_id (= nanoid)・display_name・summary・icon_url・banner_url・profile_username
 //   Metadata  fields (label / content の配列。nanoid は無いため配列内の位置 (0 始まりの index) を nanoid にする。読取のみ)
 // 書込みは Profile 属性の PATCH /api/v1/accounts/{id} だけ (fields は送らない)。Metadata の書込みは未対応 (項目 ID・revision が無く安全に書けない)。
@@ -121,8 +121,8 @@ function toAccount(wire: WireAccount): Account {
     id: wire.id,
     name: wire.name,
     isBot: wire.is_bot,
-    // AccountResponse に Account 単位の公開鍵は無い (Profile モデル移行で廃止予定)。値は持たず空文字を返す
-    publicKey: "",
+    // AccountResponse に Account 単位の公開鍵は無い (Profile モデル移行で廃止予定)。値は持たない
+    publicKey: null,
     createdAt: wire.created_at,
     moderation: wire.moderation ? toModeration(wire.moderation) : null,
     profileId: wire.profile_id,

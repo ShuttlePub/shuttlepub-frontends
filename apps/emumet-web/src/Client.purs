@@ -6,6 +6,7 @@ import App.Message (Message(..))
 import App.Route (routeCodec)
 import App.View (view)
 import Client.Update (mkUpdate)
+import Client.Dialog (installDialogFocus)
 import Data.Either (hush)
 import Data.Maybe (Maybe)
 import Effect (Effect)
@@ -28,6 +29,7 @@ main = do
     { view, update: mkUpdate nav, subscribe: [] }
 
   initThemeSelector
+  installDialogFocus
 
   -- Check session via BFF cookie (replaces sessionStorage-based InitAuth)
   send appId CheckSession

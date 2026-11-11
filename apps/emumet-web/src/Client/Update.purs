@@ -7,15 +7,17 @@ import App.Api.Auth as Auth
 import App.Api.Auth (LoginRequest(..), LoginResponse(..), SessionResponse(..))
 import App.Api.GraphQL as GraphQL
 import App.Api.GraphQL.Types (AccountResponse(..), MetadataResponse(..), ProfileResponse(..), Tristate(..))
-import App.Message (Message(..))
-import App.Model (AccountWithDetails, Model, RemoteData(..), emptyLoginForm, emptyNewAccountForm, isProtectedRoute, pageForMaybeRoute)
+import App.Message (Message(..), UsernameTarget(..))
+import App.Model (AccountWithDetails, DialogStep(..), Model, RemoteData(..), emptyLoginForm, emptyNewAccountForm, emptySetUsernameDialog, isProtectedRoute, pageForMaybeRoute)
 import App.Route (Route(..), routeCodec)
+import App.Username (Reason(..), Verdict(..), isAvailable, shouldAskServer)
 import Data.Array (filter, find)
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..), fromMaybe, isJust, isNothing)
 import Data.String.Common (trim)
+import Data.Time.Duration (Milliseconds(..))
 import Data.Tuple (Tuple(..))
-import Effect.Aff (Aff)
+import Effect.Aff (Aff, delay)
 import Effect.Class (liftEffect)
 import Flame (Update, noMessages)
 import Foreign (unsafeToForeign)
@@ -47,7 +49,7 @@ mkUpdate nav model = case _ of
           Just r -> isProtectedRoute r && isNothing model.session
           Nothing -> false
         effectiveRoute = if needsAuth then Just Login else mRoute
-        base = model { route = effectiveRoute, page = pageForMaybeRoute effectiveRoute, editProfileForm = Nothing, editMetadataForm = Nothing, errorMessage = Nothing, savePending = false }
+        base = model { route = effectiveRoute, page = pageForMaybeRoute effectiveRoute, editProfileForm = Nothing, editMetadataForm = Nothing, setUsernameDialog = Nothing, errorMessage = Nothing, savePending = false, saveGeneration = model.saveGeneration + 1 }
       in
         if needsAuth then
           Tuple base
@@ -55,11 +57,12 @@ mkUpdate nav model = case _ of
         else
           case mRoute of
             Just Home ->
-              Tuple (base { accounts = Loading }) [ pure $ Just FetchAccounts ]
+              Tuple (markHost (base { accounts = Loading })) (withHost model [ pure $ Just FetchAccounts ])
             Just (AccountDetail id) ->
-              Tuple (base { selectedAccount = Loading }) [ pure $ Just (FetchAccountDetail id) ]
+              Tuple (markHost (base { selectedAccount = Loading })) (withHost model [ pure $ Just (FetchAccountDetail id) ])
             Just AccountNew ->
-              noMessages $ base { newAccountForm = emptyNewAccountForm }
+              -- The create modal opens over the account list
+              Tuple (markHost (base { newAccountForm = emptyNewAccountForm, accounts = Loading })) (withHost model [ pure $ Just FetchAccounts ])
             Just Login ->
               -- Redirect authenticated user away from login page
               if isJust model.session then
@@ -87,11 +90,11 @@ mkUpdate nav model = case _ of
           -- Authenticated, dispatch page-specific init
           case m.route of
             Just Home ->
-              Tuple (m { accounts = Loading }) [ pure $ Just FetchAccounts ]
+              Tuple (markHost (m { accounts = Loading })) (withHost m [ pure $ Just FetchAccounts ])
             Just (AccountDetail id) ->
-              Tuple (m { selectedAccount = Loading }) [ pure $ Just (FetchAccountDetail id) ]
+              Tuple (markHost (m { selectedAccount = Loading })) (withHost m [ pure $ Just (FetchAccountDetail id) ])
             Just AccountNew ->
-              noMessages $ m { newAccountForm = emptyNewAccountForm }
+              Tuple (markHost (m { newAccountForm = emptyNewAccountForm, accounts = Loading })) (withHost m [ pure $ Just FetchAccounts ])
             _ -> noMessages m
         Just Login ->
           -- Authenticated user on login page → redirect to Home
@@ -176,11 +179,11 @@ mkUpdate nav model = case _ of
       [ fetchAccountsAff ]
 
   AccountsLoaded accs ->
-    if model.route == Just Home then noMessages $ model { accounts = Loaded accs }
+    if model.route == Just Home || model.route == Just AccountNew then noMessages $ model { accounts = Loaded accs }
     else noMessages model
 
   AccountsFailed msg ->
-    if model.route == Just Home then noMessages $ model { accounts = Failed, errorMessage = Just msg }
+    if model.route == Just Home || model.route == Just AccountNew then noMessages $ model { accounts = Failed, errorMessage = Just msg }
     else noMessages model
 
   -- Account detail: fetch account + profile + metadata (single GraphQL query)
@@ -196,26 +199,78 @@ mkUpdate nav model = case _ of
     if model.route == Just (AccountDetail id) then noMessages $ model { selectedAccount = Failed, errorMessage = Just msg }
     else noMessages model
 
-  -- New account form
+  -- Instance host (the @host part of an acct). Until it is known nothing can be confirmed.
+  InstanceHostLoaded host ->
+    noMessages $ model { instanceHost = Loaded host }
+
+  InstanceHostFailed ->
+    noMessages $ model { instanceHost = Failed }
+
+  RetryInstanceHost ->
+    if needsHost model then Tuple (markHost model) [ fetchInstanceHostAff ]
+    else noMessages model
+
+  -- New account modal
   SetNewAccountName name ->
     noMessages $ model { newAccountForm = model.newAccountForm { name = name } }
 
   SetNewAccountIsBot isBot ->
     noMessages $ model { newAccountForm = model.newAccountForm { isBot = isBot } }
 
+  SetNewAccountUsername value ->
+    -- No trimming or case folding: what is typed is what is checked and sent.
+    Tuple (model { newAccountForm = model.newAccountForm { username = { value, verdict: Unverified }, step = StepInput } })
+      (settleCommands ForNewAccount value)
+
+  ReviewNewAccount ->
+    let
+      form = model.newAccountForm
+    in
+      if trim form.name /= "" && isAvailable form.username.value form.username.verdict && hostLoaded model && not model.savePending then
+        noMessages $ model { newAccountForm = form { step = StepConfirm }, errorMessage = Nothing }
+      else noMessages model
+
+  BackNewAccount ->
+    if model.savePending then noMessages model
+    else noMessages $ model { newAccountForm = model.newAccountForm { step = StepInput }, errorMessage = Nothing }
+
+  CloseNewAccount ->
+    if model.savePending then noMessages model
+    else
+      Tuple (model { newAccountForm = emptyNewAccountForm, errorMessage = Nothing })
+        [ liftEffect (nav.pushState (unsafeToForeign {}) (print routeCodec Home)) $> Nothing ]
+
+  UsernameSettled target value ->
+    if currentUsername model target == Just value && shouldAskServer value then
+      Tuple model [ checkUsernameAff target value ]
+    else noMessages model
+
+  UsernameChecked target value verdict ->
+    noMessages $ withVerdict target value verdict model
+
+  UsernameRejected target gen owner value verdict ->
+    -- Apply only to the operation that is still current: same generation, same page/dialog,
+    -- same account and the same typed value. A late answer for anything else changes nothing
+    -- (and does not touch the pending flag of a newer operation).
+    if gen == model.saveGeneration && usernameOwner model target == owner && currentUsername model target == Just value then
+      noMessages $ (withVerdict target value verdict model) { savePending = false }
+    else noMessages model
+
   SubmitNewAccount ->
     let
       form = model.newAccountForm
       trimmedName = trim form.name
+      newGen = model.saveGeneration + 1
     in
-      if trimmedName == "" || model.savePending then noMessages model
+      if trimmedName == "" || model.savePending || not (isAvailable form.username.value form.username.verdict) || not (hostLoaded model) then noMessages model
       else
-        Tuple (model { errorMessage = Nothing, savePending = true })
-          [ submitNewAccountAff trimmedName form.isBot ]
+        Tuple (model { errorMessage = Nothing, savePending = true, saveGeneration = newGen })
+          [ submitNewAccountAff newGen trimmedName form.isBot form.username.value ]
 
-  AccountCreated (AccountResponse acc) ->
-    -- Guard: only navigate if still on AccountNew page
-    if model.route == Just AccountNew then
+  AccountCreated gen (AccountResponse acc) ->
+    -- Guard: only the current create operation, and only while still on the AccountNew page
+    if gen /= model.saveGeneration then noMessages model
+    else if model.route == Just AccountNew then
       let
         url = print routeCodec (AccountDetail acc.id)
       in
@@ -223,9 +278,90 @@ mkUpdate nav model = case _ of
           [ liftEffect (nav.pushState (unsafeToForeign {}) url) $> Nothing ]
     else noMessages $ model { savePending = false }
 
-  AccountCreateFailed msg ->
-    -- Guard: only show error if still on AccountNew page
-    if model.route == Just AccountNew then noMessages $ model { errorMessage = Just msg, savePending = false }
+  AccountCreateFailed gen msg ->
+    if gen /= model.saveGeneration then noMessages model
+    else if model.route == Just AccountNew then noMessages $ model { errorMessage = Just msg, newAccountForm = model.newAccountForm { step = StepInput }, savePending = false }
+    else noMessages $ model { savePending = false }
+
+  -- One-time username setting (existing profile without a username)
+  OpenSetUsername ->
+    case model.selectedAccount of
+      Loaded _ -> noMessages $ model { setUsernameDialog = Just emptySetUsernameDialog, errorMessage = Nothing }
+      _ -> noMessages model
+
+  CloseSetUsername ->
+    if model.savePending then noMessages model
+    else noMessages $ model { setUsernameDialog = Nothing, errorMessage = Nothing }
+
+  SetSetUsernameInput value ->
+    case model.setUsernameDialog of
+      Just dialog ->
+        Tuple (model { setUsernameDialog = Just (dialog { username = { value, verdict: Unverified }, step = StepInput }) })
+          (settleCommands ForExistingProfile value)
+      Nothing -> noMessages model
+
+  ReviewSetUsername ->
+    case model.setUsernameDialog of
+      Just dialog | isAvailable dialog.username.value dialog.username.verdict && hostLoaded model && not model.savePending ->
+        noMessages $ model { setUsernameDialog = Just (dialog { step = StepConfirm }), errorMessage = Nothing }
+      _ -> noMessages model
+
+  BackSetUsername ->
+    case model.setUsernameDialog of
+      Just dialog | not model.savePending ->
+        noMessages $ model { setUsernameDialog = Just (dialog { step = StepInput }), errorMessage = Nothing }
+      _ -> noMessages model
+
+  ConfirmSetUsername ->
+    case model.setUsernameDialog, model.selectedAccount of
+      Just dialog, Loaded d ->
+        if model.savePending || not (isAvailable dialog.username.value dialog.username.verdict) || not (hostLoaded model) then noMessages model
+        else
+          let
+            AccountResponse acc = d.account
+            newGen = model.saveGeneration + 1
+          in
+            case acc.profileId of
+              Just profileId ->
+                Tuple (model { errorMessage = Nothing, savePending = true, saveGeneration = newGen })
+                  [ setUsernameAff newGen acc.id profileId dialog.username.value ]
+              Nothing ->
+                noMessages $ model { setUsernameDialog = Just (dialog { step = StepInput }), errorMessage = Just "ユーザー名を設定できませんでした (Profile を特定できません)" }
+      _, _ -> noMessages model
+
+  UsernameSaved gen accountId profile ->
+    if gen /= model.saveGeneration then noMessages model
+    else if currentAccountId model == Just accountId then case model.selectedAccount of
+      Loaded d ->
+        let
+          AccountResponse acc = d.account
+          ProfileResponse p = profile
+        in
+          noMessages $ model
+            { selectedAccount = Loaded (d { profile = Just profile, account = AccountResponse (acc { profileUsername = p.username }) })
+            , setUsernameDialog = Nothing
+            , errorMessage = Nothing
+            , savePending = false
+            }
+      _ -> noMessages $ model { setUsernameDialog = Nothing, savePending = false }
+    else noMessages $ model { savePending = false }
+
+  UsernameSaveFailed gen accountId msg ->
+    if gen /= model.saveGeneration then noMessages model
+    else if currentAccountId model == Just accountId then
+      noMessages $ model
+        { setUsernameDialog = map (\dialog -> dialog { step = StepInput }) model.setUsernameDialog
+        , errorMessage = Just msg
+        , savePending = false
+        }
+    else noMessages $ model { savePending = false }
+
+  UsernameAlreadySet gen accountId msg ->
+    -- Someone (another tab / device) set it first: close the dialog and show the stored value.
+    if gen /= model.saveGeneration then noMessages model
+    else if currentAccountId model == Just accountId then
+      Tuple (model { setUsernameDialog = Nothing, errorMessage = Just msg, savePending = false })
+        [ pure $ Just (FetchAccountDetail accountId) ]
     else noMessages $ model { savePending = false }
 
   -- Profile editing
@@ -457,13 +593,117 @@ fetchAccountDetailAff id = do
       in
         AccountDetailLoaded id detail
 
-submitNewAccountAff :: String -> Boolean -> Aff (Maybe Message)
-submitNewAccountAff name isBot = do
-  result <- GraphQL.createAccount name isBot
+submitNewAccountAff :: Int -> String -> Boolean -> String -> Aff (Maybe Message)
+submitNewAccountAff gen name isBot username = do
+  result <- GraphQL.createAccount name isBot username
   pure $ Just $ case result of
-    Right acc -> AccountCreated acc
+    Right acc -> AccountCreated gen acc
     Left err | isUnauthorized err -> SessionExpired
-    Left err -> AccountCreateFailed (printApiError err)
+    Left err -> case createVerdictOf err of
+      Just verdict -> UsernameRejected ForNewAccount gen Nothing username verdict
+      Nothing -> AccountCreateFailed gen (printApiError err)
+
+setUsernameAff :: Int -> String -> String -> String -> Aff (Maybe Message)
+setUsernameAff gen accountId profileId username = do
+  result <- GraphQL.setProfileUsername profileId username
+  pure $ Just $ case result of
+    Right profile -> UsernameSaved gen accountId profile
+    Left err | isUnauthorized err -> SessionExpired
+    Left err@(CodedError "USERNAME_ALREADY_SET" _) -> UsernameAlreadySet gen accountId (printApiError err)
+    -- 409 the BFF could not tell apart (taken or already set): show the stored state instead of guessing
+    Left err@(CodedError "USERNAME_CONFLICT" _) -> UsernameAlreadySet gen accountId (printApiError err)
+    Left err -> case usernameVerdictOf err of
+      Just verdict -> UsernameRejected ForExistingProfile gen (Just accountId) username verdict
+      Nothing -> UsernameSaveFailed gen accountId (printApiError err)
+
+-- | The submitted value itself was refused: shown under the input, not as a banner.
+usernameVerdictOf :: ApiError -> Maybe Verdict
+usernameVerdictOf = case _ of
+  CodedError "USERNAME_INVALID_FORMAT" _ -> Just (Rejected ReasonFormat)
+  CodedError "USERNAME_RESERVED" _ -> Just (Rejected ReasonReserved)
+  CodedError "USERNAME_TAKEN" _ -> Just Taken
+  _ -> Nothing
+
+-- | Creating an account has one possible 409 cause (the name is taken), so a plain conflict is Taken there.
+createVerdictOf :: ApiError -> Maybe Verdict
+createVerdictOf = case _ of
+  CodedError "USERNAME_CONFLICT" _ -> Just Taken
+  err -> usernameVerdictOf err
+
+-- | Ask the server about a username (format / reserved words) once typing paused.
+checkUsernameAff :: UsernameTarget -> String -> Aff (Maybe Message)
+checkUsernameAff target value = do
+  result <- GraphQL.checkProfileUsername value
+  pure $ case result of
+    Left err | isUnauthorized err -> Just SessionExpired
+    Right "VALID" -> Just (UsernameChecked target value Verified)
+    Right "FORMAT" -> Just (UsernameChecked target value (Rejected ReasonFormat))
+    Right "RESERVED" -> Just (UsernameChecked target value (Rejected ReasonReserved))
+    _ -> Just (UsernameChecked target value Unavailable)
+
+-- | Wait for typing to pause, then ask (stale results are dropped by comparing the value).
+settleAff :: UsernameTarget -> String -> Aff (Maybe Message)
+settleAff target value = do
+  delay (Milliseconds 400.0)
+  pure $ Just (UsernameSettled target value)
+
+settleCommands :: UsernameTarget -> String -> Array (Aff (Maybe Message))
+settleCommands target value = if shouldAskServer value then [ settleAff target value ] else []
+
+fetchInstanceHostAff :: Aff (Maybe Message)
+fetchInstanceHostAff = do
+  result <- GraphQL.fetchInstanceHost
+  pure $ Just case result of
+    Right host -> InstanceHostLoaded host
+    Left err | isUnauthorized err -> SessionExpired
+    Left _ -> InstanceHostFailed
+
+-- | The host is fetched once per session and retried only on demand after a failure.
+needsHost :: Model -> Boolean
+needsHost model = case model.instanceHost of
+  NotAsked -> true
+  Failed -> true
+  _ -> false
+
+markHost :: Model -> Model
+markHost model = if needsHost model then model { instanceHost = Loading } else model
+
+hostLoaded :: Model -> Boolean
+hostLoaded model = case model.instanceHost of
+  Loaded _ -> true
+  _ -> false
+
+-- | Add the instance host fetch to the page's initial commands.
+withHost :: Model -> Array (Aff (Maybe Message)) -> Array (Aff (Maybe Message))
+withHost model cmds = if needsHost model then cmds <> [ fetchInstanceHostAff ] else cmds
+
+-- | The account a username dialog belongs to (Nothing for the create modal).
+usernameOwner :: Model -> UsernameTarget -> Maybe String
+usernameOwner model = case _ of
+  ForNewAccount -> Nothing
+  ForExistingProfile -> currentAccountId model
+
+-- | The value currently typed for a target (Nothing when that input is not open).
+currentUsername :: Model -> UsernameTarget -> Maybe String
+currentUsername model = case _ of
+  ForNewAccount -> if model.route == Just AccountNew then Just model.newAccountForm.username.value else Nothing
+  ForExistingProfile -> map (_.username.value) model.setUsernameDialog
+
+-- | Record a server verdict, only if it is for the value currently in the field.
+-- | A refused submission also goes back from the confirmation to the input.
+withVerdict :: UsernameTarget -> String -> Verdict -> Model -> Model
+withVerdict target value verdict model
+  | currentUsername model target /= Just value = model
+  | otherwise = case target of
+      ForNewAccount ->
+        model { newAccountForm = model.newAccountForm { username = { value, verdict }, step = backToInput verdict model.newAccountForm.step } }
+      ForExistingProfile ->
+        model { setUsernameDialog = map (\dialog -> dialog { username = { value, verdict }, step = backToInput verdict dialog.step }) model.setUsernameDialog }
+
+backToInput :: Verdict -> DialogStep -> DialogStep
+backToInput v step = case v of
+  Verified -> step
+  _ -> StepInput
 
 saveProfileAff :: Int -> String -> { displayName :: Tristate String, summary :: Tristate String, iconUrl :: Tristate String, bannerUrl :: Tristate String } -> Aff (Maybe Message)
 saveProfileAff gen accountId fields = do

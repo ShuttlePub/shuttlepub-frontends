@@ -23,9 +23,9 @@ export type Account = {
   readonly isBot: boolean;
   /**
    * Account 単位の公開鍵。Emumet の AccountResponse には無く (Profile モデル移行で Account 単位の鍵が無くなる。
-   * 旧鍵 API は P4 で廃止)、real は値を持たず常に空文字を返す。画面側の Maybe 化・非表示は画面 PR で行う
+   * 旧鍵 API は P4 で廃止)、値を持たないので常に null (画面は非表示にする)
    */
-  readonly publicKey: string;
+  readonly publicKey: string | null;
   readonly createdAt: string;
   readonly moderation: Moderation | null;
   /**

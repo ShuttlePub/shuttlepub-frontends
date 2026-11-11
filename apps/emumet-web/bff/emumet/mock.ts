@@ -65,9 +65,9 @@ export function createMockEmumetClient(options: MockEmumetClientOptions = {}): M
   }
 
   const accounts: StoredAccount[] = [
-    { id: "acc_01", name: "alice", isBot: false, publicKey: "ed25519:AAAA", createdAt: "2025-01-15T09:00:00Z", moderation: null },
-    { id: "acc_02", name: "bob", isBot: false, publicKey: "ed25519:BBBB", createdAt: "2025-02-20T14:30:00Z", moderation: null },
-    { id: "acc_03", name: "bot-news", isBot: true, publicKey: "ed25519:CCCC", createdAt: "2025-03-10T00:00:00Z", moderation: null },
+    { id: "acc_01", name: "alice", isBot: false, publicKey: null, createdAt: "2025-01-15T09:00:00Z", moderation: null },
+    { id: "acc_02", name: "bob", isBot: false, publicKey: null, createdAt: "2025-02-20T14:30:00Z", moderation: null },
+    { id: "acc_03", name: "bot-news", isBot: true, publicKey: null, createdAt: "2025-03-10T00:00:00Z", moderation: null },
   ];
 
   const profiles: Profile[] = [
@@ -150,7 +150,7 @@ export function createMockEmumetClient(options: MockEmumetClientOptions = {}): M
         id,
         name: input.name,
         isBot: input.isBot ?? false,
-        publicKey: "ed25519:MOCK_" + id,
+        publicKey: null,
         createdAt: new Date().toISOString(),
         moderation: null,
       };

@@ -6,23 +6,23 @@ import App.Api.GraphQL.Types (AccountResponse(..))
 import App.Message (Message)
 import App.Model (RemoteData(..))
 import App.Route as Route
-import ShuttlePub.UI.Theme as T
+import App.View.UsernameUi as U
 import App.View.Link as Link
-import App.Format (formatDate)
 import Data.Array (null) as Array
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe(..), fromMaybe)
 import Data.String.CodeUnits (take)
 import Data.String.Common (toUpper)
 import Flame (Html)
 import Flame.Html.Attribute as HA
 import Flame.Html.Element as HE
+import ShuttlePub.UI.Theme as T
 
-view :: RemoteData (Array AccountResponse) -> Maybe String -> Html Message
-view accounts errorMsg =
-  HE.div [ HA.class' "space-y-8" ]
+view :: RemoteData (Array AccountResponse) -> Maybe String -> RemoteData String -> Html Message
+view accounts errorMsg hostData =
+  HE.div [ HA.class' "space-y-2.5 sm:space-y-4" ]
     [ header
     , errorBanner errorMsg
-    , accountsSection accounts
+    , accountsSection accounts (U.hostText hostData)
     ]
 
 errorBanner :: Maybe String -> Html Message
@@ -35,20 +35,26 @@ errorBanner = case _ of
 header :: Html Message
 header =
   HE.div [ HA.class' "flex items-center justify-between" ]
-    [ HE.h1 [ HA.class' ("text-4xl font-bold tracking-tight " <> T.textHeading) ]
+    [ HE.h1 [ HA.class' ("text-xl sm:text-2xl font-bold tracking-tight " <> T.textHeading) ]
         [ HE.text "Accounts" ]
     , newAccountButton
     ]
 
+-- | "＋": opens the create modal (the /accounts/new page is this list with the modal open).
 newAccountButton :: Html Message
 newAccountButton =
   Link.link Route.AccountNew
-    [ HE.span [ HA.class' ("inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white " <> T.bgAccent <> " " <> T.hoverBgAccent <> " " <> T.roundedTheme <> " transition-colors") ]
-        [ HE.text "+ New Account" ]
+    [ HE.span
+        [ HA.class' ("inline-flex h-9 w-9 items-center justify-center text-xl leading-none font-medium text-bg-secondary " <> T.bgAccent <> " " <> T.hoverBgAccent <> " " <> T.roundedTheme <> " transition-colors")
+        , HA.createAttribute "role" "img"
+        , HA.createAttribute "aria-label" "New Account"
+        , HA.createAttribute "title" "New Account"
+        ]
+        [ HE.text "+" ]
     ]
 
-accountsSection :: RemoteData (Array AccountResponse) -> Html Message
-accountsSection = case _ of
+accountsSection :: RemoteData (Array AccountResponse) -> Maybe String -> Html Message
+accountsSection accounts host = case accounts of
   NotAsked ->
     HE.div [ HA.class' "hidden" ] []
   Loading ->
@@ -60,33 +66,47 @@ accountsSection = case _ of
   Loaded accs ->
     if Array.null accs then HE.div [ HA.class' ("text-center py-12 " <> T.textMuted) ]
       [ HE.text "No accounts yet. Create one to get started." ]
-    else HE.div [ HA.class' "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4" ]
-      (map accountCard accs)
+    else HE.div [ HA.class' "grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-3" ]
+      (map (accountCard host) accs)
 
-accountCard :: AccountResponse -> Html Message
-accountCard (AccountResponse acc) =
-  Link.link (Route.AccountDetail acc.id)
-    [ HE.div [ HA.class' (T.surface <> " p-5 hover:border-accent transition-colors cursor-pointer") ]
-        [ HE.div [ HA.class' "flex items-center gap-4" ]
-            [ avatar acc.name
-            , HE.div [ HA.class' "min-w-0 flex-1" ]
-                [ HE.div [ HA.class' ("text-lg font-semibold truncate " <> T.textPrimary) ]
-                    [ HE.text ("@" <> acc.name) ]
-                , HE.div [ HA.class' ("text-sm " <> T.textMuted) ]
-                    [ HE.text acc.id ]
-                ]
-            ]
-        , HE.div [ HA.class' ("mt-3 flex items-center gap-2 text-sm " <> T.textSecondary) ]
-            [ if acc.isBot then HE.span [ HA.class' ("px-2 py-0.5 text-xs font-medium " <> T.bgAccent <> " text-white " <> T.roundedTheme) ]
-                [ HE.text "Bot" ]
-              else HE.text ""
-            , HE.span [ HA.class' T.textMuted ]
-                [ HE.text (formatDate acc.createdAt) ]
-            ]
-        ]
-    ]
+-- | The @-handle is the Profile's username (never the Account name). A profile
+-- | without one shows a short "not set" label instead.
+accountCard :: Maybe String -> AccountResponse -> Html Message
+accountCard host (AccountResponse acc) =
+  let
+    title = fromMaybe (fromMaybe acc.id acc.profileUsername) acc.displayName
+  in
+    Link.link (Route.AccountDetail acc.id)
+      [ HE.div [ HA.class' (T.surface <> " p-3 sm:px-4 hover:border-accent transition-colors cursor-pointer") ]
+          [ HE.div [ HA.class' "flex items-center gap-3" ]
+              [ avatar title
+              , HE.div [ HA.class' "min-w-0 flex-1" ]
+                  [ HE.div [ HA.class' ("flex items-center truncate font-semibold " <> T.textPrimary) ]
+                      [ HE.span [ HA.class' "truncate" ] [ HE.text title ]
+                      , if acc.isBot then HE.span [ HA.class' ("ml-1.5 px-1.5 text-[0.6875rem] font-semibold text-bg-secondary " <> T.bgAccent <> " " <> T.roundedTheme) ]
+                          [ HE.text "Bot" ]
+                        else HE.text ""
+                      ]
+                  , handle host acc.profileId acc.profileUsername
+                  ]
+              ]
+          ]
+      ]
+
+handle :: Maybe String -> Maybe String -> Maybe String -> Html Message
+handle host profileId profileUsername = case profileUsername of
+  Just name ->
+    HE.div [ HA.class' ("truncate font-mono text-[0.8125rem] " <> T.textMuted) ]
+      [ HE.text ("@" <> name <> maybe' "" (\h -> "@" <> h) host) ]
+  Nothing -> case profileId of
+    Just _ -> HE.div [ HA.class' ("text-[0.8125rem] " <> T.textWarning) ] [ HE.text "ユーザー名未設定" ]
+    Nothing -> HE.text ""
+  where
+  maybe' d f = case _ of
+    Nothing -> d
+    Just x -> f x
 
 avatar :: String -> Html Message
 avatar name =
-  HE.div [ HA.class' ("w-12 h-12 flex items-center justify-center text-lg font-bold text-white " <> T.bgAccent <> " " <> T.roundedThemeLg) ]
+  HE.div [ HA.class' ("flex h-10 w-10 shrink-0 items-center justify-center text-base font-bold text-bg-secondary " <> T.bgAccent <> " " <> T.roundedThemeLg) ]
     [ HE.text (toUpper (take 1 name)) ]

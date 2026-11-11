@@ -13,8 +13,10 @@ export type DataState = "populated" | "empty";
  * as a New image. On the branch side a missing feature fails the capture.
  *  - sns-shell: the ShuttlePub SNS layout (ui-spec v6), detected by the SSR marker
  *    data-testid="app-shell".
+ *  - emumet-username-ui: the Emumet username screens (create modal, one-time set dialog, help), detected by
+ *    the SSR marker data-username-dialog on /accounts/new.
  */
-export type ScreenFeature = "sns-shell";
+export type ScreenFeature = "sns-shell" | "emumet-username-ui";
 
 const routes = [
   { app: "Booskiff", id: "login", path: "/login", authenticated: false, data: "populated" },
@@ -27,6 +29,20 @@ const routes = [
   { app: "Emumet", id: "accounts-populated", path: "/", authenticated: true, data: "populated" },
   { app: "Emumet", id: "account-new", path: "/accounts/new", authenticated: true, data: "populated" },
   { app: "Emumet", id: "account-new-filled", path: "/accounts/new", authenticated: true, data: "populated" },
+  // Username screens (profile-identity-web-adaptation): these states do not exist on a revision without
+  // the username UI, so the baseline skips them (`requires`) and compare reports them as New.
+  { app: "Emumet", id: "account-new-invalid", path: "/accounts/new", authenticated: true, data: "populated", requires: "emumet-username-ui" },
+  { app: "Emumet", id: "account-new-reserved", path: "/accounts/new", authenticated: true, data: "populated", requires: "emumet-username-ui" },
+  { app: "Emumet", id: "account-new-too-long", path: "/accounts/new", authenticated: true, data: "populated", requires: "emumet-username-ui" },
+  { app: "Emumet", id: "account-new-taken", path: "/accounts/new", authenticated: true, data: "populated", requires: "emumet-username-ui" },
+  { app: "Emumet", id: "account-new-confirm", path: "/accounts/new", authenticated: true, data: "populated", requires: "emumet-username-ui" },
+  { app: "Emumet", id: "account-detail-unset", path: "/accounts/acc_02", authenticated: true, data: "populated", requires: "emumet-username-ui" },
+  { app: "Emumet", id: "account-detail-set-modal", path: "/accounts/acc_02", authenticated: true, data: "populated", requires: "emumet-username-ui" },
+  { app: "Emumet", id: "account-detail-set-invalid", path: "/accounts/acc_02", authenticated: true, data: "populated", requires: "emumet-username-ui" },
+  { app: "Emumet", id: "account-detail-set-taken", path: "/accounts/acc_02", authenticated: true, data: "populated", requires: "emumet-username-ui" },
+  { app: "Emumet", id: "account-detail-set-confirm", path: "/accounts/acc_02", authenticated: true, data: "populated", requires: "emumet-username-ui" },
+  { app: "Emumet", id: "account-detail-already-set", path: "/accounts/acc_02", authenticated: true, data: "populated", requires: "emumet-username-ui" },
+  { app: "Emumet", id: "username-help", path: "/help/username", authenticated: true, data: "populated", requires: "emumet-username-ui" },
   { app: "Emumet", id: "account-detail", path: "/accounts/acc_01", authenticated: true, data: "populated" },
   { app: "Emumet", id: "account-detail-edit", path: "/accounts/acc_01", authenticated: true, data: "populated" },
   { app: "Emumet", id: "settings", path: "/settings", authenticated: true, data: "populated" },
@@ -49,6 +65,16 @@ const viewports = [
   { name: "desktop", width: 1280, height: 900 },
   { name: "mobile", width: 390, height: 844 },
 ] as const;
+
+/** Cases that write to the mock Emumet; the driver restarts that app afterwards so later cases see the seed data. */
+export const MUTATES_SERVER: ReadonlySet<string> = new Set(["account-detail-already-set"]);
+
+/** GraphQL error codes a case is meant to provoke (everything else fails the capture). */
+export const EXPECTED_GRAPHQL_CODES: Readonly<Record<string, readonly string[]>> = {
+  "account-new-taken": ["USERNAME_TAKEN"],
+  "account-detail-set-taken": ["USERNAME_TAKEN"],
+  "account-detail-already-set": ["USERNAME_ALREADY_SET"],
+};
 
 /** Serializable inventory shared by the current driver for both Git revisions. */
 export const SCREEN_CASES = routes.flatMap((route) => viewports.map((viewport) => ({

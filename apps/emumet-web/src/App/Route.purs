@@ -17,6 +17,7 @@ data Route
   | Settings
   | AccountNew
   | AccountDetail String
+  | UsernameHelp
 
 derive instance Generic Route _
 derive instance Eq Route
@@ -34,4 +35,5 @@ routeCodec = root $ sum
   , "Settings": prefix "settings" noArgs
   , "AccountNew": "accounts" / prefix "new" noArgs
   , "AccountDetail": "accounts" / segment
+  , "UsernameHelp": "help" / prefix "username" noArgs
   }

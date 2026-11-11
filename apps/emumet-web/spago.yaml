@@ -18,6 +18,7 @@ package:
     - arrays
     - bifunctors
     - console
+    - datetime
     - effect
     - either
     - flame
@@ -36,4 +37,6 @@ package:
     - web-events
   test:
     main: Test.Main
-    dependencies: []
+    dependencies:
+      - exceptions
+      - unsafe-coerce

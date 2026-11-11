@@ -93,17 +93,16 @@ describe("(b) createAccount と username", () => {
     expect((result.data?.["createAccount"] as { profileId: string | null }).profileId).not.toBeNull();
   });
 
-  test("username 省略 (旧経路) は従来どおり成功する (画面実装 PR まで schema 上は任意)。Profile は作られ、username は未設定 (profileId あり・profileUsername null)", async () => {
-    const result = await run(CREATE, await authenticated(createMockEmumetClient()), { input: { name: "legacy" } });
-    expect(result.errors).toBeUndefined();
-    expect(result.data?.["createAccount"]).toMatchObject({ name: "legacy", profileUsername: null });
-    expect((result.data?.["createAccount"] as { profileId: string | null }).profileId).not.toBeNull();
-  });
-
-  test("username: null は省略と同じ (送らない)", async () => {
-    const result = await run(CREATE, await authenticated(createMockEmumetClient()), { input: { name: "legacy", username: null } });
-    expect(result.errors).toBeUndefined();
-    expect(result.data?.["createAccount"]).toMatchObject({ profileUsername: null });
+  test("username は必須: 省略・null は GraphQL の検証エラーで、Emumet には何も送らない", async () => {
+    const emumet = createMockEmumetClient();
+    const before = (await emumet.listAccounts()).items.length;
+    const context = await authenticated(emumet);
+    for (const input of [{ name: "legacy" }, { name: "legacy", username: null }]) {
+      const result = await run(CREATE, context, { input });
+      expect(result.data ?? null).toBeNull();
+      expect(result.errors?.[0]?.message).toContain("username");
+    }
+    expect((await emumet.listAccounts()).items).toHaveLength(before);
   });
 
   test("拒否は種別ごとのコード: 形式 / 予約語 / 重複。何も作られない", async () => {
@@ -219,10 +218,6 @@ describe("(c') 上流エラーの写像 (setProfileUsername / username 付き cr
     });
   }
 
-  test("createAccount (username 無し) の既存のエラー写像は変えない: 400 は従来どおり INTERNAL_SERVER_ERROR", async () => {
-    const result = await run(CREATE, await authenticated(failingClient(new EmumetApiError(400, "x"))), { input: { name: "x" } });
-    expect(code(result)).toBe("INTERNAL_SERVER_ERROR");
-  });
 });
 
 describe("(d) checkProfileUsername — 規則だけの判定", () => {
@@ -244,6 +239,48 @@ describe("(d) checkProfileUsername — 規則だけの判定", () => {
     expect(await check("alice\n")).toBe("FORMAT");
     expect(await check("admin\n")).toBe("FORMAT");
     expect(calls).toEqual([]);
+  });
+});
+
+describe("(d') instanceHost — 公開ホストは明示設定が契約 (API 接続先への暗黙フォールバックなし)", () => {
+  const KEYS = ["EMUMET_PUBLIC_HOST", "EMUMET_API_URL", "USE_MOCK"] as const;
+  async function withEnv<T>(env: Partial<Record<(typeof KEYS)[number], string>>, body: () => Promise<T>): Promise<T> {
+    const saved = Object.fromEntries(KEYS.map((key) => [key, process.env[key]]));
+    for (const key of KEYS) delete process.env[key];
+    Object.assign(process.env, env);
+    try {
+      return await body();
+    } finally {
+      for (const key of KEYS) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+    }
+  }
+  const ask = async () => run("{ instanceHost }", await authenticated(createMockEmumetClient()));
+
+  test("EMUMET_PUBLIC_HOST をそのまま返す (port 付きも可)", async () => {
+    expect((await withEnv({ EMUMET_PUBLIC_HOST: "emumet.example.com", USE_MOCK: "false" }, ask)).data?.["instanceHost"]).toBe("emumet.example.com");
+    expect((await withEnv({ EMUMET_PUBLIC_HOST: " localhost:8080 ", USE_MOCK: "false" }, ask)).data?.["instanceHost"]).toBe("localhost:8080");
+  });
+
+  test("real で未設定なら EMUMET_API_URL のホストを使わず INSTANCE_HOST_NOT_CONFIGURED", async () => {
+    const result = await withEnv({ USE_MOCK: "false", EMUMET_API_URL: "http://internal-emumet.cluster.local:8080" }, ask);
+    expect(result.data).toBeNull();
+    expect(code(result)).toBe("INSTANCE_HOST_NOT_CONFIGURED");
+  });
+
+  test("形式が host[:port] でない設定 (scheme / path / 空白混じり) も取得失敗", async () => {
+    for (const bad of ["https://emumet.example.com", "emumet.example.com/", "emu met.example.com", "emumet.example.com:99999x"]) {
+      const result = await withEnv({ USE_MOCK: "false", EMUMET_PUBLIC_HOST: bad }, ask);
+      expect(code(result), bad).toBe("INSTANCE_HOST_NOT_CONFIGURED");
+    }
+  });
+
+  test("mock (USE_MOCK 未設定 = index.ts の既定も mock) は設定が無ければ例示ホスト、あればそちら", async () => {
+    expect((await withEnv({}, ask)).data?.["instanceHost"]).toBe("emumet.example");
+    expect((await withEnv({ USE_MOCK: "true" }, ask)).data?.["instanceHost"]).toBe("emumet.example");
+    expect((await withEnv({ USE_MOCK: "true", EMUMET_PUBLIC_HOST: "mock.example" }, ask)).data?.["instanceHost"]).toBe("mock.example");
   });
 });
 
@@ -314,14 +351,14 @@ describe("(f) 現行 UI と同じ選択項目が実 Emumet の AccountResponse (
     return authenticated(createRealEmumetClient({ baseUrl: "http://emumet.test" }, "tok"));
   }
 
-  test("createAccount (id name isBot publicKey createdAt, username なし) は成功し、publicKey は空文字 (値を持たない)", async () => {
+  test("createAccount (id name isBot publicKey createdAt, username 付き) は成功し、publicKey は null (値を持たない)", async () => {
     stubFetch(() => jsonResponse(201, wireAccount));
     const result = await run(
-      'mutation { createAccount(input: { name: "real", isBot: false }) { id name isBot publicKey createdAt } }',
+      'mutation { createAccount(input: { name: "real", isBot: false, username: "real-user" }) { id name isBot publicKey createdAt } }',
       await realContext(),
     );
     expect(result.errors).toBeUndefined();
-    expect(result.data?.["createAccount"]).toEqual({ id: "acc_r1", name: "real", isBot: false, publicKey: "", createdAt: "2026-11-11T00:00:00Z" });
+    expect(result.data?.["createAccount"]).toEqual({ id: "acc_r1", name: "real", isBot: false, publicKey: null, createdAt: "2026-11-11T00:00:00Z" });
   });
 
   test("一覧・詳細 (profile / metadata を含む) は旧 /profiles・/metadata を使わず AccountResponse だけから作られる", async () => {

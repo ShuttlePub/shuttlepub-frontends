@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { createBooskiffClient } from "../../../booskiff-web/bff/booskiff/real.ts";
 import { startBooskiffStub } from "./booskiff-stub.ts";
 import { FIXED_TIME, SCREEN_CASES } from "./cases.ts";
-import { captureSide, featuresInShuttlePubHtml, selectCases } from "./features.ts";
+import { captureSide, featuresInEmumetHtml, featuresInShuttlePubHtml, selectCases } from "./features.ts";
 import { AVATAR_SVG, BANNER_SVG, BILLING, FILES, FOLDERS, localImage } from "./fixtures.ts";
 import { appExists, stopChild } from "./servers.ts";
 
@@ -14,7 +14,7 @@ test("screen inventory covers every app and state at desktop/mobile sizes with s
   const names = SCREEN_CASES.map((item) => item.filename);
   // Then
   expect(new Set(names).size).toBe(SCREEN_CASES.length);
-  expect(SCREEN_CASES).toHaveLength(42);
+  expect(SCREEN_CASES).toHaveLength(66);
   for (const item of SCREEN_CASES) {
     expect(item.filename).toMatch(/^(Booskiff|Emumet|ShuttlePub)-[A-Za-z0-9-]+\.png$/);
     expect(item.path).toMatch(/^\/(?!\/)/);
@@ -59,6 +59,23 @@ test("only the baseline side may skip cases whose screen feature is missing", ()
   expect(captureSide(undefined)).toBe("branch");
   expect(captureSide("baseline")).toBe("baseline");
   expect(() => captureSide("main")).toThrow();
+});
+
+test("username screens are Emumet-only added coverage that a baseline without the username UI skips", () => {
+  // Given
+  const emumet = SCREEN_CASES.filter((item) => item.app === "Emumet");
+  const oldHtml = '<main id="app"><div class="space-y-8"><h1>New Account</h1></div></main>';
+  const newHtml = '<main id="app"><dialog data-username-dialog="true" data-step="input"></dialog></main>';
+  // When
+  const baseline = selectCases(emumet, featuresInEmumetHtml(oldHtml), "baseline");
+  // Then
+  expect(featuresInEmumetHtml(oldHtml).size).toBe(0);
+  expect([...featuresInEmumetHtml(newHtml)]).toEqual(["emumet-username-ui"]);
+  expect(baseline.skipped.length).toBe(24);
+  expect(baseline.skipped.every((item) => item.authenticated)).toBe(true);
+  expect(baseline.capture.map((item) => item.id)).toContain("account-new");
+  expect(() => selectCases(emumet, featuresInEmumetHtml(oldHtml), "branch")).toThrow(/emumet-username-ui/);
+  expect(selectCases(emumet, featuresInEmumetHtml(newHtml), "branch").skipped).toEqual([]);
 });
 
 test("app availability distinguishes a missing app directory from an existing app", async () => {
