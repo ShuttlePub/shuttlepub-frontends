@@ -5,6 +5,7 @@ import App.Model (Model, PageModel(..))
 import App.View.AccountDetail as AccountDetail
 import App.View.AccountNew as AccountNew
 import App.View.Accounts as Accounts
+import App.View.Admin as Admin
 import App.View.Layout as Layout
 import App.View.Login as Login
 import ShuttlePub.UI.NotFound as NotFound
@@ -19,5 +20,7 @@ view model = Layout.page model
       Settings -> Settings.view model
       AccountNew -> AccountNew.view model.newAccountForm model.errorMessage model.savePending
       AccountDetail -> AccountDetail.view model.selectedAccount model.editProfileForm model.editMetadataForm model.errorMessage model.savePending
+      AdminRegistration -> Admin.registrationPage model
+      AdminWebhook -> Admin.webhookPage model
       NotFound -> NotFound.notFound
   ]

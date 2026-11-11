@@ -2,6 +2,7 @@ module Server where
 
 import Prelude
 
+import App.Admin.Types (emptyAdminModel)
 import App.Message (Message)
 import App.Model (Model, RemoteData(..), pageForMaybeRoute)
 import App.Route (routeCodec)
@@ -26,7 +27,7 @@ renderPage urlPath = do
   let
     mRoute = hush $ parse routeCodec urlPath
     page = pageForMaybeRoute mRoute
-    model = { route: mRoute, page, isHydrated: false, session: Nothing, loginForm: { identifier: "", password: "" }, accounts: NotAsked, selectedAccount: NotAsked, newAccountForm: { name: "", isBot: false }, editProfileForm: Nothing, editMetadataForm: Nothing, errorMessage: Nothing, savePending: false, saveGeneration: 0 }
+    model = { route: mRoute, page, isHydrated: false, session: Nothing, loginForm: { identifier: "", password: "" }, accounts: NotAsked, selectedAccount: NotAsked, newAccountForm: { name: "", isBot: false }, editProfileForm: Nothing, editMetadataForm: Nothing, errorMessage: Nothing, savePending: false, saveGeneration: 0, admin: emptyAdminModel }
     appView = view model
     stateEl = mkStateElement model
     withState = injectState stateEl appView

@@ -8,6 +8,8 @@ import { PROTECTION_LIST_FIXTURES } from "./registration-gate-fixtures.ts";
 import type { MockRegistrationGateOptions } from "./registration-gate-mock.ts";
 
 export const REGISTRATION_GATE_SCENARIOS = {
+  /** mock の起動直後と同じ (未開放・保護なし・通知なし・Webhook 未設定・管理者)。一般画面の撮影はこれに戻してから行う */
+  default: {},
   /** 1. 未開放・条件未達 (メール認証は未確認、BOT 保護は未設定) */
   "not-opened": {
     fixture: "not_ready_unverified",

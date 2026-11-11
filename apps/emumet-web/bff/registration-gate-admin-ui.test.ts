@@ -311,6 +311,7 @@ describe("stateful mock: 保護・Webhook・呼び出し者", () => {
 
   test("画面シナリオはすべて矛盾なく読み込め、期待する状態になる", () => {
     const expected: Record<string, string> = {
+      default: "NOT_OPENED",
       "not-opened": "NOT_OPENED",
       open: "OPEN",
       "open-degraded": "OPEN",

@@ -7,7 +7,9 @@ import App.Api.Auth as Auth
 import App.Api.Auth (LoginRequest(..), LoginResponse(..), SessionResponse(..))
 import App.Api.GraphQL as GraphQL
 import App.Api.GraphQL.Types (AccountResponse(..), MetadataResponse(..), ProfileResponse(..), Tristate(..))
+import App.Admin.Types (emptyAdminModel)
 import App.Message (Message(..))
+import Client.Admin (enterRoute, fetchViewerAff, updateAdmin)
 import App.Model (AccountWithDetails, Model, RemoteData(..), emptyLoginForm, emptyNewAccountForm, isProtectedRoute, pageForMaybeRoute)
 import App.Route (Route(..), routeCodec)
 import Data.Array (filter, find)
@@ -30,7 +32,28 @@ currentAccountId model = case model.selectedAccount of
   _ -> Nothing
 
 mkUpdate :: PushStateInterface -> Update Model Message
-mkUpdate nav model = case _ of
+mkUpdate nav model msg = case msg of
+  Admin adminMsg -> updateAdmin model adminMsg
+  SessionLoaded _ ->
+    -- 管理画面の導線 (nav の「管理」・ベル) を出すかのヒントを取る。権限判断の正本は各管理 API
+    let
+      Tuple m fx = baseUpdate nav model msg
+    in
+      Tuple m (fx <> [ fetchViewerAff ])
+  UrlChanged _ | model.isHydrated ->
+    let
+      Tuple m fx = baseUpdate nav model msg
+    in
+      Tuple (m { admin = m.admin { bellOpen = false, modal = Nothing, error = Nothing } }) (fx <> enterRoute m.route m)
+  SessionExpired -> resetAdmin (baseUpdate nav model msg)
+  LogoutDone -> resetAdmin (baseUpdate nav model msg)
+  _ -> baseUpdate nav model msg
+
+resetAdmin :: Tuple Model (Array (Aff (Maybe Message))) -> Tuple Model (Array (Aff (Maybe Message)))
+resetAdmin (Tuple m fx) = Tuple (m { admin = emptyAdminModel }) fx
+
+baseUpdate :: PushStateInterface -> Update Model Message
+baseUpdate nav model = case _ of
   Navigate route ->
     let
       url = print routeCodec route
@@ -415,6 +438,9 @@ mkUpdate nav model = case _ of
     if gen /= model.saveGeneration then noMessages model
     else if currentAccountId model == Just accountId then noMessages $ model { errorMessage = Just msg, savePending = false }
     else noMessages $ model { savePending = false }
+
+  -- mkUpdate が先に処理する
+  Admin _ -> noMessages model
 
 -- Helper: find metadata by nanoid
 findMetadata :: String -> Array MetadataResponse -> Maybe MetadataResponse

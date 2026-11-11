@@ -1,0 +1,304 @@
+-- | 登録ゲート管理 (管理者のみ) の update。認可の正本は BFF/Emumet で、ここは導線と表示の状態だけを持つ。
+module Client.Admin
+  ( updateAdmin
+  , fetchViewerAff
+  , enterRoute
+  ) where
+
+import Prelude
+
+import App.Admin.Text as Text
+import App.Admin.Time (focusById)
+import App.Admin.Types (AdminModel, AdminMsg(..), Gate, GateCommand(..), GateError(..), Loadable(..), AdminModal(..))
+import App.Api.RegistrationGate as Api
+import App.Message (Message(..))
+import App.Model (Model)
+import App.Route (Route, isAdminRoute)
+import Data.Array (cons, delete, elem, filter)
+import Data.Either (Either(..))
+import Data.Maybe (Maybe(..))
+import Data.Time.Duration (Milliseconds(..))
+import Data.Tuple (Tuple(..))
+import Effect.Aff (Aff, delay)
+import Effect.Class (liftEffect)
+
+type Effects = Array (Aff (Maybe Message))
+
+-- | 未認証は既存の SessionExpired (再ログイン) に流し、それ以外は管理画面のエラーとして扱う
+deliver :: forall a. Aff (Either GateError a) -> (a -> AdminMsg) -> (GateError -> AdminMsg) -> Aff (Maybe Message)
+deliver call ok ng = do
+  result <- call
+  pure $ Just $ case result of
+    Left Unauthenticated -> SessionExpired
+    Left err -> Admin (ng err)
+    Right value -> Admin (ok value)
+
+fetchViewerAff :: Aff (Maybe Message)
+fetchViewerAff = do
+  result <- Api.fetchViewerIsAdmin
+  pure $ Just $ case result of
+    Left Unauthenticated -> SessionExpired
+    Left _ -> Admin ViewerFailed
+    Right isAdmin -> Admin (ViewerLoaded isAdmin)
+
+fetchGateAff :: Aff (Maybe Message)
+fetchGateAff = deliver Api.fetchGate GateLoaded GateLoadFailed
+
+fetchProtectionsAff :: Aff (Maybe Message)
+fetchProtectionsAff = deliver Api.fetchProtections ProtectionsLoaded ProtectionsLoadFailed
+
+fetchWebhookAff :: Aff (Maybe Message)
+fetchWebhookAff = deliver Api.fetchWebhook WebhookLoaded WebhookLoadFailed
+
+fetchNotificationsAff :: Aff (Maybe Message)
+fetchNotificationsAff = deliver Api.fetchNotifications NotificationsLoaded NotificationsFailed
+
+refreshEffects :: Effects
+refreshEffects = [ fetchGateAff, fetchProtectionsAff, fetchWebhookAff, fetchNotificationsAff ]
+
+-- | 管理画面の Route に入ったとき (管理者と分かっている場合だけ取得する)
+enterRoute :: Maybe Route -> Model -> Effects
+enterRoute route model = case route of
+  Just r | isAdminRoute r && model.admin.isAdmin == Just true -> refreshEffects
+  _ -> []
+
+setAdmin :: Model -> AdminModel -> Model
+setAdmin model admin = model { admin = admin }
+
+-- | 取得に失敗しても、取得済みの値は消さない (強制開放中の警告帯を画面遷移・再取得で消さない)
+keepLoaded :: forall a. Loadable a -> GateError -> Loadable a
+keepLoaded current err = case current of
+  Loaded value -> Loaded value
+  _ -> LoadFailed err
+
+withGate :: Model -> (Gate -> Tuple Model Effects) -> Tuple Model Effects
+withGate model f = case model.admin.gate of
+  Loaded gate | not model.admin.pending -> f gate
+  _ -> Tuple model []
+
+showToast :: String -> AdminModel -> Tuple AdminModel Effects
+showToast text admin =
+  let
+    id = admin.toastSeq + 1
+  in
+    Tuple (admin { toast = Just { id, text }, toastSeq = id })
+      [ delay (Milliseconds 2200.0) $> Just (Admin (DismissToast id)) ]
+
+focusLater :: String -> Aff (Maybe Message)
+focusLater id = do
+  delay (Milliseconds 0.0)
+  liftEffect (focusById id)
+  pure Nothing
+
+commandToast :: GateCommand -> Maybe String
+commandToast = case _ of
+  OpenGate -> Just Text.toastOpened
+  CloseGate -> Just Text.toastStopped
+  RevokeOverride -> Just Text.toastOverrideRevoked
+  EnableOverride -> Nothing
+
+-- | 失敗後に最新の状態を取り直すべきか (競合・前提条件は状態が変わっている)
+refetchOnError :: GateError -> Boolean
+refetchOnError = case _ of
+  RevisionConflict -> true
+  PreconditionFailed -> true
+  NotFound -> true
+  WebhookNotConfigured -> true
+  _ -> false
+
+updateAdmin :: Model -> AdminMsg -> Tuple Model Effects
+updateAdmin model msg =
+  let
+    admin = model.admin
+    noFx m = Tuple m []
+  in
+    case msg of
+      ViewerLoaded isAdmin ->
+        let
+          m = setAdmin model (admin { isAdmin = Just isAdmin })
+        in
+          if isAdmin then Tuple m ([ fetchNotificationsAff ] <> enterRouteEffects m)
+          else noFx m
+
+      ViewerFailed ->
+        -- 導線を出すかのヒントが取れないときは出さない (fail closed)
+        noFx $ setAdmin model (admin { isAdmin = Just false })
+
+      RefreshAdmin ->
+        Tuple (setAdmin model (admin { error = Nothing })) refreshEffects
+
+      GateLoaded gate ->
+        noFx $ setAdmin model (admin { gate = Loaded gate })
+
+      GateLoadFailed err ->
+        noFx $ setAdmin model (admin { gate = keepLoaded admin.gate err, error = Just err })
+
+      ProtectionsLoaded list ->
+        noFx $ setAdmin model (admin { protections = Loaded list })
+
+      ProtectionsLoadFailed err ->
+        noFx $ setAdmin model (admin { protections = keepLoaded admin.protections err, error = Just err })
+
+      WebhookLoaded webhook ->
+        noFx $ setAdmin model (admin { webhook = Loaded webhook })
+
+      WebhookLoadFailed err ->
+        noFx $ setAdmin model (admin { webhook = keepLoaded admin.webhook err, error = Just err })
+
+      NotificationsLoaded page ->
+        noFx $ setAdmin model (admin { notifications = page.items, unread = page.unread })
+
+      NotificationsFailed err ->
+        noFx $ setAdmin model (admin { error = Just err })
+
+      ToggleBell ->
+        if admin.bellOpen then noFx $ setAdmin model (admin { bellOpen = false })
+        else Tuple (setAdmin model (admin { bellOpen = true })) [ fetchNotificationsAff ]
+
+      CloseBell ->
+        noFx $ setAdmin model (admin { bellOpen = false })
+
+      MarkRead id ->
+        case filter (\n -> n.id == id && not n.read) admin.notifications of
+          [] -> noFx model
+          _ -> Tuple model [ deliver (Api.markRead [ id ]) (UnreadUpdated [ id ]) MarkReadFailed ]
+
+      MarkAllRead ->
+        if admin.unread == 0 then noFx model
+        else Tuple model [ deliver Api.markAllRead (UnreadUpdated (map _.id admin.notifications)) MarkReadFailed ]
+
+      UnreadUpdated ids count ->
+        noFx $ setAdmin model
+          ( admin
+              { notifications = map (\n -> if elem n.id ids then n { read = true } else n) admin.notifications
+              , unread = count
+              }
+          )
+
+      MarkReadFailed err ->
+        noFx $ setAdmin model (admin { error = Just err })
+
+      RunCommand command ->
+        withGate model \gate ->
+          let
+            call = case command of
+              OpenGate -> Api.openGate gate.revision
+              CloseGate -> Api.closeGate gate.revision
+              RevokeOverride -> Api.revokeOverride gate.revision
+              EnableOverride -> Api.enableOverride gate.revision
+          in
+            Tuple (setAdmin model (admin { pending = true, error = Nothing }))
+              [ deliver call (CommandDone command) CommandFailed ]
+
+      CommandDone command gate ->
+        let
+          base = admin { gate = Loaded gate, pending = false, modal = Nothing, overrideAck = false, error = Nothing }
+          Tuple withToast toastFx = case commandToast command of
+            Just text -> showToast text base
+            Nothing -> Tuple base []
+        in
+          Tuple (setAdmin model withToast) (toastFx <> [ fetchNotificationsAff ])
+
+      CommandFailed err ->
+        Tuple (setAdmin model (admin { pending = false, modal = Nothing, overrideAck = false, error = Just err }))
+          (if refetchOnError err then [ fetchGateAff, fetchProtectionsAff ] else [])
+
+      RequestRevoke ->
+        withGate model \gate ->
+          if gate.minimumMet then updateAdmin model (RunCommand RevokeOverride)
+          else Tuple (setAdmin model (admin { modal = Just RevokeModal })) [ focusLater "revoke-cancel" ]
+
+      ConfirmRevoke ->
+        withGate model \gate ->
+          let
+            -- 条件を満たさない解除は「停止中 (管理者による停止)」にする (親判断 question-c33d7e52 (d)):
+            -- 先に閉じてから解除するので、解除の間に無保護で開放のまま残らない
+            call =
+              if gate.adminOpen then do
+                closed <- Api.closeGate gate.revision
+                case closed of
+                  Right g -> Api.revokeOverride g.revision
+                  Left err -> pure (Left err)
+              else Api.revokeOverride gate.revision
+          in
+            Tuple (setAdmin model (admin { pending = true, modal = Nothing, error = Nothing }))
+              [ deliver call (CommandDone RevokeOverride) CommandFailed ]
+
+      OpenOverrideModal ->
+        Tuple (setAdmin model (admin { modal = Just OverrideModal, overrideAck = false })) [ focusLater "override-ack" ]
+
+      SetOverrideAck checked ->
+        noFx $ setAdmin model (admin { overrideAck = checked })
+
+      ConfirmOverride ->
+        if admin.overrideAck then
+          withGate model \gate ->
+            Tuple (setAdmin model (admin { pending = true, modal = Nothing, error = Nothing }))
+              [ deliver (Api.enableOverride gate.revision) (CommandDone EnableOverride) CommandFailed ]
+        else noFx model
+
+      CloseModal ->
+        noFx $ setAdmin model (admin { modal = Nothing, overrideAck = false })
+
+      Verify protection ->
+        if elem protection admin.verifying then noFx model
+        else
+          Tuple (setAdmin model (admin { verifying = cons protection admin.verifying, error = Nothing }))
+            [ deliver (Api.verifyProtection protection) (Verified protection) (VerifyFailed protection) ]
+
+      Verified protection readiness ->
+        let
+          replace = case admin.protections of
+            Loaded list -> Loaded (map (\p -> if p.protection == protection then readiness else p) list)
+            other -> other
+        in
+          Tuple (setAdmin model (admin { protections = replace, verifying = delete protection admin.verifying }))
+            [ fetchGateAff ]
+
+      VerifyFailed protection err ->
+        noFx $ setAdmin model (admin { verifying = delete protection admin.verifying, error = Just err })
+
+      TestWebhook ->
+        if admin.testing then noFx model
+        else
+          Tuple (setAdmin model (admin { testing = true, error = Nothing }))
+            [ deliver Api.testWebhook WebhookTested WebhookTestFailed ]
+
+      WebhookTested delivered ->
+        let
+          Tuple next fx = showToast (if delivered then Text.toastTestSent else Text.toastTestFailed) (admin { testing = false })
+        in
+          Tuple (setAdmin model next) fx
+
+      WebhookTestFailed err ->
+        Tuple (setAdmin model (admin { testing = false, error = Just err }))
+          (if refetchOnError err then [ fetchWebhookAff ] else [])
+
+      RetryDelivery eventId ->
+        if elem eventId admin.retrying then noFx model
+        else
+          Tuple (setAdmin model (admin { retrying = cons eventId admin.retrying, error = Nothing }))
+            [ deliver (Api.retryDelivery eventId) (const (DeliveryRetried eventId)) (DeliveryRetryFailed eventId) ]
+
+      DeliveryRetried eventId ->
+        let
+          Tuple next fx = showToast Text.toastRetried (admin { retrying = filter (_ /= eventId) admin.retrying })
+        in
+          Tuple (setAdmin model next) (fx <> [ fetchWebhookAff ])
+
+      DeliveryRetryFailed eventId err ->
+        Tuple (setAdmin model (admin { retrying = filter (_ /= eventId) admin.retrying, error = Just err }))
+          [ fetchWebhookAff ]
+
+      DismissToast id ->
+        case admin.toast of
+          Just toast | toast.id == id -> noFx $ setAdmin model (admin { toast = Nothing })
+          _ -> noFx model
+
+      KeyPressed key ->
+        if key /= "Escape" then noFx model
+        else if admin.modal /= Nothing then noFx $ setAdmin model (admin { modal = Nothing, overrideAck = false })
+        else if admin.bellOpen then Tuple (setAdmin model (admin { bellOpen = false })) [ focusLater "notification-bell" ]
+        else noFx model
+  where
+  enterRouteEffects m = enterRoute m.route m

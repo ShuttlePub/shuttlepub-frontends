@@ -1,5 +1,6 @@
 module App.Message where
 
+import App.Admin.Types (AdminMsg)
 import App.Api.GraphQL.Types (AccountResponse, MetadataResponse, ProfileResponse)
 import App.Model (AccountWithDetails, SessionInfo)
 import App.Route (Route)
@@ -57,3 +58,5 @@ data Message
   | DeleteMetadata String
   | MetadataDeleted Int String String -- generation, accountId, nanoid
   | MetadataDeleteFailed Int String String -- generation, accountId, errorMsg
+  -- Registration gate admin (D15)
+  | Admin AdminMsg
