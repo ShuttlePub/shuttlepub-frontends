@@ -17,6 +17,9 @@ data Route
   | Settings
   | AccountNew
   | AccountDetail String
+  -- 管理画面 (管理者のみ。導線は管理者にだけ出し、非管理者には 404 を表示する)
+  | AdminRegistration
+  | AdminWebhook
 
 derive instance Generic Route _
 derive instance Eq Route
@@ -34,4 +37,13 @@ routeCodec = root $ sum
   , "Settings": prefix "settings" noArgs
   , "AccountNew": "accounts" / prefix "new" noArgs
   , "AccountDetail": "accounts" / segment
+  , "AdminRegistration": "admin" / prefix "registration" noArgs
+  , "AdminWebhook": "admin" / prefix "webhook" noArgs
   }
+
+-- | 管理画面の Route か (強制開放中の警告帯はこの範囲にだけ出す)
+isAdminRoute :: Route -> Boolean
+isAdminRoute = case _ of
+  AdminRegistration -> true
+  AdminWebhook -> true
+  _ -> false

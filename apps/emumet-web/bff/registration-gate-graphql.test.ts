@@ -301,7 +301,7 @@ describe("(c) 状態とエラーは別の型", () => {
   });
 });
 
-describe("(d) secret 非表示・Webhook は未接続", () => {
+describe("(d) secret 非表示・Webhook は配送状態と操作のみ", () => {
   const registrationTypes = () =>
     Object.values(schema.getTypeMap()).filter(
       (type): type is GraphQLObjectType | GraphQLEnumType => type.name.startsWith("Registration") && (isObjectType(type) || isEnumType(type)),
@@ -313,9 +313,23 @@ describe("(d) secret 非表示・Webhook は未接続", () => {
     expect(names.filter((name) => /secret|signature|token|password|url|endpoint|hmac|credential/i.test(name))).toEqual([]);
   });
 
-  test("E15w の契約が公開されるまで Webhook は schema に無い (架空の成功を返さない)", () => {
+  test("Webhook は配送状態・テスト送信・再試行だけを扱う (endpoint・secret の登録・編集はサーバー設定のみで schema に無い)", () => {
     const fields = [...Object.keys(schema.getQueryType()?.getFields() ?? {}), ...Object.keys(schema.getMutationType()?.getFields() ?? {})];
-    expect(fields.filter((name) => /webhook/i.test(name))).toEqual([]);
+    expect(fields.filter((name) => /webhook/i.test(name)).sort()).toEqual([
+      "registrationWebhook",
+      "retryRegistrationWebhook",
+      "sendRegistrationWebhookTest",
+    ]);
+    const status = schema.getType("RegistrationWebhookStatus");
+    expect(isObjectType(status) ? Object.keys(status.getFields()).sort() : []).toEqual([
+      "configuration",
+      "counts",
+      "destinationHost",
+      "issue",
+      "lastFailureAt",
+      "lastSuccessAt",
+      "recentDeliveries",
+    ]);
   });
 });
 

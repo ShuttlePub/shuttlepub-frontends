@@ -42,6 +42,32 @@ const routes = [
   { app: "Emumet", id: "account-detail-edit", path: "/accounts/acc_01", authenticated: true, data: "populated" },
   { app: "Emumet", id: "settings", path: "/settings", authenticated: true, data: "populated" },
   { app: "Emumet", id: "not-found", path: "/visual-route-not-found", authenticated: true, data: "populated" },
+  // Emumet D15 registration gate admin (ui-spec "mock A v5"). `scenario` selects the built-in mock state through the
+  // mock-only /__mock/registration-gate/scenario endpoint before the page loads; every other Emumet case resets to
+  // "default". main has no admin routes, so its capture of these paths is the 404 page.
+  ...([
+    ["admin-registration-not-opened", "not-opened"],
+    ["admin-registration-open", "open"],
+    ["admin-registration-open-degraded", "open-degraded"],
+    ["admin-registration-suspended", "suspended"],
+    ["admin-registration-auto-stopped", "auto-stopped"],
+    ["admin-registration-auto-stopped-recovered", "auto-stopped-recovered"],
+    ["admin-registration-admin-stopped", "admin-stopped"],
+    ["admin-registration-override", "override"],
+    ["admin-registration-override-ready", "override-ready"],
+    ["admin-registration-enforcement-lost", "enforcement-lost"],
+    ["admin-override-confirm", "not-opened"],
+    ["admin-revoke-confirm", "override"],
+    ["admin-notifications", "open-degraded"],
+    ["admin-notifications-more", "notifications-many"],
+    ["admin-not-found-for-member", "member"],
+  ] as const).map(([id, scenario]) => ({ app: "Emumet", id, path: "/admin/registration", authenticated: true, data: "populated", scenario }) as const),
+  ...([
+    ["admin-webhook-healthy", "open"],
+    ["admin-webhook-failed", "override"],
+    ["admin-webhook-unset", "webhook-unset"],
+    ["admin-webhook-misconfigured", "webhook-misconfigured"],
+  ] as const).map(([id, scenario]) => ({ app: "Emumet", id, path: "/admin/webhook", authenticated: true, data: "populated", scenario }) as const),
   // ShuttlePub SNS shell (host intents/shuttlepub/features/quick-reaction-ui/ui-spec.md v6):
   // home timeline, post detail, compose modal, visibility menu, Profile switcher, settings.
   // home / not-found existed as F0 placeholders on main, so they compare as changed.
@@ -60,7 +86,7 @@ const routes = [
   { app: "ShuttlePub", id: "home-signed-out", path: "/", authenticated: false, data: "populated", requires: "sns-login", viewer: "signed-out" },
   { app: "ShuttlePub", id: "home-session-expired", path: "/", authenticated: false, data: "populated", requires: "sns-login", viewer: "session-expired" },
 ] as const satisfies readonly {
-  app: ScreenApp; id: string; path: string; authenticated: boolean; data: DataState; requires?: ScreenFeature; viewer?: ScreenViewer;
+  app: ScreenApp; id: string; path: string; authenticated: boolean; data: DataState; scenario?: string; requires?: ScreenFeature; viewer?: ScreenViewer;
 }[];
 
 const viewports = [

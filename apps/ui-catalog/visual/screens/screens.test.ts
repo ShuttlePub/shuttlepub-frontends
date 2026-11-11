@@ -8,13 +8,14 @@ import { FIXED_TIME, SCREEN_CASES } from "./cases.ts";
 import { captureSide, featuresInShuttlePubHtml, selectCases } from "./features.ts";
 import { AVATAR_SVG, BANNER_SVG, BILLING, FILES, FOLDERS, localImage } from "./fixtures.ts";
 import { appExists, stopChild } from "./servers.ts";
+import { isRegistrationGateScenario } from "../../../emumet-web/bff/emumet/registration-gate-scenarios.ts";
 
 test("screen inventory covers every app and state at desktop/mobile sizes with safe unique filenames", () => {
   // Given / When
   const names = SCREEN_CASES.map((item) => item.filename);
   // Then
   expect(new Set(names).size).toBe(SCREEN_CASES.length);
-  expect(SCREEN_CASES).toHaveLength(52);
+  expect(SCREEN_CASES).toHaveLength(90);
   for (const item of SCREEN_CASES) {
     expect(item.filename).toMatch(/^(Booskiff|Emumet|ShuttlePub)-[A-Za-z0-9-]+\.png$/);
     expect(item.path).toMatch(/^\/(?!\/)/);
@@ -25,6 +26,20 @@ test("screen inventory covers every app and state at desktop/mobile sizes with s
     expect(SCREEN_CASES.filter((item) => item.app === app && item.id === "login")
       .every((item) => !item.authenticated)).toBe(true);
   }
+});
+
+test("Emumet registration gate admin cases select an existing mock scenario at both widths", () => {
+  // Given
+  const admin = SCREEN_CASES.filter((item) => item.app === "Emumet" && item.id.startsWith("admin-"));
+  // When / Then
+  expect(admin).toHaveLength(38);
+  for (const item of admin) {
+    expect(item.authenticated).toBe(true);
+    expect(item.path).toMatch(/^\/admin\/(registration|webhook)$/);
+    expect("scenario" in item && isRegistrationGateScenario(item.scenario)).toBe(true);
+  }
+  expect(SCREEN_CASES.filter((item) => item.app === "Emumet" && !item.id.startsWith("admin-")).every((item) => !("scenario" in item))).toBe(true);
+  expect(isRegistrationGateScenario("default")).toBe(true);
 });
 
 test("ShuttlePub cases cover the SNS shell screens at both widths and need no login", () => {

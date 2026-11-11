@@ -1,5 +1,6 @@
 module App.Message where
 
+import App.Admin.Types (AdminMsg)
 import App.Api.GraphQL.Types (AccountResponse, MetadataResponse, ProfileResponse)
 import App.Model (AccountWithDetails, SessionInfo)
 import App.Route (Route)
@@ -12,6 +13,7 @@ data Message
   | CheckSession -- fire GET /auth/session on startup
   | SessionLoaded SessionInfo -- session cookie valid
   | SessionFailed -- no session from check (ignored if session already established)
+  | SessionUnavailable -- the session check itself failed (5xx / network): not an answer about the session
   | SessionExpired -- API returned 401 (force re-login regardless of local state)
   | SetLoginIdentifier String
   | SetLoginPassword String
@@ -57,3 +59,5 @@ data Message
   | DeleteMetadata String
   | MetadataDeleted Int String String -- generation, accountId, nanoid
   | MetadataDeleteFailed Int String String -- generation, accountId, errorMsg
+  -- Registration gate admin (D15)
+  | Admin AdminMsg
