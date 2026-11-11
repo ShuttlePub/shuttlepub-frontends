@@ -29,6 +29,7 @@ import {
 } from "@shuttlepub/auth-bun";
 import { createYogaHandler } from "./bff/server.ts";
 import { createMockEmumetClient } from "./bff/emumet/mock.ts";
+import { REGISTRATION_GATE_SCENARIOS, isRegistrationGateScenario } from "./bff/emumet/registration-gate-scenarios.ts";
 import { createRealEmumetClient } from "./bff/emumet/real.ts";
 
 // ============================================================
@@ -575,6 +576,15 @@ Bun.serve({
 
     // GraphQL BFF endpoint
     if (url.pathname === "/graphql") return yogaHandler(req);
+
+    // Mock 専用: 登録ゲート管理画面のシナリオ切替 (開発・frontend visual の撮影用)。real モードには存在しない
+    if (sharedMockEmumetClient && url.pathname === "/__mock/registration-gate/scenario" && req.method === "POST") {
+      const body = (await req.json().catch(() => null)) as { name?: unknown } | null;
+      const name = typeof body?.name === "string" ? body.name : "";
+      if (!isRegistrationGateScenario(name)) return new Response("unknown scenario", { status: 400 });
+      sharedMockEmumetClient.registrationGateControl.reset(REGISTRATION_GATE_SCENARIOS[name]);
+      return new Response(null, { status: 204 });
+    }
 
     // Auth endpoints (BFF)
     if (url.pathname.startsWith("/auth/")) {

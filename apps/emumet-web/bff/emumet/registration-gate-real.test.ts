@@ -121,11 +121,12 @@ describe("snake_case → camelCase conversion", () => {
       accepting: true,
       requiresManualResume: false,
       configLostLatch: false,
+      enforcementLostLatch: false,
       healthEpisode: "DEGRADED",
       enforcedProtections: ["EMAIL"],
       degradedProtections: ["BOT"],
       override: { active: false, activatedBy: null, activatedAt: null },
-      observation: { email: { configured: true, probe: "HEALTHY" }, bot: { configured: true, probe: "UNHEALTHY" } },
+      observation: { enforcementVerified: true, email: { configured: true, probe: "HEALTHY" }, bot: { configured: true, probe: "UNHEALTHY" } },
       updatedAt: "2026-11-10T01:10:00Z",
     });
   });

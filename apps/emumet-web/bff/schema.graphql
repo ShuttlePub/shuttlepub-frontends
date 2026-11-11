@@ -96,10 +96,11 @@ type Mutation {
 # 認可の正本は Emumet API (instance:administrate)。BFF は権限を判断せず、
 # 未認証 UNAUTHENTICATED / 権限なし FORBIDDEN / revision 競合 REVISION_CONFLICT /
 # 前提条件違反 PRECONDITION_FAILED / 不正リクエスト BAD_REQUEST /
+# 対象なし NOT_FOUND (再試行する failed 配送が無い等) / Webhook 未設定・設定不備 WEBHOOK_NOT_CONFIGURED /
 # 一時障害 TEMPORARILY_UNAVAILABLE (extensions.retryable = true) /
 # 契約違反の応答 INVALID_UPSTREAM_RESPONSE / その他の上流エラー UPSTREAM_ERROR を
 # extensions.code で区別して返す。状態 (RegistrationGate) とエラーは別の型であり混同しない。
-# E15a は control plane のみで、実 Kratos 登録をまだ遮断も許可もしない (E15d で接続)。
+# 判定は E15d で実 Kratos 登録 (pre-persist hook) に適用される。適用証明の喪失も停止ラッチ (enforcementLostLatch)。
 # secret は一切含まない。
 # ----------------------------------------------------------------
 
@@ -141,6 +142,9 @@ enum RegistrationGateEventKind {
   PROTECTION_LOST_STOPPED
   OVERRIDE_STARTED
   OVERRIDE_REVOKED
+  "E15d: 登録の保護の適用証明が失われて停止 (復旧後も手動再開が必要)"
+  ENFORCEMENT_LOST_STOPPED
+  ENFORCEMENT_RESTORED
 }
 
 type RegistrationProtectionObservation {
@@ -149,6 +153,8 @@ type RegistrationProtectionObservation {
 }
 
 type RegistrationObservation {
+  "E15d: 登録の保護 (Kratos hook) が現在の deployment で適用されている証明。false の間は開放・再開・override が PRECONDITION_FAILED"
+  enforcementVerified: Boolean!
   email: RegistrationProtectionObservation!
   bot: RegistrationProtectionObservation!
 }
@@ -169,6 +175,8 @@ type RegistrationGate {
   "decision が STOPPED のとき true。復旧しても自動再開しない"
   requiresManualResume: Boolean!
   configLostLatch: Boolean!
+  "E15d: 適用証明の喪失による停止ラッチ (override 中でも STOPPED。復旧後も手動再開が必要)"
+  enforcementLostLatch: Boolean!
   healthEpisode: RegistrationHealthEpisode!
   "登録時に課す対策 (検証 API が実際に応答した対策のみ)"
   enforcedProtections: [RegistrationProtection!]!
@@ -177,6 +185,24 @@ type RegistrationGate {
   override: RegistrationOverride!
   observation: RegistrationObservation!
   updatedAt: String!
+  "管理画面の状態チップ (BFF が decision・adminState・revision・override から導出。registration-gate-status.ts)"
+  status: RegistrationGateStatus!
+  "最低条件 (メール認証か BOT 保護の少なくとも一方が設定済みかつ応答あり) を満たすか。false なら開放・再開は PRECONDITION_FAILED"
+  minimumMet: Boolean!
+}
+
+"""
+管理画面の状態 (ui-spec A-2)。decision を優先して決める:
+STOPPED → AUTO_STOPPED / ADMIN_CLOSED → (revision 0 なら NOT_OPENED、それ以外 ADMIN_STOPPED) /
+override 有効 → OVERRIDE / TEMPORARY_REJECT → TEMPORARILY_SUSPENDED / ACCEPTING → OPEN
+"""
+enum RegistrationGateStatus {
+  NOT_OPENED
+  OPEN
+  TEMPORARILY_SUSPENDED
+  AUTO_STOPPED
+  ADMIN_STOPPED
+  OVERRIDE
 }
 
 type RegistrationGateNotification {
@@ -217,6 +243,140 @@ extend type Mutation {
   "戻り値は既読化後の未読件数"
   markRegistrationGateNotificationsRead(eventIds: [ID!]!): Int!
   markAllRegistrationGateNotificationsRead: Int!
+}
+
+"現在時刻での評価。OPERATIONAL は現在の設定に結び付いた実検証の成功が新鮮な間だけ"
+enum RegistrationProtectionStatus {
+  CONFIGURATION_INVALID
+  OPERATIONAL
+  TEMPORARILY_UNAVAILABLE
+  UNVERIFIED
+}
+
+"保護 (メール認証・BOT 保護) の準備状態 (E15c)。secret・fingerprint・設定値は含まない"
+type RegistrationProtectionReadiness {
+  protection: RegistrationProtection!
+  "設定が有効か (未設定・明示無効は false)"
+  enabled: Boolean!
+  status: RegistrationProtectionStatus!
+  "評価の理由 (Emumet の固定語彙。例 invalid_secret / timeout)"
+  reason: String!
+  checkedAt: String
+  validUntil: String
+}
+
+enum RegistrationProtectionVerifyOutcome {
+  BUSINESS_SUCCESS
+  ACCEPTED
+  CONFIGURATION_INVALID
+  ATTEMPT_REJECTED
+  TEMPORARILY_UNAVAILABLE
+}
+
+"COMPLETED / PENDING_CONFIRMATION (canary mailbox にコードを送った) / CANARY_NOT_CONFIGURED"
+enum RegistrationProtectionVerifyDisposition {
+  COMPLETED
+  PENDING_CONFIRMATION
+  CANARY_NOT_CONFIGURED
+}
+
+type RegistrationProtectionVerification {
+  outcome: RegistrationProtectionVerifyOutcome!
+  reason: String!
+  "readiness へ記録したか"
+  recorded: Boolean!
+  disposition: RegistrationProtectionVerifyDisposition!
+  readiness: RegistrationProtectionReadiness!
+}
+
+"NOT_CONFIGURED (Webhook 無効。エラーではない) / MISCONFIGURED (設定不備。issue を参照) / CONFIGURED"
+enum RegistrationWebhookConfiguration {
+  NOT_CONFIGURED
+  MISCONFIGURED
+  CONFIGURED
+}
+
+enum RegistrationWebhookDeliveryStatus {
+  PENDING
+  IN_FLIGHT
+  RETRYING
+  DELIVERED
+  FAILED
+}
+
+"Webhook の配送記録 (本文・宛先 URL・secret は含まない)"
+type RegistrationWebhookDelivery {
+  "通知イベント ID (再試行・再送で不変)"
+  eventId: ID!
+  eventType: RegistrationGateEventKind!
+  status: RegistrationWebhookDeliveryStatus!
+  attemptCount: Int!
+  createdAt: String!
+  lastAttemptAt: String
+  deliveredAt: String
+  "固定語彙の結果分類 (timeout / http_server_error など)"
+  lastResult: String
+  "failed のときの理由 (permanent_error / retries_exhausted)"
+  failureReason: String
+}
+
+type RegistrationWebhookCounts {
+  pending: Int!
+  inFlight: Int!
+  retrying: Int!
+  delivered: Int!
+  failed: Int!
+}
+
+"Webhook の配送状態 (E15w)。endpoint と secret はサーバー設定のみで、宛先は host だけを返す"
+type RegistrationWebhookStatus {
+  configuration: RegistrationWebhookConfiguration!
+  "MISCONFIGURED のときの不備の分類 (固定語彙)"
+  issue: String
+  "宛先の host 部分のみ (userinfo・port・path・query・secret は出さない)"
+  destinationHost: String
+  counts: RegistrationWebhookCounts!
+  lastSuccessAt: String
+  lastFailureAt: String
+  "新しい順の直近の配送記録"
+  recentDeliveries: [RegistrationWebhookDelivery!]!
+}
+
+type RegistrationWebhookTestResult {
+  "受信側が 2xx を返したら true"
+  delivered: Boolean!
+  "結果の分類 (配送記録の lastResult と同じ語彙)"
+  result: String!
+  httpStatus: Int
+  attemptedAt: String!
+}
+
+enum InstanceRole {
+  ADMIN
+  MODERATOR
+}
+
+"呼び出し者 (GET /api/v1/me)。管理画面の導線を出すかのヒントで、権限判断の正本ではない (各管理 API が FORBIDDEN を返す)"
+type Viewer {
+  accountId: ID!
+  instanceRoles: [InstanceRole!]!
+  "instanceRoles に ADMIN を含む"
+  isAdmin: Boolean!
+}
+
+extend type Query {
+  viewer: Viewer!
+  registrationProtections: [RegistrationProtectionReadiness!]!
+  registrationWebhook: RegistrationWebhookStatus!
+}
+
+extend type Mutation {
+  "入力なしの検証 (bot は secret の負の probe、email は canary mailbox への送信)。未知の保護は NOT_FOUND"
+  verifyRegistrationProtection(protection: RegistrationProtection!): RegistrationProtectionVerification!
+  "テスト送信 (1 回のみ・記録しない)。未設定・設定不備なら WEBHOOK_NOT_CONFIGURED"
+  sendRegistrationWebhookTest: RegistrationWebhookTestResult!
+  "eventId の failed 配送を再キューする (省略で failed 全件)。戻り値は再キュー件数。対象が無ければ NOT_FOUND"
+  retryRegistrationWebhook(eventId: ID): Int!
 }
 
 # ----------------------------------------------------------------

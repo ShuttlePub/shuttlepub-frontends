@@ -1,7 +1,8 @@
 // ============================================================
 // MockRegistrationGate — 登録ゲートの stateful mock
 //
-// kernel の純粋状態機械 (Emumet kernel/src/entity/registration_gate/machine.rs、E15a PR #67 = 0ac9e9c) を
+// kernel の純粋状態機械 (Emumet kernel/src/entity/registration_gate/machine.rs、E15a PR #67 = 0ac9e9c に
+// E15d PR #92 = 95e3f77 の適用証明 (enforcement) ラッチを加えたもの) を
 // 手で移植したもの。判定 (evaluate)・管理者操作 (apply_command)・観測入力 (apply_observation) と
 // 通知イベントの生成条件を同じ表で実装し、API の応答状態 (409/422/400/403) も同じ規則で返す。
 //
@@ -15,27 +16,45 @@
 
 import { EmumetApiError } from "./client.ts";
 import {
+  ENFORCEMENT_NOTIFICATION_FIXTURES,
   NOTIFICATION_LIST_FIXTURES,
   REGISTRATION_GATE_FIXTURES,
+  WEBHOOK_STATUS_FIXTURES,
+  WEBHOOK_TEST_FIXTURES,
   type NotificationListFixtureName,
   type RegistrationGateFixtureName,
+  type WebhookStatusFixtureName,
 } from "./registration-gate-fixtures.ts";
-import { toNotification, toRegistrationGate } from "./registration-gate-real.ts";
-import type {
-  RegistrationAdminState,
-  RegistrationDecision,
-  RegistrationGate,
-  RegistrationGateClient,
-  RegistrationGateEventKind,
-  RegistrationGateNotification,
-  RegistrationGateNotificationPage,
-  RegistrationHealthEpisode,
-  RegistrationObservation,
-  RegistrationProtection,
-  RegistrationProtectionObservation,
+import {
+  toNotification,
+  toProtectionReadiness,
+  toRegistrationGate,
+  toWebhookStatus,
+  toWebhookTest,
+  type WireProtectionReadiness,
+} from "./registration-gate-real.ts";
+import {
+  EmumetRegistrationTargetNotFoundError,
+  EmumetWebhookUnavailableError,
+  type RegistrationAdminState,
+  type RegistrationDecision,
+  type RegistrationGate,
+  type RegistrationGateClient,
+  type RegistrationGateEventKind,
+  type RegistrationGateNotification,
+  type RegistrationGateNotificationPage,
+  type RegistrationHealthEpisode,
+  type RegistrationObservation,
+  type RegistrationProtection,
+  type RegistrationProtectionObservation,
+  type RegistrationProtectionReadiness,
+  type RegistrationProtectionVerification,
+  type RegistrationWebhookDelivery,
+  type RegistrationWebhookStatus,
 } from "./registration-gate.ts";
 
 export const MOCK_ADMIN_ID = "auth-account-mock-admin";
+export const MOCK_MEMBER_ID = "auth-account-mock-member";
 
 const DEFAULT_PAGE_LIMIT = 50;
 const MAX_PAGE_LIMIT = 100;
@@ -48,7 +67,11 @@ export type MockRegistrationGateOptions = {
   /** 初期状態。省略時は準備未完了 (not_ready) */
   readonly fixture?: RegistrationGateFixtureName;
   /** 初期通知。省略時は通知なし */
-  readonly notifications?: NotificationListFixtureName;
+  readonly notifications?: NotificationListFixtureName | "enforcement";
+  /** 保護の readiness。省略時は初期状態の observation から導出する (Emumet の to_observation の逆) */
+  readonly protections?: readonly WireProtectionReadiness[];
+  /** Webhook 配送状態。省略時は未設定 */
+  readonly webhook?: WebhookStatusFixtureName;
   readonly role?: MockRegistrationGateRole;
   /** 時刻の注入 (テストの決定性用) */
   readonly now?: () => string;
@@ -59,6 +82,7 @@ type GateState = {
   adminState: RegistrationAdminState;
   override: { activatedBy: string; activatedAt: string } | null;
   configLostLatch: boolean;
+  enforcementLostLatch: boolean;
   episode: RegistrationHealthEpisode;
   observation: RegistrationObservation;
   updatedAt: string;
@@ -113,6 +137,8 @@ function classify(observation: RegistrationObservation): Health {
 
 export function evaluate(state: GateState): RegistrationDecision {
   if (state.adminState === "CLOSED") return "ADMIN_CLOSED";
+  // E15d: 適用証明の喪失は override より優先して停止する
+  if (!state.observation.enforcementVerified || state.enforcementLostLatch) return "STOPPED";
   if (state.override !== null) return "ACCEPTING";
   if (state.configLostLatch) return "STOPPED";
   switch (classify(state.observation)) {
@@ -126,7 +152,13 @@ export function evaluate(state: GateState): RegistrationDecision {
 }
 
 function isJudged(state: GateState): boolean {
-  return state.adminState === "OPEN" && state.override === null && !state.configLostLatch;
+  return (
+    state.adminState === "OPEN" &&
+    state.override === null &&
+    !state.configLostLatch &&
+    state.observation.enforcementVerified &&
+    !state.enforcementLostLatch
+  );
 }
 
 function reconcileEpisode(
@@ -165,6 +197,8 @@ function sameControl(a: GateState, b: GateState): boolean {
     a.adminState === b.adminState &&
     (a.override === null) === (b.override === null) &&
     a.configLostLatch === b.configLostLatch &&
+    a.enforcementLostLatch === b.enforcementLostLatch &&
+    a.observation.enforcementVerified === b.observation.enforcementVerified &&
     a.episode === b.episode
   );
 }
@@ -179,6 +213,7 @@ function view(state: GateState): RegistrationGate {
     accepting,
     requiresManualResume: decision === "STOPPED",
     configLostLatch: state.configLostLatch,
+    enforcementLostLatch: state.enforcementLostLatch,
     healthEpisode: state.episode,
     enforcedProtections: accepting ? effectiveProtections(state.observation) : [],
     degradedProtections: accepting ? degradedProtections(state.observation) : [],
@@ -200,6 +235,7 @@ function stateFromGate(gate: RegistrationGate): GateState {
       ? { activatedBy: gate.override.activatedBy ?? MOCK_ADMIN_ID, activatedAt: gate.override.activatedAt ?? gate.updatedAt }
       : null,
     configLostLatch: gate.configLostLatch,
+    enforcementLostLatch: gate.enforcementLostLatch,
     episode: gate.healthEpisode,
     observation: gate.observation,
     updatedAt: gate.updatedAt,
@@ -221,13 +257,21 @@ function status(code: number): EmumetApiError {
 }
 
 export type MockRegistrationGateControl = {
-  /** 観測入力 (検証 API の観測結果)。制御状態が変わらない反復は revision・通知を増やさない */
+  /** 観測入力 (検証 API の観測結果)。制御状態が変わらない反復は revision・通知を増やさない。保護の readiness も観測から導出し直す */
   observe(observation: RegistrationObservation): void;
+  /**
+   * 保護の readiness を設定し、対応する観測 (Emumet の to_observation) を入力する。
+   * 未設定と設定エラーはどちらも configured=false になるので、readiness だけが区別を持つ
+   */
+  setProtections(protections: readonly WireProtectionReadiness[]): void;
+  setWebhook(fixture: WebhookStatusFixtureName): void;
   setRole(role: MockRegistrationGateRole): void;
   /** 次の 1 回の呼び出しを、この例外で失敗させる (一時障害・401 などの注入) */
   failNext(error: Error): void;
   /** 現在の状態の DTO (GraphQL を経由せず検証する用) */
   snapshot(): RegistrationGate;
+  /** 状態・通知・保護・Webhook・権限をまとめて初期化する (開発・visual のシナリオ切替用) */
+  reset(options: MockRegistrationGateOptions): void;
 };
 
 export type MockRegistrationGate = {
@@ -235,28 +279,103 @@ export type MockRegistrationGate = {
   readonly control: MockRegistrationGateControl;
 };
 
+/** Emumet の to_observation の逆。未設定と設定エラーの区別は失われるので未設定にする */
+function readinessFromObservation(
+  protection: RegistrationProtection,
+  observation: RegistrationProtectionObservation,
+): RegistrationProtectionReadiness {
+  if (!observation.configured) {
+    return { protection, enabled: false, status: "CONFIGURATION_INVALID", reason: "not_configured", checkedAt: null, validUntil: null };
+  }
+  switch (observation.probe) {
+    case "HEALTHY":
+      return { protection, enabled: true, status: "OPERATIONAL", reason: "business_success", checkedAt: MOCK_CHECKED_AT, validUntil: MOCK_VALID_UNTIL };
+    case "UNHEALTHY":
+      return { protection, enabled: true, status: "TEMPORARILY_UNAVAILABLE", reason: "timeout", checkedAt: MOCK_CHECKED_AT, validUntil: null };
+    case "UNKNOWN":
+      return { protection, enabled: true, status: "UNVERIFIED", reason: "never_verified", checkedAt: null, validUntil: null };
+  }
+}
+
+const MOCK_CHECKED_AT = "2026-11-10T03:41:00Z";
+const MOCK_VALID_UNTIL = "2026-11-10T09:41:00Z";
+
+/** Emumet の to_observation (契約 §4) */
+function observationFromReadiness(readiness: RegistrationProtectionReadiness): RegistrationProtectionObservation {
+  switch (readiness.status) {
+    case "OPERATIONAL":
+      return { configured: true, probe: "HEALTHY" };
+    case "TEMPORARILY_UNAVAILABLE":
+      return { configured: true, probe: "UNHEALTHY" };
+    case "UNVERIFIED":
+      return { configured: true, probe: "UNKNOWN" };
+    case "CONFIGURATION_INVALID":
+      return { configured: false, probe: "UNKNOWN" };
+  }
+}
+
+function seedEvents(name: NotificationListFixtureName | "enforcement"): StoredEvent[] {
+  const fixture = name === "enforcement" ? ENFORCEMENT_NOTIFICATION_FIXTURES : NOTIFICATION_LIST_FIXTURES[name];
+  return fixture.notifications
+    .map((wire) => {
+      const notification = toNotification(wire);
+      return {
+        id: Number(notification.id),
+        kind: notification.kind,
+        revision: notification.revision,
+        actor: notification.actor,
+        observation: notification.observation,
+        createdAt: notification.createdAt,
+        readAt: notification.readAt,
+      };
+    })
+    .sort((a, b) => b.id - a.id);
+}
+
 export function createMockRegistrationGate(options: MockRegistrationGateOptions = {}): MockRegistrationGate {
   const now = options.now ?? (() => new Date().toISOString());
-  let role: MockRegistrationGateRole = options.role ?? "admin";
+  let role: MockRegistrationGateRole = "admin";
   const faults: Error[] = [];
-  let state = stateFromGate(registrationGateFromFixture(options.fixture ?? "not_ready"));
+  let state = stateFromGate(registrationGateFromFixture("not_ready"));
+  let protections: Record<RegistrationProtection, RegistrationProtectionReadiness> = {
+    EMAIL: readinessFromObservation("EMAIL", state.observation.email),
+    BOT: readinessFromObservation("BOT", state.observation.bot),
+  };
+  let webhook: { status: RegistrationWebhookStatus; deliveries: RegistrationWebhookDelivery[] } = loadWebhook("not_configured");
+  let events: StoredEvent[] = [];
+  let nextEventId = 1001;
 
-  const events: StoredEvent[] = [];
-  const seeded = NOTIFICATION_LIST_FIXTURES[options.notifications ?? "empty"].notifications;
-  for (const wire of seeded) {
-    const notification = toNotification(wire);
-    events.push({
-      id: Number(notification.id),
-      kind: notification.kind,
-      revision: notification.revision,
-      actor: notification.actor,
-      observation: notification.observation,
-      createdAt: notification.createdAt,
-      readAt: notification.readAt,
-    });
+  function loadWebhook(name: WebhookStatusFixtureName) {
+    const status = toWebhookStatus(WEBHOOK_STATUS_FIXTURES[name]);
+    return { status, deliveries: [...status.recentDeliveries] };
   }
-  events.sort((a, b) => b.id - a.id);
-  let nextEventId = Math.max(1000, ...events.map((event) => event.id)) + 1;
+
+  function load(next: MockRegistrationGateOptions): void {
+    role = next.role ?? "admin";
+    faults.length = 0;
+    state = stateFromGate(registrationGateFromFixture(next.fixture ?? "not_ready"));
+    protections = {
+      EMAIL: readinessFromObservation("EMAIL", state.observation.email),
+      BOT: readinessFromObservation("BOT", state.observation.bot),
+    };
+    for (const wire of next.protections ?? []) {
+      const readiness = toProtectionReadiness(wire);
+      protections[readiness.protection] = readiness;
+    }
+    // fixture の観測と readiness が食い違う組合せは scenario の誤り (観測入力で状態が変わってしまう)
+    for (const protection of PROTECTIONS) {
+      const derived = observationFromReadiness(protections[protection]);
+      const current = observationOf(state.observation, protection);
+      if (derived.configured !== current.configured || (derived.configured && derived.probe !== current.probe)) {
+        throw new Error(`mock registration gate: readiness for ${protection} contradicts fixture ${next.fixture ?? "not_ready"}`);
+      }
+    }
+    webhook = loadWebhook(next.webhook ?? "not_configured");
+    events = seedEvents(next.notifications ?? "empty");
+    nextEventId = Math.max(1000, ...events.map((event) => event.id)) + 1;
+  }
+
+  load(options);
 
   function guard(): void {
     const fault = faults.shift();
@@ -292,15 +411,17 @@ export function createMockRegistrationGate(options: MockRegistrationGateOptions 
   ): RegistrationGate {
     guard();
     if (state.revision !== expectedRevision) throw status(409);
+    if ((command === "open" || command === "enable_override") && !state.observation.enforcementVerified) throw status(422);
     const at = now();
     const next: GateState = { ...state };
     const kinds: RegistrationGateEventKind[] = [];
     switch (command) {
       case "open": {
-        if (state.adminState === "OPEN" && !state.configLostLatch) throw status(422);
+        if (state.adminState === "OPEN" && !state.configLostLatch && !state.enforcementLostLatch) throw status(422);
         if (!meetsMinimum(state.observation)) throw status(422);
         next.adminState = "OPEN";
         next.configLostLatch = false;
+        next.enforcementLostLatch = false;
         const reconciled = reconcileEpisode(next.episode, isJudged(next), next.observation);
         next.episode = reconciled.episode;
         kinds.push(...reconciled.events);
@@ -312,9 +433,10 @@ export function createMockRegistrationGate(options: MockRegistrationGateOptions 
         break;
       case "enable_override":
         if (!acknowledged) throw status(400);
-        if (state.override !== null && state.adminState === "OPEN") throw status(422);
+        if (state.override !== null && state.adminState === "OPEN" && !state.enforcementLostLatch) throw status(422);
         next.adminState = "OPEN";
         next.configLostLatch = false;
+        next.enforcementLostLatch = false;
         if (state.override === null) {
           next.override = { activatedBy: MOCK_ADMIN_ID, activatedAt: at };
           next.episode = "NONE";
@@ -355,7 +477,92 @@ export function createMockRegistrationGate(options: MockRegistrationGateOptions 
     };
   }
 
+  function applyProtections(): void {
+    control.observe({
+      enforcementVerified: state.observation.enforcementVerified,
+      email: observationFromReadiness(protections.EMAIL),
+      bot: observationFromReadiness(protections.BOT),
+    });
+  }
+
+  function verify(protection: RegistrationProtection): RegistrationProtectionVerification {
+    guard();
+    const current = protections[protection];
+    const checkedAt = now();
+    // 入力なしの検証は operational にしない (bot は負の probe、email は canary への送信のみ)。状態は変えず時刻だけ進める
+    const readiness: RegistrationProtectionReadiness = current.enabled ? { ...current, checkedAt } : current;
+    protections[protection] = readiness;
+    if (!current.enabled || current.status === "CONFIGURATION_INVALID") {
+      return { outcome: "CONFIGURATION_INVALID", reason: current.reason, recorded: true, disposition: "COMPLETED", readiness };
+    }
+    if (current.status === "TEMPORARILY_UNAVAILABLE") {
+      return { outcome: "TEMPORARILY_UNAVAILABLE", reason: current.reason, recorded: true, disposition: "COMPLETED", readiness };
+    }
+    return {
+      outcome: "ACCEPTED",
+      reason: "accepted",
+      recorded: true,
+      disposition: protection === "EMAIL" ? "PENDING_CONFIRMATION" : "COMPLETED",
+      readiness,
+    };
+  }
+
+  function webhookView(): RegistrationWebhookStatus {
+    const count = (status: RegistrationWebhookDelivery["status"]) =>
+      webhook.deliveries.filter((delivery) => delivery.status === status).length;
+    return {
+      ...webhook.status,
+      counts: {
+        pending: count("PENDING"),
+        inFlight: count("IN_FLIGHT"),
+        retrying: count("RETRYING"),
+        delivered: count("DELIVERED"),
+        failed: count("FAILED"),
+      },
+      lastFailureAt: webhook.deliveries.some((delivery) => delivery.status === "FAILED") ? webhook.status.lastFailureAt : null,
+      recentDeliveries: webhook.deliveries,
+    };
+  }
+
   const client: RegistrationGateClient = {
+    async getViewer() {
+      // /api/v1/me は管理権限を要求しない (非管理者にも 200 でロール無しを返す)
+      const fault = faults.shift();
+      if (fault) throw fault;
+      return role === "admin"
+        ? { accountId: MOCK_ADMIN_ID, instanceRoles: ["ADMIN"] }
+        : { accountId: MOCK_MEMBER_ID, instanceRoles: [] };
+    },
+    async listRegistrationProtections() {
+      guard();
+      return [protections.EMAIL, protections.BOT];
+    },
+    async verifyRegistrationProtection(protection) {
+      return verify(protection);
+    },
+    async getRegistrationWebhookStatus() {
+      guard();
+      return webhookView();
+    },
+    async sendRegistrationWebhookTest() {
+      guard();
+      if (webhook.status.configuration !== "CONFIGURED") throw new EmumetWebhookUnavailableError();
+      const failing = webhook.deliveries.some((delivery) => delivery.status === "FAILED" || delivery.status === "RETRYING");
+      return { ...toWebhookTest(failing ? WEBHOOK_TEST_FIXTURES.failure : WEBHOOK_TEST_FIXTURES.success), attemptedAt: now() };
+    },
+    async retryRegistrationWebhook(eventId) {
+      guard();
+      const targets = webhook.deliveries.filter(
+        (delivery) => delivery.status === "FAILED" && (eventId === undefined || delivery.eventId === eventId),
+      );
+      if (eventId !== undefined && targets.length === 0) {
+        throw new EmumetRegistrationTargetNotFoundError("no failed webhook delivery with that event ID");
+      }
+      webhook.deliveries = webhook.deliveries.map((delivery) =>
+        targets.includes(delivery) ? { ...delivery, status: "PENDING", failureReason: null } : delivery,
+      );
+      return targets.length;
+    },
     async getRegistrationGate() {
       guard();
       return view(state);
@@ -420,14 +627,27 @@ export function createMockRegistrationGate(options: MockRegistrationGateOptions 
   const control: MockRegistrationGateControl = {
     observe(observation) {
       const at = now();
+      for (const protection of PROTECTIONS) {
+        const observed = observationOf(observation, protection);
+        const derived = observationFromReadiness(protections[protection]);
+        if (derived.configured !== observed.configured || (observed.configured && derived.probe !== observed.probe)) {
+          protections[protection] = readinessFromObservation(protection, observed);
+        }
+      }
       const next: GateState = { ...state, observation };
       const kinds: RegistrationGateEventKind[] = [];
+      if (!observation.enforcementVerified && (state.observation.enforcementVerified || !state.enforcementLostLatch)) {
+        next.enforcementLostLatch = true;
+        kinds.push("ENFORCEMENT_LOST_STOPPED");
+      } else if (observation.enforcementVerified && !state.observation.enforcementVerified) {
+        kinds.push("ENFORCEMENT_RESTORED");
+      }
       if (!latchOnConfigLost(next, kinds)) {
-        const reconciled = reconcileEpisode(state.episode, isJudged(state), observation);
+        const reconciled = reconcileEpisode(state.episode, isJudged(next), observation);
         next.episode = reconciled.episode;
         kinds.push(...reconciled.events);
       }
-      if (sameControl(state, next)) {
+      if (sameControl(state, next) && kinds.length === 0) {
         if (JSON.stringify(state.observation) !== JSON.stringify(observation)) next.updatedAt = at;
         state = next;
         return;
@@ -438,6 +658,19 @@ export function createMockRegistrationGate(options: MockRegistrationGateOptions 
     },
     setRole(value) {
       role = value;
+    },
+    setProtections(list) {
+      for (const wire of list) {
+        const readiness = toProtectionReadiness(wire);
+        protections[readiness.protection] = readiness;
+      }
+      applyProtections();
+    },
+    setWebhook(name) {
+      webhook = loadWebhook(name);
+    },
+    reset(next) {
+      load(next);
     },
     failNext(error) {
       faults.push(error);
