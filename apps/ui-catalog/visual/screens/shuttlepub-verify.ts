@@ -549,7 +549,8 @@ async function gateOperation(page: Page, name: string, answer: "pass" | "fail") 
  *    back focused and the failure is shown (注意 6).
  *  - pagehide hands the removal to keepalive; back from the bfcache (pageshow
  *    persisted) the undo is over, nothing is resent and the screen is read again.
- *  - S2: the undo of a favourite deletion waits for the deletion to be saved.
+ *  - S2: the undo of a favourite deletion waits for the deletion to be saved; an
+ *    unavailable favourite's deletion has no undo (lead decision on PR #42).
  */
 async function verifyQuickReactionTiming(page: Page, viewport: Viewport) {
   const sent = recordOperations(page);
@@ -646,6 +647,14 @@ async function verifyQuickReactionTiming(page: Page, viewport: Viewport) {
   await expect(waitingUndo).not.toHaveAttribute("aria-disabled", "true");
   await waitingUndo.click();
   await expect(page.locator("#sp-fav-chip-0")).toHaveAttribute("aria-label", "いいね");
+  // S2 exception: deleting the unavailable favourite says 削除しました without 元に戻す.
+  await expect(chips).toHaveAttribute("aria-busy", "false");
+  await expect(page.locator("#sp-fav-chip-4")).toHaveAttribute("aria-label", ":old_blob:（利用不可）");
+  await page.locator("#sp-fav-chip-4").click();
+  await page.getByTestId("favorite-menu").getByRole("menuitem", { name: "削除" }).click();
+  await expect(toast).toContainText("削除しました");
+  await expect(toast.getByRole("button")).toHaveCount(0);
+  await expect(chips.getByRole("button", { name: /利用不可/ })).toHaveCount(0);
   console.info(`OK quick reaction timing (hold / replacement / slow+failed DELETE / bfcache / slow favourite save) at ${viewport.name}`);
 }
 

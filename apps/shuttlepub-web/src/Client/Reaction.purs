@@ -81,10 +81,12 @@ nextRequest model =
 
 -- Toast ------------------------------------------------------------------------------
 
--- | Undo toasts keep 6s, a failure 3s; after the pointer / touch / focus leaves, 3s (注意 3).
+-- | Toasts with a button keep 6s, plain notices 3s; after the pointer / touch / focus
+-- | leaves, 3s (注意 3).
 toastLifetime :: ToastKind -> Number
 toastLifetime = case _ of
   ReactionFailed _ _ -> 3000.0
+  FavoriteRemoved _ -> 3000.0
   _ -> 6000.0
 
 expireAfter :: Number -> Int -> Int -> Aff (Maybe Message)
@@ -345,6 +347,7 @@ canEditFavorites model = isJust (favoritesOf model) && not model.reaction.saving
 dropFavoriteUndo :: Model -> Model
 dropFavoriteUndo model = case model.reaction.toast of
   Just { kind: UndoFavoriteRemoval _ _ } -> withReaction model _ { toast = Nothing }
+  Just { kind: FavoriteRemoved _ } -> withReaction model _ { toast = Nothing }
   _ -> model
 
 settingsAnswer :: Model -> Int -> Int -> Boolean
@@ -519,11 +522,14 @@ update model = case _ of
       saveFavorites (moveItem from to list) (favoriteChipId to) (withReaction model _ { chipMenu = Nothing, dragFrom = Nothing })
     _ -> Tuple (withReaction model _ { chipMenu = Nothing, dragFrom = Nothing }) []
 
-  -- S2: deleted at once with an undo toast.
+  -- S2: deleted at once with an undo toast. Exception: an unavailable favourite cannot
+  -- be added back (S3 answers 422), so its toast has no 元に戻す (lead decision).
   RemoveFavorite at -> case favoritesOf model of
     Just list | Just emoji <- index list at ->
       saveFavorites (removeAt at list) favoriteAddId (withReaction model _ { chipMenu = Nothing })
-        # andThen \saved -> if saved.reaction.savingSettings then setToast (Just (UndoFavoriteRemoval at emoji)) saved else Tuple saved []
+        # andThen \saved ->
+            if saved.reaction.savingSettings then setToast (Just (if emoji.available then UndoFavoriteRemoval at emoji else FavoriteRemoved emoji)) saved
+            else Tuple saved []
     _ -> Tuple model []
 
   StartReplaceFavorite at ->

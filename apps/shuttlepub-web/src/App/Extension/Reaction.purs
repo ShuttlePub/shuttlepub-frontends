@@ -546,6 +546,7 @@ toastView model = case model.reaction.toast of
     case toast.kind of
       UndoRemoval removal -> [ glyph removal.emoji, HE.span_ [ HE.text "取り消しました" ], button "元に戻す" ToastUndo ]
       UndoFavoriteRemoval _ emoji -> [ glyph emoji, HE.span_ [ HE.text "削除しました" ], waitingButton "元に戻す" ToastUndo model.reaction.savingSettings ]
+      FavoriteRemoved emoji -> [ glyph emoji, HE.span_ [ HE.text "削除しました" ] ]
       FavoriteUnavailable emoji -> [ glyph emoji, HE.span_ [ HE.text "利用できません" ], button "入れ替える" ToastAction ]
       ReactionFailed text error -> [ HE.span_ [ HE.text (text <> "（" <> Error.describe error <> "）") ] ]
   where

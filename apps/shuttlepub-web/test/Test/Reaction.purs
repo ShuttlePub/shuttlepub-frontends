@@ -452,6 +452,20 @@ testFavoriteUndoWhileSaving = do
     savedDeletion = settingsSaved early previous [ thumbs, oldBlob ] (Right { profileId: me.id, revision: 4, favorites: [ thumbs, oldBlob ] })
     undone = step savedDeletion ToastUndo
   assertEqual "undo runs after the save" (favorites undone) [ "u:👍", "u:🎉", "c:old_blob" ]
+  -- S2 exception: deleting an unavailable favourite says 削除しました without 元に戻す
+  -- (it could not be added back: S3 answers 422).
+  let
+    removedUnavailable = step ready (RemoveFavorite 2)
+  assertEqual "unavailable removed" (favorites removedUnavailable) [ "u:👍", "u:🎉" ]
+  assertTrue "plain notice, no undo"
+    ( case removedUnavailable.reaction.toast of
+        Just { kind: FavoriteRemoved _ } -> true
+        _ -> false
+    )
+  let
+    afterSave = settingsSaved removedUnavailable previous [ thumbs, party ] (Right { profileId: me.id, revision: 4, favorites: [ thumbs, party ] })
+  assertEqual "nothing to undo" (favorites (step afterSave ToastUndo)) [ "u:👍", "u:🎉" ]
+  assertTrue "undo press does not save" (not (step afterSave ToastUndo).reaction.savingSettings)
   -- A failed deletion ends its undo (there is nothing to undo).
   let
     failed = settingsSaved removed previous [ thumbs, oldBlob ] (Left (UpstreamError "500"))

@@ -95,6 +95,9 @@ data ToastKind
   = UndoRemoval PendingRemoval
   -- | S2: 「削除しました／元に戻す」 (index, emoji)
   | UndoFavoriteRemoval Int Emoji
+  -- | S2 exception (lead decision on PR #42): an unavailable favourite cannot be put back
+  -- | (S3 answers 422), so its deletion only says 「削除しました」, without 元に戻す.
+  | FavoriteRemoved Emoji
   -- | P2: 「利用できません／入れ替える」
   | FavoriteUnavailable Emoji
   -- | A failure of a reaction request, shown as such.
