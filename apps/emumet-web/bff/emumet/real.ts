@@ -3,10 +3,18 @@
 // ワイヤ形式は snake_case、DTO (client.ts) は camelCase。境界で相互変換する。
 // ============================================================
 
+import { describeViolations, violationsForResponse } from "../openapi/contract.ts";
+import { checkProfileUsername } from "./profile-username.ts";
 import { createRealRegistrationGateClient } from "./registration-gate-real.ts";
+import { EmumetInvalidResponseError, EmumetUnavailableError } from "./registration-gate.ts";
 import {
+  EmumetAccountRestrictedError,
   EmumetApiError,
   EmumetNotFoundError,
+  EmumetUsernameAlreadySetError,
+  EmumetUsernameConflictError,
+  EmumetUsernameInvalidError,
+  EmumetUsernameTakenError,
   type Account,
   type AccountConnection,
   type CreateAccountInput,
@@ -37,6 +45,9 @@ type WireAccount = {
   public_key: string;
   created_at: string;
   moderation?: WireModeration | null;
+  /** AccountResponse への追加 (profile-identity-read-exposure) がマージされるまでは来ない */
+  profile_id?: string | null;
+  profile_username?: string | null;
 };
 
 type WireAccounts = {
@@ -52,6 +63,19 @@ type WireProfile = {
   summary: string | null;
   icon_url: string | null;
   banner_url: string | null;
+  /** 未設定は null。旧形式の応答でフィールドが無い場合も未設定として扱う */
+  username?: string | null;
+};
+
+/** ProfileResponse (OpenAPI): Profile の nanoid は `id`、任意フィールドは省略されうる */
+type WireProfileResponse = {
+  account_id: string;
+  id: string;
+  display_name?: string | null;
+  summary?: string | null;
+  icon_url?: string | null;
+  banner_url?: string | null;
+  username?: string | null;
 };
 
 type WireMetadata = {
@@ -92,6 +116,8 @@ function toAccount(wire: WireAccount): Account {
     publicKey: wire.public_key,
     createdAt: wire.created_at,
     moderation: wire.moderation ? toModeration(wire.moderation) : null,
+    profileId: wire.profile_id ?? null,
+    profileUsername: wire.profile_username ?? null,
   };
 }
 
@@ -103,6 +129,19 @@ function toProfile(wire: WireProfile): Profile {
     summary: wire.summary,
     iconUrl: wire.icon_url,
     bannerUrl: wire.banner_url,
+    username: wire.username ?? null,
+  };
+}
+
+function toProfileFromResponse(wire: WireProfileResponse): Profile {
+  return {
+    nanoid: wire.id,
+    accountId: wire.account_id,
+    displayName: wire.display_name ?? null,
+    summary: wire.summary ?? null,
+    iconUrl: wire.icon_url ?? null,
+    bannerUrl: wire.banner_url ?? null,
+    username: wire.username ?? null,
   };
 }
 
@@ -169,6 +208,52 @@ export function createRealEmumetClient(config: RealEmumetConfig, accessToken: st
     return wires.map(toMetadata);
   }
 
+  /** 200 本文を契約 (ProfileResponse) で検証してから変換する。違反は成功扱いにしない */
+  async function readSetUsernameResponse(resp: Response, path: string): Promise<Profile> {
+    let json: unknown;
+    try {
+      json = await resp.json();
+    } catch {
+      throw new EmumetInvalidResponseError(`Emumet API POST ${path}: 200 body is not valid JSON`);
+    }
+    const violations = violationsForResponse(
+      { path: "/api/v1/profiles/{profile_nanoid}/username", method: "post", status: "200" },
+      json,
+    );
+    if (violations.length > 0) {
+      throw new EmumetInvalidResponseError(
+        `Emumet API POST ${path}: 200 body violates the pinned OpenAPI contract: ${describeViolations(violations)}`,
+      );
+    }
+    return toProfileFromResponse(json as WireProfileResponse);
+  }
+
+  /**
+   * 409 は「設定済み」と「他で使用中」を本文で区別しない (空本文)。自分の Account の profile_username で
+   * 設定済みかを再確認して区別する。確認できない (フィールドが来ない・対象が見つからない・取得失敗) 場合は
+   * 推測せず Conflict として返す。
+   */
+  async function classifyUsernameConflict(profileId: string): Promise<Error> {
+    try {
+      const connection = await listAccounts();
+      const owner = connection.items.find((account) => account.profileId === profileId);
+      if (owner === undefined) return new EmumetUsernameConflictError();
+      return owner.profileUsername === null ? new EmumetUsernameTakenError() : new EmumetUsernameAlreadySetError();
+    } catch {
+      return new EmumetUsernameConflictError();
+    }
+  }
+
+  async function listAccounts(): Promise<AccountConnection> {
+    const resp = await request("GET", "/accounts");
+    if (resp.status === 404) {
+      // Emumet は 0 件時に 404 "No accounts found" を返す → 空 connection に正規化
+      return { items: [], first: null, last: null };
+    }
+    const wire = await expectJson<WireAccounts>(resp, [200]);
+    return { items: wire.items.map(toAccount), first: wire.first, last: wire.last };
+  }
+
   const registrationGate = createRealRegistrationGateClient(
     { request },
     config.registrationGateTimeoutMs === undefined ? {} : { timeoutMs: config.registrationGateTimeoutMs },
@@ -176,15 +261,7 @@ export function createRealEmumetClient(config: RealEmumetConfig, accessToken: st
 
   return {
     ...registrationGate,
-    async listAccounts(): Promise<AccountConnection> {
-      const resp = await request("GET", "/accounts");
-      if (resp.status === 404) {
-        // Emumet は 0 件時に 404 "No accounts found" を返す → 空 connection に正規化
-        return { items: [], first: null, last: null };
-      }
-      const wire = await expectJson<WireAccounts>(resp, [200]);
-      return { items: wire.items.map(toAccount), first: wire.first, last: wire.last };
-    },
+    listAccounts,
 
     async getAccount(id: string): Promise<Account | null> {
       const resp = await request("GET", `/accounts?ids=${encodeURIComponent(id)}`);
@@ -195,7 +272,17 @@ export function createRealEmumetClient(config: RealEmumetConfig, accessToken: st
     },
 
     async createAccount(input: CreateAccountInput): Promise<Account> {
-      const resp = await request("POST", "/accounts", { name: input.name, is_bot: input.isBot ?? false });
+      const body: Record<string, unknown> = { name: input.name, is_bot: input.isBot ?? false };
+      if (input.username !== undefined) body.profile_username = input.username;
+      const resp = await request("POST", "/accounts", body);
+      if (input.username !== undefined) {
+        // username を送った作成だけ、400/409 を username の拒否として区別する (作成は副作用前に拒否される)
+        if (resp.status === 400) {
+          const violation = checkProfileUsername(input.username);
+          if (violation !== null) throw new EmumetUsernameInvalidError(violation);
+        }
+        if (resp.status === 409) throw new EmumetUsernameTakenError();
+      }
       const wire = await expectJson<WireAccount>(resp, [201]);
       return toAccount(wire);
     },
@@ -214,6 +301,33 @@ export function createRealEmumetClient(config: RealEmumetConfig, accessToken: st
       const updated = await getProfile(accountId);
       if (!updated) throw new EmumetApiError(500, `profile missing after upsert: accountId=${accountId}`);
       return updated;
+    },
+
+    async setProfileUsername(profileId: string, username: string): Promise<Profile> {
+      const path = `/api/v1/profiles/${encodeURIComponent(profileId)}/username`;
+      let resp: Response;
+      try {
+        resp = await request("POST", path, { username });
+      } catch (cause) {
+        throw new EmumetUnavailableError(`Emumet API request failed: POST ${path}`, { cause });
+      }
+      switch (resp.status) {
+        case 200:
+          return await readSetUsernameResponse(resp, path);
+        case 400: {
+          const violation = checkProfileUsername(username);
+          if (violation !== null) throw new EmumetUsernameInvalidError(violation);
+          throw new EmumetApiError(400, await resp.text());
+        }
+        case 404:
+          throw new EmumetNotFoundError(`profile not found: profileId=${profileId}`);
+        case 409:
+          throw await classifyUsernameConflict(profileId);
+        case 422:
+          throw new EmumetAccountRestrictedError();
+        default:
+          throw new EmumetApiError(resp.status, await resp.text());
+      }
     },
 
     listMetadata,

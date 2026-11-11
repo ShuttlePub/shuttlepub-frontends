@@ -9,6 +9,10 @@ type Account {
   moderation: Moderation
   profile: Profile
   metadata: [Metadata!]!
+  "この Account (個人) の Profile nanoid。Emumet が AccountResponse に載せるまでは取得できず null (未取得)"
+  profileId: ID
+  "この Account の Profile の username。profileId があるのに null なら未設定 (一回限り設定できる)。Account 名から導出しない"
+  profileUsername: String
 }
 
 enum ModerationType {
@@ -31,6 +35,10 @@ type Profile {
   summary: String
   iconUrl: String
   bannerUrl: String
+  "acct の名前部分。一度だけ設定でき、変更できない。未設定 (既存 Profile) は null。Account 名や所有者 (移管先) から導出しない"
+  username: String
+  "username の状態。UNSET なら setProfileUsername で一回限り設定できる。SET は変更不可"
+  usernameState: ProfileUsernameState!
 }
 
 type Metadata {
@@ -49,6 +57,8 @@ type AccountConnection {
 input CreateAccountInput {
   name: String!
   isBot: Boolean
+  "Profile の username (Account 名とは別入力)。新 UI は必ず送る。省略は旧経路との互換のための暂定 (画面実装 PR で String! にする)"
+  username: String
 }
 
 input UpdateProfileInput {
@@ -202,4 +212,40 @@ extend type Mutation {
   "戻り値は既読化後の未読件数"
   markRegistrationGateNotificationsRead(eventIds: [ID!]!): Int!
   markAllRegistrationGateNotificationsRead: Int!
+}
+
+# ----------------------------------------------------------------
+# Profile username (profile-identity-web-adaptation / Emumet E8・P1 契約)
+# 形式 ^[a-z0-9][a-z0-9._-]{0,63}$ ・予約語 17 語・暗黙の trim/小文字化なし。
+# username は一度だけ設定でき、変更する mutation は存在しない。重複は削除済み Profile も含む。
+# 認可の正本は Emumet API (BFF は権限を判断せず 401/403 をそのまま区別して返す)。
+# 失敗は extensions.code で区別し、UI は混同しない:
+#   USERNAME_INVALID_FORMAT 形式違反 / USERNAME_RESERVED 予約語 /
+#   USERNAME_TAKEN 他で使用中 / USERNAME_ALREADY_SET 設定済み (一回限り) /
+#   USERNAME_CONFLICT 409 だが TAKEN と ALREADY_SET を判別できない /
+#   ACCOUNT_RESTRICTED 所有 Account が停止中 / UNAUTHENTICATED / FORBIDDEN / NOT_FOUND /
+#   BAD_REQUEST / TEMPORARILY_UNAVAILABLE (retryable) / INVALID_UPSTREAM_RESPONSE
+# 「未設定」はエラーではなく状態 (Profile.username = null / usernameState = UNSET)。
+# ----------------------------------------------------------------
+
+enum ProfileUsernameState {
+  UNSET
+  SET
+}
+
+"規則だけの判定結果。重複・設定済みは書き込み時にしか判明しない"
+enum ProfileUsernameCheck {
+  VALID
+  FORMAT
+  RESERVED
+}
+
+extend type Query {
+  "入力中の検証用。Emumet は呼ばず規則 (形式・予約語) だけを判定する"
+  checkProfileUsername(username: String!): ProfileUsernameCheck!
+}
+
+extend type Mutation {
+  "username が未設定の Profile (profileId は nanoid) に一度だけ設定する。設定済みは USERNAME_ALREADY_SET"
+  setProfileUsername(profileId: ID!, username: String!): Profile!
 }

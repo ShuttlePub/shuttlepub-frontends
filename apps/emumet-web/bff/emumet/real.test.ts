@@ -82,6 +82,8 @@ describe("(f) REST contract — method/path/query/body/Authorization", () => {
       publicKey: "ed25519:AAAA",
       createdAt: "2025-01-15T09:00:00Z",
       moderation: null,
+      profileId: null,
+      profileUsername: null,
     });
     expect(result.items[1]?.moderation).toEqual({
       type: "SUSPENDED",
@@ -179,6 +181,7 @@ describe("(f) REST contract — method/path/query/body/Authorization", () => {
         summary: "hello",
         iconUrl: "https://icon.example.com/a",
         bannerUrl: null,
+        username: null,
       },
     ]);
   });

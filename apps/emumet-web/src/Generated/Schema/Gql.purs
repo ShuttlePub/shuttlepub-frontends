@@ -6,6 +6,8 @@ import Data.Newtype as Data.Newtype
 import Data.Void as Data.Void
 import Generated.Directives.Gql (Directives)
 import Generated.Schema.Gql.Enum.ModerationType (ModerationType)
+import Generated.Schema.Gql.Enum.ProfileUsernameCheck (ProfileUsernameCheck)
+import Generated.Schema.Gql.Enum.ProfileUsernameState (ProfileUsernameState)
 import Generated.Schema.Gql.Enum.RegistrationAdminState (RegistrationAdminState)
 import Generated.Schema.Gql.Enum.RegistrationDecision (RegistrationDecision)
 import Generated.Schema.Gql.Enum.RegistrationGateEventKind (RegistrationGateEventKind)
@@ -42,6 +44,11 @@ newtype Query = Query
       ->
       -- | limit は 1〜100 (既定 50)、before は前ページ最後の通知 ID
       AsGql "RegistrationGateNotificationConnection" RegistrationGateNotificationConnection
+  , checkProfileUsername ::
+      { username :: NotNull (AsGql "String" String) }
+      ->
+      -- | 入力中の検証用。Emumet は呼ばず規則 (形式・予約語) だけを判定する
+      AsGql "ProfileUsernameCheck" ProfileUsernameCheck
   }
 
 derive instance Data.Newtype.Newtype Query _
@@ -86,6 +93,16 @@ newtype Account = Account
   , name :: {} -> AsGql "String" String
   , profile :: {} -> AsGql "Profile" (Data.Maybe.Maybe (AsGql "Profile" Profile))
   , publicKey :: {} -> AsGql "String" String
+  , profileId ::
+      {}
+      ->
+      -- | この Account (個人) の Profile nanoid。Emumet が AccountResponse に載せるまでは取得できず null (未取得)
+      AsGql "ID" (Data.Maybe.Maybe (AsGql "ID" GraphQL.Client.ID.ID))
+  , profileUsername ::
+      {}
+      ->
+      -- | この Account の Profile の username。profileId があるのに null なら未設定 (一回限り設定できる)。Account 名から導出しない
+      AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
   }
 
 derive instance Data.Newtype.Newtype Account _
@@ -103,6 +120,16 @@ newtype Profile = Profile
   , iconUrl :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
   , nanoid :: {} -> AsGql "ID" GraphQL.Client.ID.ID
   , summary :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , username ::
+      {}
+      ->
+      -- | acct の名前部分。一度だけ設定でき、変更できない。未設定 (既存 Profile) は null。Account 名や所有者 (移管先) から導出しない
+      AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , usernameState ::
+      {}
+      ->
+      -- | username の状態。UNSET なら setProfileUsername で一回限り設定できる。SET は変更不可
+      AsGql "ProfileUsernameState" ProfileUsernameState
   }
 
 derive instance Data.Newtype.Newtype Profile _
@@ -200,6 +227,13 @@ newtype Mutation = Mutation
       AsGql "Int" Int
   , createAccount ::
       { input :: NotNull (AsGql "CreateAccountInput" CreateAccountInput) } -> AsGql "Account" Account
+  , setProfileUsername ::
+      { profileId :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
+      , username :: NotNull (AsGql "String" String)
+      }
+      ->
+      -- | username が未設定の Profile (profileId は nanoid) に一度だけ設定する。設定済みは USERNAME_ALREADY_SET
+      AsGql "Profile" Profile
   , closeRegistrationGate ::
       { revision :: NotNull (AsGql "Int" Int) } -> AsGql "RegistrationGate" RegistrationGate
   , revokeRegistrationGateOverride ::
@@ -240,6 +274,11 @@ newtype UpsertMetadataInput = UpsertMetadataInput
 
 derive instance Data.Newtype.Newtype UpsertMetadataInput _
 newtype CreateAccountInput = CreateAccountInput
-  { isBot :: AsGql "Boolean" Boolean, name :: NotNull (AsGql "String" String) }
+  { isBot :: AsGql "Boolean" Boolean
+  , name :: NotNull (AsGql "String" String)
+  , username ::
+      -- | Profile の username (Account 名とは別入力)。新 UI は必ず送る。省略は旧経路との互換のための暂定 (画面実装 PR で String! にする)
+      AsGql "String" String
+  }
 
 derive instance Data.Newtype.Newtype CreateAccountInput _

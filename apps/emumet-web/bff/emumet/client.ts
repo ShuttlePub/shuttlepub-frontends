@@ -1,3 +1,4 @@
+import type { ProfileUsernameViolation } from "./profile-username.ts";
 import type { RegistrationGateClient } from "./registration-gate.ts";
 
 // ============================================================
@@ -23,6 +24,13 @@ export type Account = {
   readonly publicKey: string;
   readonly createdAt: string;
   readonly moderation: Moderation | null;
+  /**
+   * この Account (個人) の Profile nanoid と username。Emumet が AccountResponse に載せるまで
+   * (profile-identity-read-exposure) はフィールド自体が来ないため、null は「未取得」と区別できない。
+   * profileId が非 null で profileUsername が null のときだけ「username 未設定」を意味する。
+   */
+  readonly profileId: string | null;
+  readonly profileUsername: string | null;
 };
 
 export type AccountConnection = {
@@ -38,6 +46,8 @@ export type Profile = {
   readonly summary: string | null;
   readonly iconUrl: string | null;
   readonly bannerUrl: string | null;
+  /** 一度だけ設定でき、以後変更できない。未設定 (既存 Profile) は null。Account 名や所有者から導出しない */
+  readonly username: string | null;
 };
 
 export type Metadata = {
@@ -50,6 +60,8 @@ export type Metadata = {
 export type CreateAccountInput = {
   readonly name: string;
   readonly isBot?: boolean;
+  /** Profile username。指定すれば profile_username として送る。省略時は送らない (旧経路。新 UI は必ず指定する) */
+  readonly username?: string;
 };
 
 /**
@@ -87,6 +99,51 @@ export class EmumetNotFoundError extends Error {
 }
 
 /**
+ * Profile username に関する上流の拒否。HTTP ステータスの写しではなく、UI が別々に扱う種別:
+ *   Invalid        400 形式違反 / 予約語 (reason で区別)
+ *   Taken          409 他の Profile (削除済みを含む) が使用中
+ *   AlreadySet     409 この Profile は設定済みで変更できない (一回限り)
+ *   Conflict       409 だが Taken / AlreadySet を判別できない (上流本文が空のため)
+ *   AccountRestricted 422 所有 Account が停止中
+ */
+export class EmumetUsernameInvalidError extends Error {
+  readonly reason: ProfileUsernameViolation;
+  constructor(reason: ProfileUsernameViolation) {
+    super(`profile username rejected: ${reason}`);
+    this.name = "EmumetUsernameInvalidError";
+    this.reason = reason;
+  }
+}
+
+export class EmumetUsernameTakenError extends Error {
+  constructor() {
+    super("profile username is already taken");
+    this.name = "EmumetUsernameTakenError";
+  }
+}
+
+export class EmumetUsernameAlreadySetError extends Error {
+  constructor() {
+    super("profile already has a username");
+    this.name = "EmumetUsernameAlreadySetError";
+  }
+}
+
+export class EmumetUsernameConflictError extends Error {
+  constructor() {
+    super("profile username conflict (taken or already set)");
+    this.name = "EmumetUsernameConflictError";
+  }
+}
+
+export class EmumetAccountRestrictedError extends Error {
+  constructor() {
+    super("owning account is suspended or banned");
+    this.name = "EmumetAccountRestrictedError";
+  }
+}
+
+/**
  * バッチ契約: listProfiles / listMetadata は複数 accountId を 1 リクエストで取得する
  * 基本操作 (DataLoader の batchFn からそのまま呼ばれる)。getProfile は
  * listProfiles([id]) の薄いラッパとして各実装が提供する。
@@ -99,6 +156,12 @@ export interface EmumetClient extends RegistrationGateClient {
   getProfile(accountId: string): Promise<Profile | null>;
   /** プロフィール未存在なら作成 (POST)、存在すれば更新 (PUT)。戻り値は更新後の Profile */
   upsertProfile(accountId: string, fields: ProfileFields): Promise<Profile>;
+  /**
+   * username が未設定の Profile に一度だけ設定する (POST /api/v1/profiles/{profile_nanoid}/username)。
+   * 変更する API・mutation は存在しない。失敗は EmumetUsername*Error / EmumetAccountRestrictedError /
+   * EmumetNotFoundError / EmumetApiError (401・403 等) のいずれか。
+   */
+  setProfileUsername(profileId: string, username: string): Promise<Profile>;
   listMetadata(accountIds: readonly string[]): Promise<readonly Metadata[]>;
   createMetadata(accountId: string, input: MetadataInput): Promise<Metadata>;
   updateMetadata(accountId: string, nanoid: string, input: MetadataInput): Promise<Metadata>;

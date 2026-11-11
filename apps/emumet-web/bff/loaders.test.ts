@@ -28,6 +28,7 @@ function fakeEmumetClient(overrides: BatchOverrides): EmumetClient {
     createAccount: () => notUsed("createAccount"),
     getProfile: () => notUsed("getProfile"),
     upsertProfile: () => notUsed("upsertProfile"),
+    setProfileUsername: () => notUsed("setProfileUsername"),
     createMetadata: () => notUsed("createMetadata"),
     updateMetadata: () => notUsed("updateMetadata"),
     deleteMetadata: () => notUsed("deleteMetadata"),
@@ -51,6 +52,7 @@ const profile1: Profile = {
   summary: null,
   iconUrl: null,
   bannerUrl: null,
+  username: null,
 };
 const profile2: Profile = {
   nanoid: "prof_k2",
@@ -59,6 +61,7 @@ const profile2: Profile = {
   summary: "s2",
   iconUrl: null,
   bannerUrl: null,
+  username: null,
 };
 const meta1: Metadata = { nanoid: "m1", accountId: "k1", label: "l1", content: "c1" };
 const meta2a: Metadata = { nanoid: "m2a", accountId: "k2", label: "l2a", content: "c2a" };
