@@ -19,6 +19,17 @@ const kei = author("author-kei", "kei@shuttlepub.example", "Kei");
 const taro = author("author-taro", "taro@mstdn.example", "Taro");
 const hina = author("author-hina", "hina@shuttlepub.example", "hina");
 
+/** The Note (UUID) behind each provisional post: what the quick reaction operations address. */
+export const NOTE_IDS = {
+  "post-mika-picker": "5f0c1a2e-7b3d-4e21-9c55-000000000001",
+  "post-sora-zine": "5f0c1a2e-7b3d-4e21-9c55-000000000002",
+  "post-nekota-coffee": "5f0c1a2e-7b3d-4e21-9c55-000000000003",
+  "post-aoi-profiles": "5f0c1a2e-7b3d-4e21-9c55-000000000004",
+  "post-kei-release": "5f0c1a2e-7b3d-4e21-9c55-000000000005",
+  "post-taro-reply": "5f0c1a2e-7b3d-4e21-9c55-000000000006",
+  "post-hina-reply": "5f0c1a2e-7b3d-4e21-9c55-000000000007",
+} as const;
+
 /** The host this mock pretends to be; LOCAL lists only its users. */
 export const MOCK_LOCAL_HOST = "shuttlepub.example";
 
@@ -30,34 +41,34 @@ const post = (fields: Omit<Post, "repostedBy" | "inReplyToId"> & Partial<Pick<Po
 
 export const timelinePostFixtures: readonly Post[] = [
   post({
-    id: "post-mika-picker", author: mika, createdAt: "2026-01-15T11:55:00.000Z", replyCount: 0, repostCount: 1,
+    id: "post-mika-picker", noteId: NOTE_IDS["post-mika-picker"], author: mika, createdAt: "2026-01-15T11:55:00.000Z", replyCount: 0, repostCount: 1,
     text: "新しいリアクションピッカー、いつもの絵文字がいちばん上に並ぶの便利そう。\n押すだけで反応できるのが良い。",
   }),
   post({
-    id: "post-sora-zine", author: sora, createdAt: "2026-01-15T11:42:00.000Z", replyCount: 2, repostCount: 3,
+    id: "post-sora-zine", noteId: NOTE_IDS["post-sora-zine"], author: sora, createdAt: "2026-01-15T11:42:00.000Z", replyCount: 2, repostCount: 3,
     text: "週末に作った ZINE の表紙、ようやく入稿できた！",
   }),
   post({
-    id: "post-nekota-coffee", author: nekota, createdAt: "2026-01-15T11:18:00.000Z", replyCount: 0, repostCount: 1,
+    id: "post-nekota-coffee", noteId: NOTE_IDS["post-nekota-coffee"], author: nekota, createdAt: "2026-01-15T11:18:00.000Z", replyCount: 0, repostCount: 1,
     text: "朝の珈琲がうまい。今日は浅煎り。", repostedBy: ren,
   }),
   post({
-    id: "post-aoi-profiles", author: aoi, createdAt: "2026-01-15T11:00:00.000Z", replyCount: 0, repostCount: 0,
+    id: "post-aoi-profiles", noteId: NOTE_IDS["post-aoi-profiles"], author: aoi, createdAt: "2026-01-15T11:00:00.000Z", replyCount: 0, repostCount: 0,
     text: "仕事用と趣味用で Profile を分けて使えるの、思ってたより快適。",
   }),
   post({
-    id: "post-kei-release", author: kei, createdAt: "2026-01-15T09:00:00.000Z", replyCount: 0, repostCount: 5,
+    id: "post-kei-release", noteId: NOTE_IDS["post-kei-release"], author: kei, createdAt: "2026-01-15T09:00:00.000Z", replyCount: 0, repostCount: 5,
     text: "リリースノート書き終わった。今回はリアクション周りの改善が中心です。\nフィードバックお待ちしてます！",
   }),
 ];
 
 export const replyPostFixtures: readonly Post[] = [
   post({
-    id: "post-taro-reply", author: taro, createdAt: "2026-01-15T11:50:00.000Z", replyCount: 0, repostCount: 0,
+    id: "post-taro-reply", noteId: NOTE_IDS["post-taro-reply"], author: taro, createdAt: "2026-01-15T11:50:00.000Z", replyCount: 0, repostCount: 0,
     text: "おめでとう！表紙の色すごく好き", inReplyToId: "post-sora-zine",
   }),
   post({
-    id: "post-hina-reply", author: hina, createdAt: "2026-01-15T11:53:00.000Z", replyCount: 0, repostCount: 0,
+    id: "post-hina-reply", noteId: NOTE_IDS["post-hina-reply"], author: hina, createdAt: "2026-01-15T11:53:00.000Z", replyCount: 0, repostCount: 0,
     text: "通販あったら教えてください", inReplyToId: "post-sora-zine",
   }),
 ];

@@ -46,6 +46,7 @@ function createAjv(): Ajv2020 {
   ajv.addFormat("int64", { type: "number", validate: (value: number) => Number.isSafeInteger(value) });
   ajv.addFormat("float", { type: "number", validate: () => true });
   ajv.addFormat("double", { type: "number", validate: () => true });
+  ajv.addFormat("uuid", /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
   ajv.addSchema(openapiDocument, DOCUMENT_ID);
   return ajv;
 }

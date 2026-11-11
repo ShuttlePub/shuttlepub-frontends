@@ -45,6 +45,8 @@ function appEnvironment(app: ScreenApp): Record<string, string> {
   if (app === "ShuttlePub") {
     delete inherited["SHUTTLEPUB_API_URL"];
     inherited["SHUTTLEPUB_API_MODE"] = "mock";
+    // The stateful mock is reset before every case (POST /__mock/reset, test-only route).
+    inherited["SHUTTLEPUB_MOCK_RESET"] = "1";
   }
   return inherited;
 }

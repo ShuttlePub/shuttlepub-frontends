@@ -2,6 +2,8 @@ module App.Dom
   ( KeyAction
   , focusById
   , focusFirstIn
+  , requestFocus
+  , trackFocus
   , keydownAction
   , isPlainClick
   , preventDefault
@@ -30,6 +32,8 @@ type KeyAction = { action :: String, list :: String, value :: String }
 
 foreign import focusById :: String -> Effect Unit
 foreign import focusFirstIn :: String -> Effect Unit
+foreign import requestFocus :: { target :: String, firstIn :: Boolean, postId :: String, onlyIfLost :: Boolean } -> Effect Unit
+foreign import trackFocus :: Effect Unit
 foreign import keydownAction :: Event -> Effect KeyAction
 foreign import isPlainClick :: Event -> Effect Boolean
 foreign import preventDefault :: Event -> Effect Unit

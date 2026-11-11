@@ -311,6 +311,15 @@ async function prepareShuttlePubShell(page: Page, item: ScreenCase) {
     await expect(page.getByTestId("timeline")).toHaveAttribute("data-state", "loaded");
     await expect(content.locator("article")).toHaveCount(5);
   }
+  // Quick reaction UI (D03) present on this revision: wait for its data, which arrives
+  // after the posts (reaction chips) or the Profile (favourites).
+  const reactionUi = await page.locator(".sp-reaction-layer").count() > 0;
+  if (reactionUi && (item.path === "/" || item.path.startsWith("/posts/"))) {
+    await expect(content.getByTestId("reactions").first()).toBeVisible();
+  }
+  if (reactionUi && item.path === "/settings") {
+    await expect(page.getByTestId("favorites")).toHaveAttribute("data-state", "loaded");
+  }
   if (item.id === "post-detail") {
     await expect(page.getByTestId("post-detail")).toHaveAttribute("data-state", "loaded");
     await expect(content.locator("article")).toHaveCount(3);
@@ -332,6 +341,57 @@ async function prepareShuttlePubShell(page: Page, item: ScreenCase) {
     await expect(page.getByTestId("profile-menu").getByRole("menuitemradio")).toHaveCount(3);
   } else if (item.id === "settings") {
     await expect(content).toContainText("Fixture Profile");
+  } else if (item.id.startsWith("reaction-")) {
+    await prepareQuickReaction(page, item);
+  }
+}
+
+/**
+ * Quick reaction states (host intents/shuttlepub/features/quick-reaction-ui/ui-spec.md
+ * v6). The mock is reset before every ShuttlePub case (POST /__mock/reset) and these
+ * steps leave no state behind: the undo case reacts on a post first and removes only
+ * that reaction, so a removal sent when the page goes away restores the fixtures.
+ */
+async function prepareQuickReaction(page: Page, item: ScreenCase) {
+  const picker = page.getByTestId("picker");
+  if (item.id === "reaction-picker" || item.id === "reaction-picker-no-favorites") {
+    if (item.id === "reaction-picker-no-favorites") {
+      // P3: a Profile that never saved favourites has no favourites row.
+      await page.getByRole("button", { name: /投稿用 Profile を切り替え/ }).filter({ visible: true }).click();
+      await page.getByTestId("profile-menu").getByRole("menuitemradio", { name: /Fixture Dev/ }).click();
+      await expect(page.getByRole("button", { name: /投稿用 Profile を切り替え（現在: Fixture Dev）/ }).filter({ visible: true })).toHaveCount(1);
+      await expect(page.getByTestId("reactions").first()).toBeVisible();
+    }
+    await page.locator("#react-post-mika-picker").click();
+    await expect(picker).toBeVisible();
+    await expect(picker.getByTestId("picker-grid").getByRole("button")).toHaveCount(16);
+    await expect(picker.getByTestId("picker-favorites")).toHaveCount(item.id === "reaction-picker" ? 1 : 0);
+    if (item.id === "reaction-picker") {
+      await expect(picker.getByRole("button", { name: ":old_blob:（利用不可）" })).toHaveAttribute("aria-disabled", "true");
+    }
+  } else if (item.id === "reaction-undo") {
+    // C2: remove my reaction; the undo toast stays while hovered (実装上の注意 3).
+    await page.locator("#react-post-mika-picker").click();
+    await picker.getByTestId("picker-favorites").getByRole("button", { name: "いいね" }).click();
+    const mine = page.locator("#react-mine-post-mika-picker");
+    await expect(mine).toBeFocused();
+    await expect(mine).not.toHaveAttribute("aria-busy", "true");
+    await mine.click();
+    const toast = page.getByTestId("reaction-toast");
+    await expect(toast).toContainText("取り消しました");
+    await toast.hover();
+    await expect(page.locator("#react-post-mika-picker")).toBeFocused();
+  } else if (item.id === "reaction-detail") {
+    // D1: the reactions tab opens on 「すべて」 with every reactor.
+    await expect(page.getByTestId("post-detail")).toHaveAttribute("data-state", "loaded");
+    await page.getByRole("tab", { name: /リアクション/ }).click();
+    await expect(page.getByRole("button", { name: /^すべて/ })).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByTestId("reactor-list").locator("li")).toHaveCount(19);
+  } else if (item.id === "reaction-settings-menu") {
+    // S4: the unavailable favourite's menu starts with 入れ替え.
+    await page.getByRole("button", { name: ":old_blob:（利用不可）" }).click();
+    const menu = page.getByTestId("favorite-menu");
+    await expect(menu.getByRole("menuitem").first()).toHaveText("入れ替え");
   }
 }
 
@@ -378,6 +438,9 @@ async function captureScreen(browser: Browser, server: AppServer, item: ScreenCa
     reducedMotion: "reduce", serviceWorkers: "block",
   });
   try {
+    // The quick reaction mock is stateful: every case starts from its fixtures. A
+    // revision without the route answers its SSR shell, which is harmless.
+    if (item.app === "ShuttlePub" && viewer === undefined) await fetch(`${server.url}/__mock/reset`, { method: "POST" });
     const errors: string[] = [];
     const responseChecks: Promise<void>[] = [];
     await context.route("**/*", async (route) => {

@@ -45,7 +45,7 @@ describe("mock mode", () => {
     });
   });
 
-  const POST_FIELDS = "id text createdAt replyCount repostCount inReplyToId author { id handle displayName } repostedBy { id handle displayName }";
+  const POST_FIELDS = "id noteId text createdAt replyCount repostCount inReplyToId author { id handle displayName } repostedBy { id handle displayName }";
 
   test("serves the provisional timeline fixtures per tab", async () => {
     const home = await run(app, `{ timeline(kind: HOME) { ${POST_FIELDS} } }`);

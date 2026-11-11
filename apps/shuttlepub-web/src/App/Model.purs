@@ -3,8 +3,10 @@ module App.Model where
 import Prelude
 
 import App.Api.Error (ApiError)
+import App.Emoji (Emoji)
 import App.Post (Post, TimelineTab(..), Visibility(..))
 import App.Profile (Profile, ProfileContext)
+import App.Reaction (DetailFilter(..), NoteWrite, PendingRemoval, PickerState, PostReactions, QuickSettings, SettingsProblem, Toast)
 import App.Route (Route)
 import Data.Argonaut.Decode.Class (class DecodeJson)
 import Data.Argonaut.Decode.Generic (genericDecodeJson)
@@ -102,6 +104,66 @@ type Model =
   , detailTab :: DetailTab
   , compose :: Maybe ComposeState
   , profileMenu :: Maybe ProfileMenuState
+  , reaction :: ReactionModel
+  -- Transport lifetime is independent of the visible Profile/epoch.
+  , reactionWrites :: ReactionWrites
+  }
+
+type ReactionWrites =
+  { notes :: Array NoteWrite
+  , versions :: Array { profileId :: String, noteId :: String, sequence :: Int }
+  , settings :: Array { profileId :: String, epoch :: Int, request :: Int }
+  }
+
+-- | Quick reaction (D03, App.Reaction) for the acting Profile `profileId`. Everything
+-- | here belongs to that Profile and is reset when the Profile changes.
+type ReactionModel =
+  { profileId :: Maybe String
+  -- Profile context generation: bumped whenever the acting Profile changes (also
+  -- A -> B -> A) or the page is restored; answers from another generation are dropped.
+  , epoch :: Int
+  -- Source of request ids (settings, per-Note reaction requests).
+  , requestSeq :: Int
+  -- The settings request whose answer is awaited (older answers are dropped).
+  , settingsRequest :: Int
+  , settings :: RemoteData QuickSettings
+  , savingSettings :: Boolean
+  , retryAfterLoad :: Boolean
+  , restoring :: Boolean
+  , settingsProblem :: Maybe SettingsProblem
+  , posts :: Array PostReactions
+  , postsError :: Maybe ApiError
+  , pendingRemoval :: Maybe PendingRemoval
+  , picker :: Maybe PickerState
+  , chipMenu :: Maybe Int
+  , dragFrom :: Maybe Int
+  , toast :: Maybe Toast
+  , toastSeq :: Int
+  , detailFilter :: DetailFilter
+  , customEmojis :: RemoteData (Array Emoji)
+  }
+
+initialReactionModel :: ReactionModel
+initialReactionModel =
+  { profileId: Nothing
+  , epoch: 0
+  , requestSeq: 0
+  , settingsRequest: 0
+  , settings: NotAsked
+  , savingSettings: false
+  , retryAfterLoad: false
+  , restoring: false
+  , settingsProblem: Nothing
+  , posts: []
+  , postsError: Nothing
+  , pendingRemoval: Nothing
+  , picker: Nothing
+  , chipMenu: Nothing
+  , dragFrom: Nothing
+  , toast: Nothing
+  , toastSeq: 0
+  , detailFilter: AllReactors
+  , customEmojis: NotAsked
   }
 
 -- | Initial model used by SSR (and as the base for tests). Data is requested by
@@ -122,6 +184,8 @@ initialModel route =
   , detailTab: RepliesTab
   , compose: Nothing
   , profileMenu: Nothing
+  , reaction: initialReactionModel
+  , reactionWrites: { notes: [], versions: [], settings: [] }
   }
 
 emptyCompose :: String -> ComposeState

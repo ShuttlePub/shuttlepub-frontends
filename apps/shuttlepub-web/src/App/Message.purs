@@ -5,6 +5,7 @@ import App.Dom (KeyAction)
 import App.Model (ApiStatus, DetailTab, PostDetailData)
 import App.Post (Post, TimelineTab, Visibility)
 import App.Profile (Profile, ProfileContext)
+import App.Reaction (ReactionMsg)
 import App.Route (Route)
 import Data.Either (Either)
 import Data.Maybe (Maybe)
@@ -43,4 +44,6 @@ data Message
   | SelectProfile String
   | ProfileSelected (Either ApiError ProfileContext)
   | Logout
+  -- | Quick reaction (D03): App.Reaction / Client.Reaction.
+  | Reaction ReactionMsg
   | NoOp

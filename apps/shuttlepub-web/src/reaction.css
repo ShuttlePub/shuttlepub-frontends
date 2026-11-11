@@ -1,0 +1,204 @@
+/*
+ * Quick reaction UI (D03). Values follow the agreed mock (host intents/shuttlepub/
+ * features/quick-reaction-ui/mocks/index.html, v3+ overrides) and ui-spec v6 「余白」.
+ * Classes are prefixed `sp-` and scoped under `.sp-app` (実装上の注意 5).
+ */
+
+/* ===== Emoji ===== */
+.sp-app .sp-emo {
+  display: inline-grid; place-items: center; width: 1.2em; height: 1.2em;
+  font-size: 16px; line-height: 1; font-style: normal;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+}
+.sp-app img.sp-emo { object-fit: contain; }
+.sp-app .sp-emo-missing {
+  border: 1px dashed currentColor; border-radius: 4px; font-size: 10px !important; opacity: .6;
+}
+
+/* ===== Reaction chips (C1 / C3 / C4): 28 high (mobile 32), gap 4 ===== */
+.sp-app .sp-reactions { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+.sp-app .sp-rchip {
+  display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px;
+  border-radius: calc(var(--radius-theme) * .75); border: 1px solid var(--sp-line);
+  background: color-mix(in srgb, currentColor 4%, transparent);
+  font-size: 12px; color: var(--color-text-secondary); font-variant-numeric: tabular-nums;
+}
+.sp-app .sp-rchip .sp-emo { font-size: 14px; }
+.sp-app button.sp-rchip:not([aria-disabled="true"]):hover,
+.sp-app a.sp-rchip:hover { border-color: color-mix(in srgb, var(--color-accent) 60%, transparent); }
+/* My reaction: frame and fill only, no 「×」 (C1 v4). */
+.sp-app .sp-rchip.is-mine {
+  border-color: var(--color-accent); color: var(--color-accent); font-weight: 650;
+  background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+.sp-app .sp-rchip.is-unavailable .sp-emo { filter: grayscale(1); opacity: .45; }
+.sp-app .sp-rchip-more { color: var(--color-text-muted); }
+
+/* The button fills the fixed reaction cell (F0 .sp-react-slot); the anchor only
+   positions the desktop popover. */
+.sp-app .sp-react-anchor { display: contents; }
+.sp-app .sp-react-btn { width: 100%; min-width: 0; padding: 0; }
+.sp-app .sp-react-btn[aria-expanded="true"] {
+  color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+
+/* ===== Picker (P1-P6) ===== */
+.sp-app .sp-picker {
+  width: 344px; max-width: calc(100vw - 24px); padding: 12px; text-align: left;
+  background: var(--color-bg-primary); border: 1px solid var(--color-border);
+  border-radius: var(--radius-theme-lg); box-shadow: 0 16px 48px #0008;
+}
+.sp-app .sp-picker:focus { outline: none; }
+.sp-app .sp-picker-pop { position: absolute; top: calc(100% + 4px); right: -8px; z-index: 46; }
+.sp-app .sp-picker-modal { position: relative; width: 372px; padding: 16px; }
+.sp-app .sp-picker.sp-picker-sheet {
+  width: 100%; max-width: none; border-left: 0; border-right: 0; border-bottom: 0;
+  border-radius: var(--radius-theme-lg) var(--radius-theme-lg) 0 0; box-shadow: 0 -12px 40px #0006;
+}
+.sp-app .sp-clickaway { position: fixed; inset: 0; z-index: 44; }
+.sp-app .sp-modal-backdrop {
+  position: fixed; inset: 0; z-index: 45; display: grid; place-items: center; padding: 16px; background: #0008;
+}
+.sp-app .sp-pk-search {
+  display: flex; align-items: center; gap: 8px; min-height: 36px; padding: 0 12px;
+  border: 1px solid var(--sp-line); border-radius: calc(var(--radius-theme) * .75);
+  background: color-mix(in srgb, currentColor 3%, transparent);
+}
+.sp-app .sp-pk-search:focus-within { border-color: var(--color-accent); }
+.sp-app .sp-pk-search .sp-icon { width: 16px; height: 16px; opacity: .5; }
+.sp-app .sp-pk-search input {
+  flex: 1; min-width: 0; font-size: 13px; background: transparent; border: 0; outline: none; color: var(--color-text-primary);
+}
+.sp-app .sp-pk-search input::placeholder { color: var(--color-text-muted); }
+/* P1: no heading, one row of larger buttons and a divider; P6: gear at its end. */
+.sp-app .sp-pk-favs {
+  display: flex; align-items: center; gap: 4px; margin-top: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--sp-line);
+}
+.sp-app .sp-pk-fav {
+  position: relative; width: 48px; height: 44px; display: grid; place-items: center;
+  border-radius: calc(var(--radius-theme) * .75); border: 1px solid var(--sp-line);
+  background: color-mix(in srgb, currentColor 5%, transparent);
+}
+.sp-app .sp-pk-fav .sp-emo { font-size: 24px; }
+.sp-app .sp-pk-fav:not(.is-unavailable):hover { border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 10%, transparent); }
+/* P2: greyed out and struck through, not selectable. */
+.sp-app .sp-pk-fav.is-unavailable { cursor: not-allowed; background: transparent; border-style: dashed; }
+.sp-app .sp-pk-fav.is-unavailable .sp-emo { filter: grayscale(1); opacity: .3; }
+.sp-app .sp-pk-fav.is-unavailable::after {
+  content: ""; position: absolute; width: 58%; height: 2px; border-radius: 2px;
+  background: var(--color-text-muted); transform: rotate(-35deg);
+}
+.sp-app .sp-pk-cfg {
+  width: 34px; height: 44px; margin-left: auto; display: grid; place-items: center;
+  border-radius: calc(var(--radius-theme) * .6); color: var(--color-text-muted);
+}
+.sp-app .sp-pk-cfg:hover { color: var(--color-text-primary); background: color-mix(in srgb, currentColor 7%, transparent); }
+.sp-app .sp-pk-cfg .sp-icon { width: 18px; height: 18px; }
+.sp-app .sp-pk-tabs { display: flex; gap: 2px; margin-top: 8px; }
+.sp-app .sp-pk-tab {
+  flex: 1; height: 32px; display: grid; place-items: center; opacity: .55;
+  border-radius: calc(var(--radius-theme) * .6);
+}
+.sp-app .sp-pk-tab .sp-emo { font-size: 17px; }
+.sp-app .sp-pk-tab:hover { opacity: .9; background: color-mix(in srgb, currentColor 6%, transparent); }
+.sp-app .sp-pk-tab[aria-selected="true"] {
+  opacity: 1; background: color-mix(in srgb, var(--color-accent) 13%, transparent);
+  box-shadow: inset 0 -2px 0 var(--color-accent);
+}
+.sp-app .sp-pk-grid {
+  display: grid; grid-template-columns: repeat(8, 1fr); margin-top: 4px; max-height: 172px; overflow-y: auto;
+}
+.sp-app .sp-pk-emo { aspect-ratio: 1; display: grid; place-items: center; border-radius: calc(var(--radius-theme) * .6); }
+.sp-app .sp-pk-emo .sp-emo { font-size: 22px; }
+.sp-app .sp-pk-emo:hover:not(:disabled) { background: color-mix(in srgb, currentColor 9%, transparent); }
+.sp-app .sp-pk-emo:disabled { opacity: .25; }
+.sp-app .sp-pk-note { padding: 18px 4px; font-size: 12px; text-align: center; color: var(--color-text-muted); }
+.sp-app .sp-pk-note.sp-pk-error { padding: 8px 4px; color: var(--color-error); text-align: left; }
+
+/* ===== Toast (C2 / S2 / P2): above every layer ===== */
+.sp-app .sp-toast {
+  position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 60;
+  display: flex; align-items: center; gap: 12px; width: max-content; max-width: calc(100vw - 28px);
+  padding: 8px 12px; border-radius: calc(var(--radius-theme) * .75);
+  background: var(--color-text-primary); color: var(--color-bg-primary);
+  font-size: 12px; box-shadow: 0 8px 28px #0007;
+}
+.sp-app .sp-toast .sp-emo { font-size: 15px; }
+.sp-app .sp-toast-btn { font-weight: 750; text-decoration: underline; white-space: nowrap; color: inherit; }
+.sp-app .sp-toast .sp-toast-btn:focus-visible { outline-color: var(--color-bg-primary); }
+
+/* ===== Post detail reactors (D1 / D3) ===== */
+.sp-app .sp-reactors { margin-top: 12px; }
+.sp-app .sp-rtabs { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.sp-app .sp-rtab {
+  display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; white-space: nowrap;
+  border-radius: calc(var(--radius-theme) * .75); border: 1px solid var(--sp-line);
+  font-size: 12px; color: var(--color-text-secondary);
+}
+.sp-app .sp-rtab .sp-emo { font-size: 14px; }
+.sp-app .sp-rtab[aria-pressed="true"] {
+  border-color: var(--color-accent); color: var(--color-accent); font-weight: 650;
+  background: color-mix(in srgb, var(--color-accent) 10%, transparent);
+}
+.sp-app .sp-rhint { padding: 8px 0; font-size: 12px; color: var(--color-text-muted); }
+.sp-app .sp-reactor-list { border: 1px solid var(--sp-line); border-radius: var(--radius-theme); }
+.sp-app .sp-reactor {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 13px; border-bottom: 1px solid var(--sp-line);
+}
+.sp-app .sp-reactor:last-child { border-bottom: 0; }
+.sp-app .sp-reactor .sp-grow { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-app .sp-reactor-handle { font-size: 11px; margin-left: 4px; }
+.sp-app .sp-reactor .sp-emo { font-size: 18px; }
+.sp-app .sp-you-badge {
+  margin-left: 4px; padding: 0 4px; font-size: 10px; font-weight: 700;
+  color: var(--color-accent); border: 1px solid var(--color-accent); border-radius: 4px;
+}
+
+/* ===== Settings: favourites (S1-S6) ===== */
+.sp-app .sp-set-col { flex-direction: column; align-items: flex-start; gap: 8px; }
+.sp-app .sp-set-col:hover { background: transparent; }
+.sp-app .sp-set-label { font-size: 14px; font-weight: 500; }
+.sp-app .sp-fchips { display: flex; flex-wrap: wrap; gap: 8px; }
+.sp-app .sp-fchip-wrap { position: relative; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.sp-app .sp-fchip-wrap.is-dragging { opacity: .4; }
+.sp-app .sp-fchip {
+  width: 48px; height: 48px; display: grid; place-items: center; cursor: grab;
+  border-radius: var(--radius-theme); border: 1px solid var(--sp-line);
+  background: color-mix(in srgb, currentColor 5%, transparent);
+}
+.sp-app .sp-fchip .sp-emo { font-size: 26px; }
+.sp-app .sp-fchip:hover, .sp-app .sp-fchip[aria-expanded="true"] { border-color: var(--color-accent); }
+.sp-app .sp-fchip.is-unavailable {
+  border-style: dashed; border-color: color-mix(in srgb, var(--color-error) 55%, transparent); background: transparent;
+}
+.sp-app .sp-fchip.is-unavailable .sp-emo { filter: grayscale(1); opacity: .35; }
+.sp-app .sp-fchip-badge { font-size: 10px; font-weight: 700; line-height: 1; color: var(--color-error); }
+.sp-app .sp-fchip-add { border-style: dashed; background: transparent; color: var(--color-text-muted); cursor: pointer; }
+.sp-app .sp-fchip-add .sp-icon { width: 22px; height: 22px; }
+.sp-app .sp-fchip-empty { align-self: center; margin-right: 4px; font-size: 14px; color: var(--color-text-muted); }
+.sp-app .sp-chip-pop {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 46; width: 168px; padding: 6px;
+  background: var(--color-bg-primary); border: 1px solid var(--color-border);
+  border-radius: var(--radius-theme-lg); box-shadow: 0 16px 48px #0008;
+}
+.sp-app .sp-chip-menu .sp-menu-item { font-size: 13px; }
+.sp-app .sp-chip-menu .sp-menu-item > .sp-icon { width: 18px; height: 18px; opacity: .7; }
+.sp-app .sp-fav-problem { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 12px; color: var(--color-error); }
+.sp-app .sp-text-btn {
+  padding: 6px 8px; font-size: 11px; border-radius: calc(var(--radius-theme) * .5);
+  color: var(--color-text-secondary); border: 1px solid var(--sp-line);
+}
+.sp-app .sp-text-btn:hover { background: color-mix(in srgb, currentColor 8%, transparent); }
+
+@media (max-width: 767px) {
+  .sp-app .sp-rchip { height: 32px; }
+  .sp-app .sp-pk-search { min-height: 36px; }
+  .sp-app .sp-pk-fav { flex: 1; width: auto; height: 48px; }
+  .sp-app .sp-pk-cfg { flex: 0 0 36px; height: 48px; }
+  .sp-app .sp-pk-tab { height: 36px; }
+  .sp-app .sp-pk-grid { grid-template-columns: repeat(7, 1fr); max-height: 250px; }
+  .sp-app .sp-toast { bottom: calc(var(--sp-tabbar-h) + 12px); }
+  .sp-app .sp-rtabs { flex-wrap: nowrap; overflow-x: auto; padding: 0 12px; }
+  .sp-app .sp-reactors .sp-rhint { padding: 8px 12px; }
+  .sp-app .sp-reactor-list { border-left: 0; border-right: 0; border-radius: 0; }
+}

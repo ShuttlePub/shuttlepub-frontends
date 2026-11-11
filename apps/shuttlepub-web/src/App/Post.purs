@@ -25,8 +25,8 @@ import Data.Maybe (Maybe)
 import Data.Show.Generic (genericShow)
 
 -- | PROVISIONAL post shapes mirroring the app-owned SDL (bff/schema.graphql). The
--- | pinned OpenAPI has no timeline/post endpoint yet; reaction data (D03) is added
--- | by the quick-reaction UI, not here.
+-- | pinned OpenAPI has no timeline/post endpoint yet; reaction data (D03) lives in
+-- | App.Reaction, keyed by noteId.
 type Author =
   { id :: String
   , handle :: String
@@ -35,6 +35,8 @@ type Author =
 
 type Post =
   { id :: String
+  -- The ShuttlePub Note (UUID) the quick reaction operations address.
+  , noteId :: String
   , author :: Author
   , text :: String
   , createdAt :: String

@@ -21,6 +21,8 @@ data ApiError
   | ProfileUnavailable String
   | NotImplemented String
   | UpstreamError String
+  | RevisionConflict String
+  | EmojiUnavailable String
   | Unavailable String
   | InvalidResponse String
   | NetworkError String
@@ -46,6 +48,8 @@ fromGqlCode code message = case code of
   Just "PROFILE_UNAVAILABLE" -> ProfileUnavailable message
   Just "NOT_IMPLEMENTED" -> NotImplemented message
   Just "UPSTREAM_ERROR" -> UpstreamError message
+  Just "REVISION_CONFLICT" -> RevisionConflict message
+  Just "EMOJI_UNAVAILABLE" -> EmojiUnavailable message
   Just "UPSTREAM_UNAVAILABLE" -> Unavailable message
   Just "INVALID_UPSTREAM_RESPONSE" -> InvalidResponse message
   _ -> Unexpected message
@@ -72,6 +76,8 @@ describe = case _ of
   ProfileUnavailable _ -> "Selected profile is no longer available"
   NotImplemented message -> "Not implemented: " <> message
   UpstreamError message -> "Backend error: " <> message
+  RevisionConflict _ -> "Changed on another device"
+  EmojiUnavailable _ -> "Emoji is unavailable"
   Unavailable message -> "Backend unavailable: " <> message
   InvalidResponse message -> "Invalid backend response: " <> message
   NetworkError message -> "Network error: " <> message
@@ -86,6 +92,8 @@ tag = case _ of
   ProfileUnavailable _ -> "profile_unavailable"
   NotImplemented _ -> "not_implemented"
   UpstreamError _ -> "upstream_error"
+  RevisionConflict _ -> "revision_conflict"
+  EmojiUnavailable _ -> "emoji_unavailable"
   Unavailable _ -> "unavailable"
   InvalidResponse _ -> "invalid_response"
   NetworkError _ -> "network_error"

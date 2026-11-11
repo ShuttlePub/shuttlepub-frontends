@@ -26,6 +26,7 @@ import Flame.Renderer.String as FRS
 import Generated.Schema.Gql.Enum.ApiMode (ApiMode(..))
 import Routing.Duplex (parse, print)
 import Server (renderPage)
+import Test.Reaction (testReaction)
 
 main :: Effect Unit
 main = do
@@ -36,6 +37,7 @@ main = do
   testTimelineTabs
   testTimeFormatting
   testSsr
+  testReaction
   testLoginHref
   testLoginScreens
   testLoginFocusTargets
@@ -84,6 +86,7 @@ testRouteCodec = do
 samplePost :: Post
 samplePost =
   { id: "post-1"
+  , noteId: "5f0c1a2e-7b3d-4e21-9c55-000000000001"
   , author: { id: "author-1", handle: "mika@misskey.example", displayName: "Mika" }
   , text: "hello\nworld"
   , createdAt: "2026-01-15T11:55:00.000Z"
