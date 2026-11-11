@@ -5,7 +5,14 @@ import { resolve } from "node:path";
 import { createBooskiffClient } from "../../../booskiff-web/bff/booskiff/real.ts";
 import { startBooskiffStub } from "./booskiff-stub.ts";
 import { FIXED_TIME, SCREEN_CASES } from "./cases.ts";
-import { captureSide, featuresInEmumetHtml, featuresInShuttlePubHtml, selectCases } from "./features.ts";
+import {
+  captureSide,
+  EMUMET_WEBHOOK_PROBE_SCENARIO,
+  featuresFromEmumetScenarioProbe,
+  featuresInEmumetHtml,
+  featuresInShuttlePubHtml,
+  selectCases,
+} from "./features.ts";
 import { AVATAR_SVG, BANNER_SVG, BILLING, FILES, FOLDERS, localImage } from "./fixtures.ts";
 import { appExists, stopChild } from "./servers.ts";
 import { isRegistrationGateScenario } from "../../../emumet-web/bff/emumet/registration-gate-scenarios.ts";
@@ -40,6 +47,18 @@ test("Emumet registration gate admin cases select an existing mock scenario at b
   }
   expect(SCREEN_CASES.filter((item) => item.app === "Emumet" && !item.id.startsWith("admin-")).every((item) => !("scenario" in item))).toBe(true);
   expect(isRegistrationGateScenario("default")).toBe(true);
+});
+
+test("E15x Webhook destination cases are skipped only on a baseline whose mock lacks their scenarios", () => {
+  // Given
+  const webhook = SCREEN_CASES.filter((item) => "requires" in item && item.requires === "emumet-webhook-endpoints");
+  // When / Then
+  expect(webhook).toHaveLength(12);
+  expect(isRegistrationGateScenario(EMUMET_WEBHOOK_PROBE_SCENARIO)).toBe(true);
+  expect([...featuresFromEmumetScenarioProbe(204)]).toEqual(["emumet-webhook-endpoints"]);
+  expect(featuresFromEmumetScenarioProbe(400).size).toBe(0);
+  expect(selectCases(webhook, featuresFromEmumetScenarioProbe(400), "baseline").skipped).toHaveLength(12);
+  expect(() => selectCases(webhook, featuresFromEmumetScenarioProbe(400), "branch")).toThrow();
 });
 
 test("ShuttlePub cases cover the SNS shell, quick reactions and login at both widths", () => {
@@ -96,7 +115,8 @@ test("only the baseline side may skip cases whose screen feature is missing", ()
 
 test("username screens are Emumet-only added coverage that a baseline without the username UI skips", () => {
   // Given
-  const emumet = SCREEN_CASES.filter((item) => item.app === "Emumet");
+  // (the E15x Webhook cases depend on their own feature, checked in the test above)
+  const emumet = SCREEN_CASES.filter((item) => item.app === "Emumet" && !("requires" in item && item.requires === "emumet-webhook-endpoints"));
   const oldHtml = '<main id="app"><div class="space-y-8"><h1>New Account</h1></div></main>';
   const newHtml = '<main id="app"><dialog data-username-dialog="true" data-step="input"></dialog></main>';
   // When

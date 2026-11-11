@@ -4,7 +4,15 @@ import { chromium, expect, type Browser, type Page } from "@playwright/test";
 import { startBooskiffStub } from "./booskiff-stub.ts";
 import { EXPECTED_GRAPHQL_CODES, FIXED_TIME, MOCK_IDENTIFIER, MOCK_PASSWORD, MUTATES_SERVER, SCREEN_CASES, type ScreenApp, type ScreenCase, type ScreenViewer } from "./cases.ts";
 import { localImage } from "./fixtures.ts";
-import { captureSide, featuresInEmumetHtml, featuresInShuttlePubHtml, selectCases, type CaptureSide } from "./features.ts";
+import {
+  captureSide,
+  EMUMET_WEBHOOK_PROBE_SCENARIO,
+  featuresFromEmumetScenarioProbe,
+  featuresInEmumetHtml,
+  featuresInShuttlePubHtml,
+  selectCases,
+  type CaptureSide,
+} from "./features.ts";
 import { startApp, type AppServer } from "./servers.ts";
 import { SHUTTLEPUB_LOOPBACK_SESSION_COOKIE, startShuttlePubStub } from "./shuttlepub-stub.ts";
 
@@ -590,6 +598,16 @@ export async function captureScreens(frontendRoot: string, output: string, side:
     const features = new Set([
       ...featuresInShuttlePubHtml(shuttlePubHtml.join("\n")),
       ...featuresInEmumetHtml(await (await fetch(`${emumet.url}/accounts/new`)).text()),
+      // Every Emumet case selects its own scenario before loading, so the probe leaves nothing behind.
+      ...featuresFromEmumetScenarioProbe(
+        (
+          await fetch(`${emumet.url}/__mock/registration-gate/scenario`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ name: EMUMET_WEBHOOK_PROBE_SCENARIO }),
+          })
+        ).status,
+      ),
     ]);
     const { capture: cases, skipped } = selectCases(SCREEN_CASES.filter((item) => capturedApps.has(item.app)), features, side);
     for (const item of skipped) {
