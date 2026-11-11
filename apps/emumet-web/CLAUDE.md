@@ -50,6 +50,7 @@ bff/
   resolvers.ts             -- Query/Mutation resolvers
   registration-gate-resolvers.ts -- Registration gate (D15) resolvers + error classification (extensions.code)
   registration-gate-status.ts -- Admin screen status chip (NOT_OPENED / OPEN / ... / OVERRIDE) and minimum-condition derivation (the only place that decides them)
+  admin-ssr.ts             -- Admin page SSR initial state (viewer + gate) so the override warning is in the SSR HTML (index.ts passes it to renderPage)
   profile-identity-resolvers.ts -- Profile username resolvers (setProfileUsername / checkProfileUsername / Profile.usernameState) + extensions.code classification (USERNAME_* etc.)
   openapi/                 -- Pinned Emumet OpenAPI (lock verification, contract validation); see README
   emumet/
