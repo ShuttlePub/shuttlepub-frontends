@@ -731,10 +731,32 @@ async function verifySharedAcrossSessions(browser: Browser, server: AppServer) {
   }
 }
 
-// F6: persist the PUT in the real stateful mock, lose only its reply, and hold
+async function holdFocusFrames(page: Page) {
+  const gate = await page.evaluateHandle(() => {
+    const original = window.requestAnimationFrame;
+    const pending: FrameRequestCallback[] = [];
+    window.requestAnimationFrame = (callback) => pending.push(callback);
+    return { original, pending };
+  });
+  let released = false;
+  return {
+    count: () => gate.evaluate(({ pending }) => pending.length),
+    release: async () => {
+      if (released) return;
+      released = true;
+      await gate.evaluate(({ original, pending }) => {
+        window.requestAnimationFrame = original;
+        pending.splice(0).forEach((callback) => callback(performance.now()));
+      });
+      await gate.dispose();
+    },
+  };
+}
+
+// F6/F7: persist the PUT in the real stateful mock, lose only its reply, and hold
 // revalidation while the user focuses the button, opens a picker, or moves away.
 async function verifyAmbiguousReactionRestore(page: Page, viewport: Viewport, server: AppServer) {
-  for (const mode of ["button", "picker", "other-control"] as const) {
+  for (const mode of ["button", "picker", "other-control", "escape", "escape-other-control"] as const) {
     await resetMock(server);
     await page.goto("/", { waitUntil: "networkidle" });
     await expect(page.locator("body"), "initial reaction GET must not acquire focus").toBeFocused();
@@ -746,6 +768,7 @@ async function verifyAmbiguousReactionRestore(page: Page, viewport: Viewport, se
     let releaseReply!: () => void;
     const replyGate = new Promise<void>((resolve) => { releaseReply = resolve; });
     const handled: Promise<void>[] = [];
+    let frames: Awaited<ReturnType<typeof holdFocusFrames>> | undefined;
     let saved = false;
     let readsHeld = 0;
     const intercept = (route: Route) => {
@@ -785,9 +808,19 @@ async function verifyAmbiguousReactionRestore(page: Page, viewport: Viewport, se
       await button.focus();
       await expect(button).toBeFocused();
       await expect.poll(() => readsHeld).toBe(1);
-      if (mode === "picker") {
+      if (mode === "picker" || mode.startsWith("escape")) {
         await page.keyboard.press("Enter");
         await expect(viewport.name === "mobile" ? picker : page.locator("#sp-picker-search")).toBeFocused();
+        if (mode.startsWith("escape")) {
+          // Fix the order: Esc patches the picker out, GET removes its opener,
+          // and only then may the reserved focus callbacks run.
+          frames = await holdFocusFrames(page);
+          await page.keyboard.press("Escape");
+          await expect(picker).toHaveCount(0);
+          await expect(button).toBeVisible();
+          expect(await frames.count()).toBeGreaterThan(0);
+          if (mode === "escape-other-control") await visible(page, "投稿する").focus();
+        }
       } else if (mode === "other-control") {
         await visible(page, "投稿する").focus();
       }
@@ -797,16 +830,19 @@ async function verifyAmbiguousReactionRestore(page: Page, viewport: Viewport, se
       await expect(picker, "server restoration closes the anchored picker").toHaveCount(0);
       await expect(page.locator(".sp-reaction-layer .sp-clickaway, .sp-reaction-layer .sp-sheet-backdrop, .sp-reaction-layer .sp-modal-backdrop")).toHaveCount(0);
       await expectScrollLocked(page, false);
-      if (mode === "other-control") await expect(visible(page, "投稿する"), "unrelated focus is not stolen").toBeFocused();
+      if (mode === "escape") await expect(page.locator("body"), "focus callbacks are still held until after GET").toBeFocused();
+      await frames?.release();
+      if (mode === "other-control" || mode === "escape-other-control") await expect(visible(page, "投稿する"), "unrelated focus is not stolen").toBeFocused();
       else await expect(mine, "focus lost from the removed button / picker follows my chip").toBeFocused();
     } finally {
+      await frames?.release();
       releaseReply();
       release();
       await Promise.all(handled);
       await page.unroute("**/graphql", intercept);
     }
   }
-  console.info(`OK saved PUT with failed reply / delayed GET restores picker and focus at ${viewport.name}`);
+  console.info(`OK saved PUT with failed reply / delayed GET / Esc-before-focus restores picker and focus at ${viewport.name}`);
 }
 
 async function verifyMock(browser: Browser, frontendRoot: string, coreURL: string) {

@@ -164,6 +164,7 @@ summary model post = case reactionsOf model post of
         HE.button
           ( [ HA.type' "button"
             , HA.id (mineChipId post.id)
+            , attr "data-focus-post" post.id
             , HA.class' classes
             , attr "aria-pressed" "true"
             , attr "aria-label" (label <> " を取り消す（" <> show entry.count <> "：" <> tip <> "）")
@@ -196,6 +197,7 @@ actionButton model post = case reactionsOf model post of
     [ HE.button
         ( [ HA.type' "button"
           , HA.id (reactionButtonId post)
+          , attr "data-focus-post" post.id
           , HA.class' "sp-act sp-react-btn"
           , attr "aria-label" "リアクション"
           , attr "aria-haspopup" "dialog"
@@ -222,6 +224,7 @@ popover :: Model -> Html Message
 popover model = case model.reaction.picker of
   Just picker -> HE.div
     [ HA.id pickerId
+    , attr "data-focus-post" (pickerPostId picker.target)
     , HA.class' "sp-picker sp-picker-pop"
     , attr "role" "dialog"
     , attr "aria-label" "絵文字"
@@ -231,6 +234,11 @@ popover model = case model.reaction.picker of
     ]
     (pickerBody model picker)
   Nothing -> emptySlot
+
+pickerPostId :: PickerTarget -> String
+pickerPostId = case _ of
+  ReactTo post -> post.postId
+  _ -> ""
 
 pickerTitle :: PickerTarget -> String
 pickerTitle = case _ of
@@ -501,6 +509,7 @@ overlay model = HE.div [ HA.class' "sp-reaction-layer" ]
   dialogAttrs :: PickerState -> String -> Array (NodeData Message)
   dialogAttrs picker classes =
     [ HA.id pickerId
+    , attr "data-focus-post" (pickerPostId picker.target)
     , HA.class' classes
     , attr "role" "dialog"
     , attr "aria-modal" "true"

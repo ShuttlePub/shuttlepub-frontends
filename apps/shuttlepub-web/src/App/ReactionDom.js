@@ -6,8 +6,6 @@ let pageHideRegistered = false;
 // Retain settled outcomes as well as pending Promises until the restore barrier.
 const keepalives = new Set();
 let restoreSerial = 0;
-let focusTracked = false;
-let lastFocus = null;
 
 const REMOVE_MUTATION =
   "mutation RemoveNoteReaction($profileId: ID!, $noteId: ID!) { removeNoteReaction(profileId: $profileId, noteId: $noteId) { noteId } }";
@@ -72,55 +70,6 @@ export const startDrag = (event) => () => {
 // synchronously, re-entering the update with the model of before the click.
 export const blurTarget = (event) => () => {
   if (event.target instanceof HTMLElement) event.target.blur();
-};
-
-// Moves focus to `id` after the next render only when focus was lost (its element
-// was removed and focus fell back to the body), never away from where the user is.
-export const focusIfLost = (id) => () => {
-  const run = () => {
-    const active = document.activeElement;
-    if (active !== null && active !== document.body && active.isConnected) return;
-    const target = document.getElementById(id);
-    if (target) target.focus();
-  };
-  if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
-  else setTimeout(run, 0);
-};
-
-// Flame renders before running effects. Remember the source while it is still in
-// the DOM, including ancestor IDs (a removed picker may detach its children too).
-export const trackFocus = () => {
-  if (focusTracked || typeof document === "undefined") return;
-  const remember = (element) => {
-    if (!(element instanceof Element) || element === document.body) {
-      lastFocus = null;
-      return;
-    }
-    const ids = [];
-    for (let node = element; node !== null; node = node.parentElement) {
-      if (node.id) ids.push(node.id);
-    }
-    lastFocus = { element, ids };
-  };
-  remember(document.activeElement);
-  document.addEventListener("focusin", (event) => remember(event.target));
-  focusTracked = true;
-};
-
-// A GET can remove a reaction button / picker after an ambiguous PUT. Repair only
-// focus lost from that source: initial data loads and unrelated actions never
-// acquire focus just because the body happens to be active.
-export const focusRestoredReaction = (buttonId) => (chipId) => (closedPickerId) => () => {
-  const run = () => {
-    const active = document.activeElement;
-    if (active !== null && active !== document.body && active.isConnected) return;
-    if (lastFocus === null || lastFocus.element.isConnected) return;
-    if (!lastFocus.ids.includes(buttonId)
-      && !(closedPickerId && lastFocus.ids.includes(closedPickerId))) return;
-    document.getElementById(chipId)?.focus();
-  };
-  if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
-  else setTimeout(run, 0);
 };
 
 // Freeze interaction synchronously, but do not refetch until all pagehide writes

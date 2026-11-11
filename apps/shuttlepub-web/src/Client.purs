@@ -2,10 +2,10 @@ module Client where
 
 import Prelude
 
-import App.Dom (isMobileViewport, nowMillis, onViewportChange)
+import App.Dom (isMobileViewport, nowMillis, onViewportChange, trackFocus)
 import App.Message (Message(..))
 import App.Reaction (ReactionMsg(..))
-import App.ReactionDom (onPageRestored, trackFocus)
+import App.ReactionDom (onPageRestored)
 import App.Route (routeCodec)
 import App.View (view)
 import Client.Update (mkUpdate)

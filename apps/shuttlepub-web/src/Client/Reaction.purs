@@ -33,14 +33,14 @@ import Prelude
 
 import App.Api.Error (ApiError(..))
 import App.Api.GraphQL (fetchCustomEmojis, fetchPostReactions, fetchQuickSettings, removeNoteReaction, saveQuickSettings, setNoteReaction)
-import App.Dom (focusById, focusFirstIn)
+import App.Dom (focusById, focusFirstIn, requestFocus)
 import App.Emoji (Emoji, sameEmoji)
 import App.Extension.Reaction (chipMenuId, favoriteAddId, favoriteChipId, mineChipId, pickerId, pickerSearchId, pickerTabId)
 import App.Message (Message(..))
 import App.Model (Model, ReactionModel, RemoteData(..), activeProfile, fromEither, initialReactionModel)
 import App.Post (Post)
 import App.Reaction (DetailFilter(..), HoldReason(..), NoteRead, NoteWrite, PendingRemoval, PickerTarget(..), PostReactions, PostRef, ReactionMsg(..), ToastKind(..), held, maxFavorites, moveItem, noHolds, postReactionsFor, removeAt, replaceAt)
-import App.ReactionDom (clearPendingRemoval, focusIfLost, focusRestoredReaction, setPendingRemoval)
+import App.ReactionDom (clearPendingRemoval, setPendingRemoval)
 import App.Route (Route(..))
 import Data.Array (any, cons, filter, find, index, insertAt, length, nub, null, snoc)
 import Data.Either (Either(..))
@@ -65,6 +65,16 @@ send wrap request = Just <<< Reaction <<< wrap <$> request
 -- | The reaction button of a post (F0 App.Extension.Reaction.reactionButtonId).
 reactionButtonOf :: String -> String
 reactionButtonOf postId = "react-" <> postId
+
+focusPost :: PostRef -> String -> Boolean -> Effect Unit
+focusPost post target onlyIfLost = requestFocus { target, firstIn: false, postId: post.postId, onlyIfLost }
+
+focusPicker :: PickerTarget -> String -> Boolean -> Effect Unit
+focusPicker owner target firstIn = requestFocus { target, firstIn, postId, onlyIfLost: false }
+  where
+  postId = case owner of
+    ReactTo post -> post.postId
+    _ -> ""
 
 withReaction :: Model -> (ReactionModel -> ReactionModel) -> Model
 withReaction model f = model { reaction = f model.reaction }
@@ -234,18 +244,20 @@ isReact = case _ of
 
 -- | The picker switches between popover and sheet at the breakpoint: keep focus in it.
 refocusPicker :: Model -> Effects
-refocusPicker model = if isJust model.reaction.picker then [ effect (focusFirstIn ("#" <> pickerId)) ] else []
+refocusPicker model = case model.reaction.picker of
+  Just picker -> [ effect (focusPicker picker.target ("#" <> pickerId) true) ]
+  Nothing -> []
 
 selectCategory :: Model -> String -> Boolean -> Step
 selectCategory model category moveFocus = case model.reaction.picker of
   Just picker ->
     Tuple (withReaction model _ { picker = Just picker { category = category, query = "" } })
-      (if moveFocus then [ effect (focusById (pickerTabId category)) ] else [])
+      (if moveFocus then [ effect (focusPicker picker.target (pickerTabId category) false) ] else [])
   Nothing -> Tuple model []
 
 closePicker :: Model -> Step
 closePicker model = case model.reaction.picker of
-  Just picker -> Tuple (withReaction model _ { picker = Nothing }) [ effect (focusById picker.opener) ]
+  Just picker -> Tuple (withReaction model _ { picker = Nothing }) [ effect (focusPicker picker.target picker.opener false) ]
   Nothing -> Tuple model []
 
 -- | 注意 2: a post that becomes reacted loses its reaction button, so a picker
@@ -377,7 +389,7 @@ react post emoji model = case model.reaction.profileId of
           enqueueNote false
             { profileId, epoch: model.reaction.epoch, request, post, mine: Just emoji, removal: replacing, started: false }
             next
-            # andThen \queued -> Tuple queued (cancelEffects <> [ effect (focusById (mineChipId post.postId)) ])
+            # andThen \queued -> Tuple queued (cancelEffects <> [ effect (focusPost post (mineChipId post.postId) false) ])
   _ -> Tuple model []
 
 -- | My chip pressed: removed on screen now, DELETE when the undo opportunity ends.
@@ -392,7 +404,7 @@ removeMine post model = case model.reaction.profileId, mineOf model post.noteId 
           setToast (Just (UndoRemoval removal)) (withReaction model \reaction -> reaction { posts = setMine post.noteId Nothing reaction.posts })
             # andThen \shown ->
                 Tuple (withReaction shown _ { pendingRemoval = Just removal })
-                  [ effect (setPendingRemoval profileId post.noteId), effect (focusById (reactionButtonOf post.postId)) ]
+                  [ effect (setPendingRemoval profileId post.noteId), effect (focusPost post (reactionButtonOf post.postId) false) ]
   _, _ -> Tuple model []
 
 -- Favourites ---------------------------------------------------------------------------
@@ -489,13 +501,7 @@ update model = case _ of
             next = withReaction model \reaction -> foldl (\state post -> closePickerOf post.postId state)
               (reaction { posts = posts, postsError = Nothing })
               restored
-            restoreFocus post =
-              let
-                closedPicker = case model.reaction.picker of
-                  Just { target: ReactTo target } | target.postId == post.postId -> pickerId
-                  _ -> ""
-              in
-                effect (focusRestoredReaction (reactionButtonOf post.postId) (mineChipId post.postId) closedPicker)
+            restoreFocus post = effect (focusPost post (mineChipId post.postId) true)
           in
             Tuple next (map restoreFocus restored)
         Left error | any (readable model) reads -> Tuple (withReaction model _ { postsError = Just error }) []
@@ -511,7 +517,7 @@ update model = case _ of
           let
             next = withReaction model _ { picker = Just { target, query: "", category: "face", opener }, chipMenu = Nothing }
           in
-            Tuple next [ effect (focusById (if model.isMobile then pickerId else pickerSearchId)) ]
+            Tuple next [ effect (focusPicker target (if model.isMobile then pickerId else pickerSearchId) false) ]
       | otherwise -> Tuple model []
     where
     allowed = case _ of
@@ -564,7 +570,7 @@ update model = case _ of
                   Left error ->
                     setToast (Just (ReactionFailed "リアクションできませんでした" error))
                       (withReaction settled \reaction -> reaction { posts = setMine post.noteId Nothing reaction.posts })
-                      # andThen \next -> Tuple next [ effect (focusIfLost (reactionButtonOf post.postId)) ]
+                      # andThen \next -> Tuple next [ effect (focusPost post (reactionButtonOf post.postId) true) ]
             )
         -- Cleanup is transport, not presentation: it runs even if A changed to B,
         -- and before A's next queued intent. Never send it as the acting Profile B.
@@ -596,7 +602,7 @@ update model = case _ of
                   Left error ->
                     setToast (Just (ReactionFailed "リアクションを取り消せませんでした" error))
                       (withReaction settled \reaction -> closePickerOf removal.post.postId reaction { posts = setMine removal.post.noteId (Just removal.emoji) reaction.posts })
-                      # andThen \next -> Tuple next [ effect (focusIfLost (mineChipId removal.post.postId)) ]
+                      # andThen \next -> Tuple next [ effect (focusPost removal.post (mineChipId removal.post.postId) true) ]
             )
         # andThen (finishNote write)
 
@@ -638,7 +644,7 @@ update model = case _ of
                 , picker = Nothing
                 }
             )
-            # andThen \next -> Tuple next [ effect (focusById (mineChipId removal.post.postId)) ]
+            # andThen \next -> Tuple next [ effect (focusPost removal.post (mineChipId removal.post.postId) false) ]
     -- S2: while the deletion is still being saved the undo waits (the button is
     -- disabled and the toast stays).
     Just { kind: UndoFavoriteRemoval _ _ } | model.reaction.savingSettings -> Tuple model []
