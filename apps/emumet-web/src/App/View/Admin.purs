@@ -85,16 +85,6 @@ chip tone size label =
 smallChip :: Tone -> String -> Html Message
 smallChip tone = chip tone "px-2 py-0.5 text-xs"
 
-help :: String -> String -> Html Message
-help url topic =
-  HE.a
-    [ HA.href url
-    , HA.class' "inline-flex items-center justify-center w-5 h-5 rounded-full border border-border text-xs text-text-muted hover:text-accent hover:border-accent shrink-0"
-    , attr "aria-label" (Text.helpLabel topic)
-    , HA.title (Text.helpLabel topic)
-    ]
-    [ HE.text "?" ]
-
 sectionHeading :: Array (Html Message) -> Html Message
 sectionHeading = HE.h2 [ HA.class' ("flex items-center gap-2 mb-2 text-[15px] font-semibold " <> T.textPrimary) ]
 
@@ -248,7 +238,6 @@ gatePanel model gate =
     , HA.class' (T.surface <> " flex flex-wrap items-center gap-2 p-3 sm:px-4")
     ]
     ( [ HE.span [ HA.class' ("text-base font-semibold " <> T.textHeading) ] [ HE.text Text.tabRegistration ]
-      , help Text.helpRegistrationUrl Text.tabRegistration
       , chip (Text.gateStatusTone gate.status) "px-2.5 py-[3px] text-[13px]" (Text.gateStatusLabel gate.status)
       , HE.span [ HA.class' "flex-1" ] []
       ]
@@ -284,7 +273,7 @@ protectionsSection :: AdminModel -> Html Message
 protectionsSection model = case model.protections of
   Loaded list ->
     HE.section_
-      [ sectionHeading [ HE.text Text.protectionsHeading, help Text.helpProtectionUrl Text.protectionsHeading ]
+      [ sectionHeading [ HE.text Text.protectionsHeading ]
       , listSurface (map (protectionRow model) list)
       ]
   _ -> HE.div [ HA.class' "hidden" ] []

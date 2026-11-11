@@ -1,9 +1,7 @@
 -- | 登録ゲート管理画面の文言と色 (ui-spec「モック A v5」)。画面の文言はこのモジュールだけに置く。
--- |
--- | 仮置き (リード確認中。回答で差し替える):
--- |   * enforcementNotApplied「保護が未適用」(question-c33d7e52 (c))
--- |   * 通知タイトル・操作結果の 1 行表示・保護/Webhook の短い理由 (question-f24eeb05)
--- |   * ヘルプの行き先 helpRegistrationUrl / helpProtectionUrl (question-ce7e42a3)
+-- | ui-spec の (?) (ヘルプへの導線) は、ヘルプの置き場所が決まるまで出さない (リード回答 question-9f866320)。
+-- | ui-spec に無かった文言 (通知タイトル・失敗の 1 行表示・「保護が未適用」・短い理由・時刻表記・［さらに読み込む］) は
+-- | リード承認済み (question-f24eeb05)。引き算の方針なので、これより長い説明文は足さない。
 module App.Admin.Text where
 
 import Prelude
@@ -45,15 +43,6 @@ tabWebhook = "Webhook"
 
 webhookFailingMark :: String
 webhookFailingMark = "配送失敗あり"
-
-helpRegistrationUrl :: String
-helpRegistrationUrl = "/help/registration-gate"
-
-helpProtectionUrl :: String
-helpProtectionUrl = "/help/registration-protection"
-
-helpLabel :: String -> String
-helpLabel topic = topic <> "のヘルプ"
 
 none :: String
 none = "なし"
@@ -98,7 +87,7 @@ buttonRevokeOverride = "強制開放を解除"
 protectionNotReady :: String
 protectionNotReady = "保護が未準備"
 
--- | 仮置き (question-c33d7e52 (c))。登録の保護の適用証明 (E15d) が無い間に添える
+-- | 登録の保護の適用証明 (E15d) が無い間に添える
 enforcementNotApplied :: String
 enforcementNotApplied = "保護が未適用"
 
