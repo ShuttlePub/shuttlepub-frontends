@@ -51,15 +51,23 @@ ui-spec v6 の C (投稿カードの反応状態)・P (ピッカー)・D (投稿
 | `overlay` | シェルの最後 (モバイルのボトムシート・常用絵文字ピッカー・チップメニュー・トースト) |
 
 - 1 Profile・1 投稿・1 反応。ピッカーから置き換えず、自分のチップで解除してから選び直します。
-- 解除は画面上で即時に反映し、DELETE は「元に戻す」トーストが消えた時点で送ります (D03 q09)。元に戻すと
-  何も送りません。画面遷移では即時に、タブを閉じる時は `pagehide` + `keepalive` で送ります。
-- 反応・常用絵文字の保存は 1 件ずつ (送信中は押せない)。失敗は元に戻して表示し、常用絵文字の 409 は
-  保存されている内容を読み直して「もう一度保存」を出します。422 (利用できない絵文字) は再送しません。
-- 応答は送ったときの Profile に紐づき、Profile を切り替えると未送信の解除を送ったうえで状態をすべて捨てます。
+- 解除は画面上で即時に反映し、DELETE は「元に戻す」の機会が終わった時点で送ります (D03 q09): トーストが
+  時間切れになる・別のトーストに置き換わる・画面遷移・Profile 切替。タブを閉じる時は `pagehide` +
+  `keepalive` で送ります。元に戻すと何も送りません。未送信の解除中に選び直した反応の保存が失敗した場合は、
+  解除を送り直して「反応なし」に揃えます。
+- トーストはホバー・タッチ・フォーカスをそれぞれ別に保持し、すべて外れてから 3 秒で消えます (注意 3)。
+- 反応の PUT / DELETE は Note ごとに 1 件ずつ (送信中は押せない)。送信中・未送信の解除がある Note は、
+  再取得の結果で上書きしません。常用絵文字の保存も 1 件ずつで、削除の「元に戻す」は削除の保存が終わるまで
+  押せず、その間トーストは消えません。
+- 応答は送ったときの Profile 世代 (epoch) とリクエスト ID に紐づき、古い応答は捨てます。Profile 切替
+  (A→B→A も含む) では未送信の解除を送ったうえで状態をすべて捨てます。bfcache から戻った時
+  (`pageshow` の `persisted`) は、`pagehide` で送った解除を確定扱いにも再送もせず、「元に戻す」を終えて
+  画面の状態を読み直します。
 
 データ: S3 契約 (`openapi/shuttlepub.json` の `quick-reaction` タグ。常用絵文字 GET/PUT、Note ごとの反応
 GET/PUT/DELETE) を `bff/rest/quick-reaction.ts` で扱います。real は `SHUTTLEPUB_API_URL` の backend へ利用者の
-Bearer で送り、`501` は `NOT_IMPLEMENTED`、`409` は `REVISION_CONFLICT`、`422` は `EMOJI_UNAVAILABLE` になります。
+Bearer で送り、`501` は `NOT_IMPLEMENTED`、`409` は `REVISION_CONFLICT`、`422` (`emoji_unavailable`) は
+`EMOJI_UNAVAILABLE` になります (下記の一般的なエラー対応の例外)。
 **実保存の backend はまだ無いため、real では常用絵文字・反応は未実装エラーとして表示されます** (完成とは表示しません)。
 他の人の反応 (集計・反応者) とカスタム絵文字一覧は契約に無いため**仮 (PROVISIONAL)** の型
 (`bff/rest/reactions.ts`) で、real は `NOT_IMPLEMENTED` です。投稿の `noteId` (UUID) は S3 の `note_id` です。
@@ -68,7 +76,8 @@ Bearer で送り、`501` は `NOT_IMPLEMENTED`、`409` は `REVISION_CONFLICT`�
 mock は S3 の振る舞いを再現する**状態を持つ** mock (`QuickReactionStore`) で、Profile ごとの常用絵文字と反応を
 プロセス内に保持します。同じ Profile として動く複数のセッション (端末) は同じ状態を見ます。初期値は
 `bff/rest/reaction-fixtures.ts` (Profile 1: 常用 5 件・うち 1 件利用不可、Profile 2: 未設定、Profile 3: 3 件)。
-`POST /__mock/reset` (mock のみ) で初期値に戻ります (テスト・撮影用)。
+`SHUTTLEPUB_MOCK_RESET=1` を付けた mock だけ `POST /__mock/reset` で初期値に戻せます (テスト・撮影用。
+visual の起動はこれを付けます。通常の mock と real にはこのルートはありません)。
 
 キー操作は `App.Dom.keydownAction` (アプリ唯一の keydown ハンドラ) に集めています。Flame はイベントを
 ルートで委譲し最も近いハンドラだけを実行するため、子要素に keydown を足すとこれが動かなくなります。
@@ -98,10 +107,12 @@ bun install
 | 変数 | 既定 | 説明 |
 | ---- | ---- | ---- |
 | `PORT` | `3000` | 待受ポート |
+| `SHUTTLEPUB_MOCK_RESET` | なし | `1` で mock に `POST /__mock/reset` を出す (テスト・visual 用。real では無効) |
 | `SHUTTLEPUB_API_MODE` | `mock` | `mock` / `real`。それ以外の値は起動エラー |
 | `SHUTTLEPUB_API_URL` | なし | real で必須。mock で指定すると起動エラー (設定ミスで fixture が動くのを防ぐ) |
 
-real では backend の応答をそのまま扱います。`501` は `NOT_IMPLEMENTED`、その他の 4xx/5xx は `UPSTREAM_ERROR`、
+real では backend の応答をそのまま扱います。`501` は `NOT_IMPLEMENTED`、クイックリアクションの `409` / `422` は
+上記の `REVISION_CONFLICT` / `EMOJI_UNAVAILABLE`、その他の 4xx/5xx は `UPSTREAM_ERROR`、
 接続失敗は `UPSTREAM_UNAVAILABLE`、contract に反する 200 は `INVALID_UPSTREAM_RESPONSE` として GraphQL error
 (`extensions.code`) になり、画面にエラーとして表示されます。**成功や mock データへ置き換えることはありません。**
 real の Profile context は本人所有の Emumet 統合 Account/Profile を使用します。

@@ -111,13 +111,21 @@ type Model =
 -- | here belongs to that Profile and is reset when the Profile changes.
 type ReactionModel =
   { profileId :: Maybe String
+  -- Profile context generation: bumped whenever the acting Profile changes (also
+  -- A -> B -> A) or the page is restored; answers from another generation are dropped.
+  , epoch :: Int
+  -- Source of request ids (settings, per-Note reaction requests).
+  , requestSeq :: Int
+  -- The settings request whose answer is awaited (older answers are dropped).
+  , settingsRequest :: Int
   , settings :: RemoteData QuickSettings
   , savingSettings :: Boolean
   , settingsProblem :: Maybe SettingsProblem
   , posts :: Array PostReactions
   , postsError :: Maybe ApiError
-  -- Notes with a reaction request in flight (double-submit guard).
-  , inFlight :: Array String
+  -- Notes with a PUT or DELETE in flight and its request id: one request per Note
+  -- at a time (double-submit guard; a DELETE and a later PUT never overlap).
+  , inFlight :: Array { noteId :: String, request :: Int }
   , pendingRemoval :: Maybe PendingRemoval
   , picker :: Maybe PickerState
   , chipMenu :: Maybe Int
@@ -131,6 +139,9 @@ type ReactionModel =
 initialReactionModel :: ReactionModel
 initialReactionModel =
   { profileId: Nothing
+  , epoch: 0
+  , requestSeq: 0
+  , settingsRequest: 0
   , settings: NotAsked
   , savingSettings: false
   , settingsProblem: Nothing

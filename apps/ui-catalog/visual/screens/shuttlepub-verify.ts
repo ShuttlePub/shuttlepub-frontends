@@ -518,6 +518,137 @@ async function verifyFavoritesSettings(page: Page, viewport: Viewport) {
   console.info(`OK favourites settings keyboard / menu / undo at ${viewport.name}`);
 }
 
+/** Hold GraphQL operations named `name` until released; then answer them as `answer` says. */
+async function gateOperation(page: Page, name: string, answer: "pass" | "fail") {
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => { release = resolve; });
+  const handled: Promise<void>[] = [];
+  await page.route("**/graphql", (route) => {
+    const query = String(route.request().postDataJSON()?.query ?? "");
+    if (!new RegExp(`^\\s*mutation\\s+${name}\\b`).test(query)) return route.continue();
+    const answered = gate.then(() => answer === "pass" ? route.continue() : route.fulfill({
+      status: 200, contentType: "application/json",
+      body: JSON.stringify({ data: null, errors: [{ message: "upstream failed", extensions: { code: "UPSTREAM_ERROR" } }] }),
+    }));
+    handled.push(answered);
+    return answered;
+  });
+  return async () => {
+    release();
+    await Promise.all(handled);
+    await page.unroute("**/graphql");
+  };
+}
+
+/**
+ * Timing and input combinations of the quick reaction UI (PR #42 review):
+ *  - 注意 3: focus keeps the undo toast even after the pointer leaves; it goes 3s after
+ *    focus leaves too, and only then is the removal sent.
+ *  - D03 q09: another toast replacing the undo toast sends the removal at once.
+ *  - A DELETE in flight keeps the post busy (no picker); when it fails my chip comes
+ *    back focused and the failure is shown (注意 6).
+ *  - pagehide hands the removal to keepalive; back from the bfcache (pageshow
+ *    persisted) the undo is over, nothing is resent and the screen is read again.
+ *  - S2: the undo of a favourite deletion waits for the deletion to be saved.
+ */
+async function verifyQuickReactionTiming(page: Page, viewport: Viewport) {
+  const sent = recordOperations(page);
+  const removals = () => sent.filter((name) => name === "RemoveNoteReaction").length;
+  await page.goto("/", { waitUntil: "networkidle" });
+  await expect(page.getByTestId("timeline")).toHaveAttribute("data-state", "loaded");
+  const toast = page.getByTestId("reaction-toast");
+  const soraMine = page.locator("#react-mine-post-sora-zine");
+  const soraButton = page.locator("#react-post-sora-zine");
+  const mikaMine = page.locator("#react-mine-post-mika-picker");
+
+  // Focus and pointer hold the toast each on their own.
+  await soraMine.click();
+  await expect(toast).toContainText("取り消しました");
+  const undo = toast.getByRole("button", { name: "元に戻す" });
+  await undo.hover();
+  await undo.focus();
+  await page.mouse.move(0, 0);
+  await page.waitForTimeout(7_000);
+  await expect(toast, "focused toast stays after the pointer leaves").toContainText("取り消しました");
+  expect(removals(), "nothing sent while the undo is offered").toBe(0);
+  await soraButton.focus();
+  await expect(toast).toHaveCount(0, { timeout: 10_000 });
+  await expect.poll(removals).toBe(1);
+
+  // A notice replacing the undo toast ends the undo: the removal is sent then.
+  await page.locator("#content article").nth(0).getByRole("button", { name: /^いいね でリアクション/ }).click();
+  await expect(mikaMine).toBeFocused();
+  await expect(mikaMine).not.toHaveAttribute("aria-busy", "true");
+  await mikaMine.click();
+  await expect(toast).toContainText("取り消しました");
+  await soraButton.focus();
+  await page.keyboard.press("Enter");
+  const picker = page.getByTestId("picker");
+  await picker.getByTestId("picker-favorites").getByRole("button", { name: ":old_blob:（利用不可）" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(toast).toContainText("利用できません");
+  await expect.poll(removals, { timeout: 2_000 }).toBe(2);
+  await page.keyboard.press("Escape");
+  await expect(picker).toHaveCount(0);
+
+  // A slow DELETE keeps the post busy; when it fails my chip comes back focused.
+  await page.locator("#content article").nth(1).getByRole("button", { name: /でリアクション/ }).first().click();
+  await expect(soraMine).toBeFocused();
+  await expect(soraMine).not.toHaveAttribute("aria-busy", "true");
+  await page.mouse.move(0, 0);
+  await expect(toast).toHaveCount(0, { timeout: 10_000 });
+  const finishRemoval = await gateOperation(page, "RemoveNoteReaction", "fail");
+  await soraMine.click();
+  await expect(soraButton).toBeFocused();
+  await page.mouse.move(0, 0);
+  await expect(soraButton).toHaveAttribute("aria-disabled", "true", { timeout: 10_000 });
+  await page.keyboard.press("Enter");
+  await expect(picker, "no picker while the DELETE is in flight").toHaveCount(0);
+  await finishRemoval();
+  await expect(soraMine).toBeFocused();
+  await expect(toast).toContainText("取り消せませんでした");
+  await expect(toast).toHaveAttribute("data-error", /.+/);
+
+  // pagehide sends with keepalive; pageshow (persisted) ends the undo and reloads.
+  await expect(toast).toHaveCount(0, { timeout: 10_000 });
+  await soraMine.click();
+  await expect(toast).toContainText("取り消しました");
+  const before = removals();
+  const keepalive = page.waitForResponse((response) => response.url().endsWith("/graphql")
+    && /^\s*mutation\s+RemoveNoteReaction\b/.test(String(response.request().postDataJSON()?.query ?? "")));
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pagehide", { persisted: true })));
+  await keepalive;
+  expect(removals()).toBe(before + 1);
+  await page.evaluate(() => window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true })));
+  await expect(toast).toHaveCount(0);
+  await expect(soraButton).toBeVisible();
+  await page.waitForTimeout(7_000);
+  expect(removals(), "nothing resent after the restore").toBe(before + 1);
+  await expect(soraMine).toHaveCount(0);
+
+  // S2: deleting a favourite while its save is slow keeps the undo waiting.
+  await page.goto("/settings", { waitUntil: "networkidle" });
+  const chips = page.getByTestId("favorites");
+  await expect(chips).toHaveAttribute("data-state", "loaded");
+  const finishSave = await gateOperation(page, "UpdateQuickReactionSettings", "pass");
+  await page.locator("#sp-fav-chip-0").click();
+  await page.getByTestId("favorite-menu").getByRole("menuitem", { name: "削除" }).click();
+  const waitingUndo = toast.getByRole("button", { name: "元に戻す" });
+  await expect(waitingUndo).toHaveAttribute("aria-disabled", "true");
+  await waitingUndo.click({ force: true });
+  await page.mouse.move(0, 0);
+  await page.locator("#sp-fav-add").focus();
+  await page.waitForTimeout(7_000);
+  await expect(toast, "the undo waits for the deletion to be saved").toContainText("削除しました");
+  await waitingUndo.hover();
+  await finishSave();
+  await expect(chips).toHaveAttribute("aria-busy", "false");
+  await expect(waitingUndo).not.toHaveAttribute("aria-disabled", "true");
+  await waitingUndo.click();
+  await expect(page.locator("#sp-fav-chip-0")).toHaveAttribute("aria-label", "いいね");
+  console.info(`OK quick reaction timing (hold / replacement / slow+failed DELETE / bfcache / slow favourite save) at ${viewport.name}`);
+}
+
 /**
  * Two sessions (devices) acting as the same Profile share its favourites and its
  * reactions through the stateful mock; the stale one gets 409 and can save again.
@@ -594,6 +725,8 @@ async function verifyMock(browser: Browser, frontendRoot: string, coreURL: strin
         if (viewport.name === "desktop") await verifyBreakpointCrossing(page);
         await verifyQuickReaction(page, viewport);
         await verifyFavoritesSettings(page, viewport);
+        await resetMock(server);
+        await verifyQuickReactionTiming(page, viewport);
         expect(errors, `mock ${viewport.name}: browser errors`).toEqual([]);
         console.info(`OK mock mode hydrates and keeps the shell's keyboard/focus rules at ${viewport.name} (${viewport.width}x${viewport.height})`);
       } finally {

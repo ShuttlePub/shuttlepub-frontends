@@ -16,6 +16,10 @@ module App.Reaction
   , PickerState
   , ToastKind(..)
   , Toast
+  , ToastHolds
+  , HoldReason(..)
+  , noHolds
+  , held
   , PendingRemoval
   , SettingsProblem
   , DetailFilter(..)
@@ -108,9 +112,26 @@ instance EncodeJson ToastKind where
 instance DecodeJson ToastKind where
   decodeJson = genericDecodeJson
 
--- | armed: generation of the running expiry timer; held while hovered, touched or
--- | focused (実装上の注意 3).
-type Toast = { id :: Int, kind :: ToastKind, held :: Boolean, armed :: Int }
+-- | Why the toast is kept on screen (実装上の注意 3). Each input is tracked on its own:
+-- | the timer restarts only when none of them holds the toast any more.
+type ToastHolds = { hover :: Boolean, touch :: Boolean, focus :: Boolean }
+
+data HoldReason = HoldHover | HoldTouch | HoldFocus
+
+derive instance Generic HoldReason _
+derive instance Eq HoldReason
+
+instance Show HoldReason where
+  show = genericShow
+
+noHolds :: ToastHolds
+noHolds = { hover: false, touch: false, focus: false }
+
+held :: ToastHolds -> Boolean
+held holds = holds.hover || holds.touch || holds.focus
+
+-- | armed: generation of the running expiry timer (an older timer is ignored).
+type Toast = { id :: Int, kind :: ToastKind, holds :: ToastHolds, armed :: Int }
 
 -- | A failed settings save: what failed and the list the user asked for (再試行 sends it).
 type SettingsProblem = { error :: ApiError, retry :: Maybe (Array Emoji) }
@@ -131,8 +152,10 @@ instance DecodeJson DetailFilter where
   decodeJson = genericDecodeJson
 
 data ReactionMsg
-  = SettingsLoaded String (Either ApiError QuickSettings)
-  | PostReactionsLoaded String (Either ApiError (Array PostReactions))
+  -- Answers carry the Profile context generation (epoch) they were asked in, and
+  -- requests of one Note / of the settings their request id: anything older is dropped.
+  = SettingsLoaded Int Int (Either ApiError QuickSettings)
+  | PostReactionsLoaded Int (Either ApiError (Array PostReactions))
   | CustomEmojisLoaded (Either ApiError (Array Emoji))
   | OpenPicker PickerTarget String
   | ClosePicker
@@ -142,10 +165,11 @@ data ReactionMsg
   | PickUnavailableFavorite Emoji
   | ReactWithChip PostRef Emoji
   | RemoveMine PostRef
-  | ReactionSaved String PostRef (Maybe Emoji) (Either ApiError (Maybe Emoji))
-  | RemovalSent PendingRemoval (Either ApiError Unit)
+  -- The removal a re-react replaced (it was not sent): a failed PUT sends it after all.
+  | ReactionSaved Int Int PostRef (Maybe PendingRemoval) (Either ApiError (Maybe Emoji))
+  | RemovalSent Int Int PendingRemoval (Either ApiError Unit)
   | ToastExpired Int Int
-  | ToastHold Boolean
+  | ToastHold HoldReason Boolean
   | ToastUndo
   | ToastAction
   | ToggleChipMenu Int
@@ -153,12 +177,15 @@ data ReactionMsg
   | MoveFavorite Int Int
   | RemoveFavorite Int
   | StartReplaceFavorite Int
-  | SettingsSaved String QuickSettings (Array Emoji) (Either ApiError QuickSettings)
+  | SettingsSaved Int Int QuickSettings (Array Emoji) (Either ApiError QuickSettings)
   | RetrySettings
   | DragStart Int
   | DragDrop Int
   | DragEnd
   | SelectDetailFilter DetailFilter
+  -- | The page came back from the back/forward cache: what was pending when it was
+  -- | hidden was handed to keepalive (unconfirmed), so the screen is read again.
+  | PageRestored
 
 maxFavorites :: Int
 maxFavorites = 5

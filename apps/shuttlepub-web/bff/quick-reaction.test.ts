@@ -139,13 +139,14 @@ describe("mock mode: stateful S3 mock", () => {
     }
   });
 
-  test("POST /__mock/reset restores the fixtures; there is no such route in real mode", async () => {
-    app = createApp(loadConfig({}));
+  test("POST /__mock/reset restores the fixtures; only when enabled, never in real mode", async () => {
+    expect(createApp(loadConfig({})).handleMockReset).toBeUndefined();
+    app = createApp(loadConfig({}), { mockReset: true });
     await gql(UPDATE, { p: p2, r: 0, f: [unicode("👍")] });
     expect(app.handleMockReset!(new Request("http://app.test/__mock/reset")).status).toBe(405);
     expect(app.handleMockReset!(new Request("http://app.test/__mock/reset", { method: "POST" })).status).toBe(204);
     expect((await gql(SETTINGS, { p: p2 })).data!.quickReactionSettings).toMatchObject({ revision: 0 });
-    expect(createApp(loadConfig({ SHUTTLEPUB_API_MODE: "real", SHUTTLEPUB_API_URL: "http://127.0.0.1:1" })).handleMockReset).toBeUndefined();
+    expect(createApp(loadConfig({ SHUTTLEPUB_API_MODE: "real", SHUTTLEPUB_API_URL: "http://127.0.0.1:1" }), { mockReset: true }).handleMockReset).toBeUndefined();
   });
 });
 

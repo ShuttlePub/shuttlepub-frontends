@@ -15,9 +15,10 @@ export type App = {
   auth?: Auth;
   handleGraphql: (request: Request) => Promise<Response>;
   /**
-   * Mock mode only: POST /__mock/reset restores the stateful mock (quick reaction
-   * favourites / reactions) to its fixtures. Tests and the visual capture use it to
-   * start every case from the same state. Real mode has no such route.
+   * Mock mode with `mockReset` only (SHUTTLEPUB_MOCK_RESET=1): POST /__mock/reset
+   * restores the stateful mock (quick reaction favourites / reactions) to its fixtures.
+   * The visual capture and verify turn it on to start every case from the same state;
+   * a plain mock server and real mode have no such route.
    */
   handleMockReset?: (request: Request) => Response;
 };
@@ -26,6 +27,8 @@ export type AppDeps = {
   auth?: AuthConfig;
   authFetch?: FetchLike;
   emumetFetch?: FetchLike;
+  /** Test-only: expose POST /__mock/reset (mock mode only). */
+  mockReset?: boolean;
 };
 
 export function createApp(config: AppConfig, deps: AppDeps = {}): App {
@@ -40,7 +43,7 @@ export function createApp(config: AppConfig, deps: AppDeps = {}): App {
     : async (): Promise<{ accessToken: string | undefined }> => { throw new AuthError("UNAUTHENTICATED", 401); };
   const mockHandler = createGraphqlHandler({ api, profiles, viewerAuth });
   return { config, api, profiles, ...(auth ? { auth } : {}),
-    ...(mockApi ? {
+    ...(mockApi && deps.mockReset ? {
       handleMockReset(request: Request) {
         if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
         mockApi.reset();

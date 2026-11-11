@@ -39,11 +39,11 @@ import App.Message (Message(..))
 import App.Model (Model, RemoteData(..), activeProfile)
 import App.Post (Post)
 import App.Profile (Profile)
-import App.Reaction (Chip, DetailFilter(..), PickerState, PickerTarget(..), PostReactions, PostRef, ReactionMsg(..), Reactor, ToastKind(..), chipsOf, maxChips, maxFavorites, postReactionsFor, reactorRows, tooltipOf, totalCount)
+import App.Reaction (Chip, DetailFilter(..), HoldReason(..), PickerState, PickerTarget(..), PostReactions, PostRef, ReactionMsg(..), Reactor, ToastKind(..), chipsOf, maxChips, maxFavorites, postReactionsFor, reactorRows, tooltipOf, totalCount)
 import App.ReactionDom (blurTarget, leavesClosest, startDrag)
 import App.Route (Route(..))
 import App.View.Common (AvatarSize(..), attr, avatar, emptySlot, errorNote, icon, routeLink, stateNote, testId, visuallyHidden)
-import Data.Array (any, drop, elem, length, mapWithIndex, null, take)
+import Data.Array (any, drop, length, mapWithIndex, null, take)
 import Data.Maybe (Maybe(..), isJust)
 import Data.String (trim)
 import Flame (Html)
@@ -92,7 +92,7 @@ reactionsOf :: Model -> Post -> Maybe PostReactions
 reactionsOf model post = postReactionsFor model.reaction.posts post.noteId
 
 inFlight :: Model -> Post -> Boolean
-inFlight model post = elem post.noteId model.reaction.inFlight
+inFlight model post = any (\entry -> entry.noteId == post.noteId) model.reaction.inFlight
 
 -- | The emoji itself: a character, the custom emoji image, or a placeholder once the
 -- | image is gone (deleted). Decorative: the control around it carries the name.
@@ -532,22 +532,29 @@ toastView model = case model.reaction.toast of
     ( [ HA.class' "sp-toast"
       , attr "role" "status"
       , testId "reaction-toast"
-      , HA.createRawEvent "mouseover" \_ -> pure (Just (reaction (ToastHold true)))
-      , HA.createRawEvent "mouseout" \event -> leavesClosest ".sp-toast" event <#> \left -> if left then Just (reaction (ToastHold false)) else Nothing
-      , HA.createRawEvent "focusin" \_ -> pure (Just (reaction (ToastHold true)))
-      , HA.createRawEvent "focusout" \event -> leavesClosest ".sp-toast" event <#> \left -> if left then Just (reaction (ToastHold false)) else Nothing
-      , HA.createRawEvent "touchstart" \_ -> pure (Just (reaction (ToastHold true)))
-      , HA.createRawEvent "touchend" \_ -> pure (Just (reaction (ToastHold false)))
+      , HA.createRawEvent "mouseover" \_ -> pure (Just (reaction (ToastHold HoldHover true)))
+      , HA.createRawEvent "mouseout" \event -> leavesClosest ".sp-toast" event <#> \left -> if left then Just (reaction (ToastHold HoldHover false)) else Nothing
+      , HA.createRawEvent "focusin" \_ -> pure (Just (reaction (ToastHold HoldFocus true)))
+      , HA.createRawEvent "focusout" \event -> leavesClosest ".sp-toast" event <#> \left -> if left then Just (reaction (ToastHold HoldFocus false)) else Nothing
+      , HA.createRawEvent "touchstart" \_ -> pure (Just (reaction (ToastHold HoldTouch true)))
+      , HA.createRawEvent "touchend" \_ -> pure (Just (reaction (ToastHold HoldTouch false)))
+      , HA.createRawEvent "touchcancel" \_ -> pure (Just (reaction (ToastHold HoldTouch false)))
       ] <> case toast.kind of
         ReactionFailed _ error -> [ attr "data-error" (Error.tag error) ]
         _ -> []
     )
     case toast.kind of
       UndoRemoval removal -> [ glyph removal.emoji, HE.span_ [ HE.text "取り消しました" ], button "元に戻す" ToastUndo ]
-      UndoFavoriteRemoval _ emoji -> [ glyph emoji, HE.span_ [ HE.text "削除しました" ], button "元に戻す" ToastUndo ]
+      UndoFavoriteRemoval _ emoji -> [ glyph emoji, HE.span_ [ HE.text "削除しました" ], waitingButton "元に戻す" ToastUndo model.reaction.savingSettings ]
       FavoriteUnavailable emoji -> [ glyph emoji, HE.span_ [ HE.text "利用できません" ], button "入れ替える" ToastAction ]
       ReactionFailed text error -> [ HE.span_ [ HE.text (text <> "（" <> Error.describe error <> "）") ] ]
   where
   button label message = HE.button
     [ HA.type' "button", HA.class' "sp-toast-btn", HA.createRawEvent "click" \event -> blurTarget event $> Just (reaction message) ]
     [ HE.text label ]
+  -- S2: the undo of a deletion waits for the deletion to be saved (it cannot run before).
+  waitingButton label message waiting
+    | waiting = HE.button
+        [ HA.type' "button", HA.class' "sp-toast-btn", attr "aria-disabled" "true", attr "data-waiting" "true" ]
+        [ HE.text label ]
+    | otherwise = button label message

@@ -27,7 +27,8 @@ try {
   }
   throw error;
 }
-const app = createApp(config, config.mode === "real" ? { auth: loadAuthConfig() } : {});
+// SHUTTLEPUB_MOCK_RESET=1 (tests / visual capture only) exposes POST /__mock/reset in mock mode.
+const app = createApp(config, config.mode === "real" ? { auth: loadAuthConfig() } : { mockReset: process.env["SHUTTLEPUB_MOCK_RESET"] === "1" });
 
 const staticFiles: Record<string, { path: string; contentType: string }> = {
   "/app.js": { path: "dist/app.js", contentType: "application/javascript" },

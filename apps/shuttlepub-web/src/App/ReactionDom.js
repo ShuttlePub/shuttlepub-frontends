@@ -61,3 +61,25 @@ export const startDrag = (event) => () => {
 export const blurTarget = (event) => () => {
   if (event.target instanceof HTMLElement) event.target.blur();
 };
+
+// Moves focus to `id` after the next render only when focus was lost (its element
+// was removed and focus fell back to the body), never away from where the user is.
+export const focusIfLost = (id) => () => {
+  const run = () => {
+    const active = document.activeElement;
+    if (active !== null && active !== document.body && active.isConnected) return;
+    const target = document.getElementById(id);
+    if (target) target.focus();
+  };
+  if (typeof requestAnimationFrame === "function") requestAnimationFrame(run);
+  else setTimeout(run, 0);
+};
+
+// A page restored from the back/forward cache keeps its in-memory state, including a
+// removal that pagehide already handed to keepalive: tell the app so it can drop it.
+export const onPageRestored = (callback) => () => {
+  if (typeof window === "undefined") return;
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) callback();
+  });
+};

@@ -5,6 +5,8 @@ module App.ReactionDom
   , leavesClosest
   , startDrag
   , blurTarget
+  , focusIfLost
+  , onPageRestored
   ) where
 
 import Prelude
@@ -18,3 +20,5 @@ foreign import clearPendingRemoval :: Effect Unit
 foreign import leavesClosest :: String -> Event -> Effect Boolean
 foreign import startDrag :: Event -> Effect Unit
 foreign import blurTarget :: Event -> Effect Unit
+foreign import focusIfLost :: String -> Effect Unit
+foreign import onPageRestored :: Effect Unit -> Effect Unit

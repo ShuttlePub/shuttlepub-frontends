@@ -4,6 +4,8 @@ import Prelude
 
 import App.Dom (isMobileViewport, nowMillis, onViewportChange)
 import App.Message (Message(..))
+import App.Reaction (ReactionMsg(..))
+import App.ReactionDom (onPageRestored)
 import App.Route (routeCodec)
 import App.View (view)
 import Client.Update (mkUpdate)
@@ -36,6 +38,7 @@ main = do
   isMobile <- isMobileViewport
   send appId (Hydrated now isMobile)
   onViewportChange \mobile -> send appId (ViewportChanged mobile)
+  onPageRestored (send appId (Reaction PageRestored))
 
   void $ paths handlePath nav
   where
