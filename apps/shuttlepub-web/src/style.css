@@ -206,7 +206,11 @@ html.sp-scroll-locked { overflow: hidden; }
 }
 .sp-act .sp-icon { width: 18px; height: 18px; }
 .sp-act:not([aria-disabled="true"]):hover { background: color-mix(in srgb, currentColor 7%, transparent); color: var(--color-text-primary); }
-.sp-react-slot { position: relative; display: inline-flex; min-width: 32px; }
+/* The reaction cell has a fixed width (32 / mobile 36) and its button fills it, so
+   the row measures the same whether the button is shown or hidden (F3 hides it while
+   reacted) and the other actions never move (ui-spec アクション行). */
+.sp-react-slot { position: relative; display: inline-flex; justify-content: center; flex: 0 0 auto; width: 32px; }
+.sp-react-slot > .sp-act { width: 100%; min-width: 0; padding: 0; }
 
 /* ===== Post detail ===== */
 .sp-detail-head {
@@ -331,7 +335,7 @@ html.sp-scroll-locked { overflow: hidden; }
   .sp-post .sp-avatar:not(.sp-avatar-lg) { width: 40px; height: 40px; font-size: 15px; }
   .sp-post-focused { grid-template-columns: 48px minmax(0, 1fr); }
   .sp-act { height: 36px; min-width: 36px; }
-  .sp-react-slot { min-width: 36px; }
+  .sp-react-slot { width: 36px; }
   .sp-detail-head { margin: 0; padding: 0 6px; }
   .sp-dtabs { margin-top: 0; }
   .sp-page-title { font-size: 20px; }

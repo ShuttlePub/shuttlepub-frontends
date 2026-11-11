@@ -17,7 +17,7 @@
 //    pinned OpenAPI) is displayed as not implemented, the unauthenticated viewer gets
 //    the login entry, and the page never shows mock data.
 import { isAbsolute, resolve } from "node:path";
-import { chromium, expect, type Browser, type Page } from "@playwright/test";
+import { chromium, expect, type Browser, type Locator, type Page } from "@playwright/test";
 import { startBooskiffStub } from "./booskiff-stub.ts";
 import { appExists, startApp, type AppServer } from "./servers.ts";
 
@@ -109,10 +109,8 @@ async function verifyCompose(page: Page) {
   await text.fill("こんにちは");
   await expect(page.getByTestId("compose-submit")).toBeEnabled();
   // Tab stays inside the modal.
-  for (let i = 0; i < 12; i++) {
-    await page.keyboard.press("Tab");
-    expect(await dialog.evaluate((element) => element.contains(document.activeElement))).toBe(true);
-  }
+  await expectTabStaysInside(page, dialog);
+  await expectScrollLocked(page, true);
   // Visibility: icon only, read as 公開範囲: 公開; the menu opens; Esc closes only the menu.
   const visibility = page.getByTestId("compose-visibility");
   await expect(visibility).toHaveAttribute("aria-label", "公開範囲: 公開");
@@ -182,7 +180,12 @@ async function verifyProfileSwitcher(page: Page, viewport: Viewport) {
   await expect(menu.getByRole("menuitemradio")).toHaveCount(3);
   await expect(menu.getByRole("menuitemradio", { name: /Fixture Profile/ })).toHaveAttribute("aria-checked", "true");
   if (viewport.name === "mobile") {
-    await expect(page.getByRole("dialog", { name: "投稿用 Profile を切り替え" })).toHaveAttribute("aria-modal", "true");
+    const sheet = page.getByRole("dialog", { name: "投稿用 Profile を切り替え" });
+    await expect(sheet).toHaveAttribute("aria-modal", "true");
+    await expectScrollLocked(page, true);
+    await expectTabStaysInside(page, sheet);
+  } else {
+    await expectScrollLocked(page, false);
   }
   await page.keyboard.press("Escape");
   await expect(menu).toHaveCount(0);
@@ -191,6 +194,89 @@ async function verifyProfileSwitcher(page: Page, viewport: Viewport) {
   await menu.getByRole("menuitemradio", { name: /Fixture Dev/ }).click();
   await expect(menu).toHaveCount(0);
   await expect(visible(page, /投稿用 Profile を切り替え（現在: Fixture Dev）/)).toBeFocused();
+  await expectScrollLocked(page, false);
+}
+
+async function expectScrollLocked(page: Page, locked: boolean) {
+  await expect.poll(() => page.evaluate(() => document.documentElement.classList.contains("sp-scroll-locked"))).toBe(locked);
+}
+
+/** Tab and Shift+Tab cycle within an aria-modal layer (ui-spec 実装上の注意 6). */
+async function expectTabStaysInside(page: Page, layer: Locator) {
+  for (const key of ["Tab", "Shift+Tab"]) {
+    for (let i = 0; i < 8; i++) {
+      await page.keyboard.press(key);
+      expect(await layer.evaluate((element) => element.contains(document.activeElement)), `${key} #${i + 1} left the modal`).toBe(true);
+    }
+  }
+}
+
+/**
+ * The reaction cell keeps its width whether the button is shown or not, so the other
+ * actions do not move (ui-spec アクション行). F3 renders an empty slot while reacted;
+ * hiding the baseline button here models exactly that.
+ */
+async function verifyActionRowStable(page: Page, viewport: Viewport) {
+  const row = page.locator("#content article").first().locator(".sp-actions");
+  const cells = row.locator(":scope > *");
+  await expect(cells).toHaveCount(4);
+  const measure = () => cells.evaluateAll((elements) => elements.map((element) => {
+    const box = element.getBoundingClientRect();
+    return { x: box.x, width: box.width };
+  }));
+  const slot = row.locator(".sp-react-slot");
+  const expectedWidth = viewport.name === "mobile" ? 36 : 32;
+  const shown = await measure();
+  expect(shown[2]!.width, "reaction cell width").toBe(expectedWidth);
+  expect((await slot.locator("button").boundingBox())!.width, "reaction button fills its cell").toBe(expectedWidth);
+  await slot.locator("button").evaluate((button) => { (button as HTMLElement).style.display = "none"; });
+  try {
+    expect(await measure(), "action cells must not move when the reaction button is hidden").toEqual(shown);
+  } finally {
+    await slot.locator("button").evaluate((button) => { (button as HTMLElement).style.display = ""; });
+  }
+}
+
+/**
+ * Crossing the breakpoint while an overlay is open: the desktop and mobile chrome are
+ * twins and only one is visible, so focus must land on what is visible now, and the
+ * Profile dropdown <-> bottom sheet swap must keep focus inside and the scroll lock in step.
+ */
+async function verifyBreakpointCrossing(page: Page) {
+  const mobile = VIEWPORTS[1];
+  const desktop = VIEWPORTS[0];
+  await page.setViewportSize({ width: desktop.width, height: desktop.height });
+  // Compose opened on desktop, closed on mobile -> focus on the mobile compose tab.
+  await visible(page, "投稿する").click();
+  const dialog = page.getByRole("dialog", { name: "投稿" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("textbox", { name: "投稿内容" })).toBeFocused();
+  await page.setViewportSize({ width: mobile.width, height: mobile.height });
+  await expect(dialog.getByRole("textbox", { name: "投稿内容" })).toBeFocused();
+  await expectTabStaysInside(page, dialog);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(visible(page, "投稿する")).toBeFocused();
+  await expectScrollLocked(page, false);
+  // Profile dropdown on desktop -> bottom sheet on mobile -> dropdown again.
+  await page.setViewportSize({ width: desktop.width, height: desktop.height });
+  await visible(page, /投稿用 Profile を切り替え/).click();
+  const menu = page.getByTestId("profile-menu");
+  await expect(menu).toBeVisible();
+  await expectScrollLocked(page, false);
+  await page.setViewportSize({ width: mobile.width, height: mobile.height });
+  const sheet = page.getByRole("dialog", { name: "投稿用 Profile を切り替え" });
+  await expect(sheet).toHaveAttribute("aria-modal", "true");
+  await expect.poll(() => sheet.evaluate((element) => element.contains(document.activeElement))).toBe(true);
+  await expectScrollLocked(page, true);
+  await expectTabStaysInside(page, sheet);
+  await page.setViewportSize({ width: desktop.width, height: desktop.height });
+  await expect(sheet).toHaveCount(0);
+  await expect.poll(() => menu.evaluate((element) => element.contains(document.activeElement))).toBe(true);
+  await expectScrollLocked(page, false);
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(visible(page, /投稿用 Profile を切り替え/)).toBeFocused();
 }
 
 async function verifyMock(browser: Browser, frontendRoot: string, coreURL: string) {
@@ -207,10 +293,12 @@ async function verifyMock(browser: Browser, frontendRoot: string, coreURL: strin
         await expect(page.getByTestId("api-status")).toHaveAttribute("data-state", "loaded");
         await expect(page.getByTestId("timeline")).toHaveAttribute("data-state", "loaded");
         await expect(page.locator("#content article")).toHaveCount(5);
+        await verifyActionRowStable(page, viewport);
         await verifyCompose(page);
         await verifyTimelineTabs(page);
         await verifyPostDetail(page);
         await verifyProfileSwitcher(page, viewport);
+        if (viewport.name === "desktop") await verifyBreakpointCrossing(page);
         expect(errors, `mock ${viewport.name}: browser errors`).toEqual([]);
         console.info(`OK mock mode hydrates and keeps the shell's keyboard/focus rules at ${viewport.name} (${viewport.width}x${viewport.height})`);
       } finally {

@@ -69,7 +69,9 @@ export const keydownAction = (event) => () => {
   if (event.key === "Escape") return { action: "escape", list: "", value: "" };
   if (target === null) return NONE;
   if (event.key === "Tab") {
-    const dialog = target.closest('[aria-modal="true"]');
+    // Also catch Tab from outside an open modal (e.g. focus still on the opener for a
+    // frame): any open aria-modal layer owns the focus.
+    const dialog = target.closest('[aria-modal="true"]') ?? document.querySelector('.sp-app [aria-modal="true"]');
     if (dialog) trapFocus(dialog, event);
     return NONE;
   }

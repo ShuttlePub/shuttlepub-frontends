@@ -10,7 +10,7 @@ import App.Post (TimelineTab, timelineTabFromValue)
 import App.Route (Route(..), routeCodec)
 import App.View.Compose (composeTextId, visibilityButtonId)
 import App.View.Pages (detailTabId, timelineTabId)
-import App.View.Shell (profileButtonDesktopId, profileButtonMobileId, profileMenuId)
+import App.View.Shell (composeButtonDesktopId, composeButtonMobileId, profileButtonDesktopId, profileButtonMobileId, profileMenuId)
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..), isJust)
 import Data.String.Common (trim)
@@ -58,7 +58,13 @@ mkUpdate nav model = case _ of
           ] <> entered.effects
         )
   ViewportChanged isMobile ->
-    noMessages $ model { isMobile = isMobile }
+    let
+      next = model { isMobile = isMobile }
+      -- Crossing the breakpoint swaps the Profile dropdown for the bottom sheet (or
+      -- back): the focused item is replaced, so move focus into the new menu.
+      refocus = if isJust model.profileMenu && isMobile /= model.isMobile then [ effect (focusFirstIn ("#" <> profileMenuId)) ] else []
+    in
+      Tuple next ([ syncScrollLock next ] <> refocus)
   ApiModeLoaded result ->
     noMessages $ model { apiMode = fromEither result }
   ApiStatusLoaded result ->
@@ -91,8 +97,10 @@ mkUpdate nav model = case _ of
   SelectDetailTab tab -> selectDetailTab model tab false
 
   OpenCompose opener ->
-    Tuple (model { compose = Just (emptyCompose opener), profileMenu = Nothing })
-      [ effect (setScrollLock true), effect (focusById composeTextId) ]
+    let
+      next = model { compose = Just (emptyCompose opener), profileMenu = Nothing }
+    in
+      Tuple next [ syncScrollLock next, effect (focusById composeTextId) ]
   CloseCompose -> closeCompose model
   ComposeInput text -> withCompose \state ->
     noMessages $ model { compose = Just state { text = text } }
@@ -123,8 +131,10 @@ mkUpdate nav model = case _ of
   ToggleProfileMenu opener -> case model.profileMenu of
     Just _ -> closeProfileMenu model
     Nothing ->
-      Tuple (model { profileMenu = Just { opener, error: Nothing } })
-        ([ effect (focusFirstIn ("#" <> profileMenuId)) ] <> if model.isMobile then [ effect (setScrollLock true) ] else [])
+      let
+        next = model { profileMenu = Just { opener, error: Nothing } }
+      in
+        Tuple next [ syncScrollLock next, effect (focusFirstIn ("#" <> profileMenuId)) ]
   CloseProfileMenu -> closeProfileMenu model
   SelectProfile profileId ->
     Tuple model [ Just <<< ProfileSelected <$> selectProfile profileId ]
@@ -174,22 +184,40 @@ selectDetailTab model tab moveFocus =
 
 closeCompose :: Model -> Tuple Model (Array (Aff (Maybe Message)))
 closeCompose model = case model.compose of
-  Just state -> Tuple (model { compose = Nothing })
-    [ effect (setScrollLock false), effect (focusById state.opener) ]
+  Just state ->
+    let
+      next = model { compose = Nothing }
+    in
+      Tuple next [ syncScrollLock next, effect (focusById (visibleOpener model state.opener)) ]
   Nothing -> noMessages model
 
 closeProfileMenu :: Model -> Tuple Model (Array (Aff (Maybe Message)))
 closeProfileMenu model = case model.profileMenu of
-  Just state -> Tuple (model { profileMenu = Nothing })
-    [ effect (setScrollLock false), effect (focusById (openerFor state.opener)) ]
+  Just state ->
+    let
+      next = model { profileMenu = Nothing }
+    in
+      Tuple next [ syncScrollLock next, effect (focusById (visibleOpener model state.opener)) ]
   Nothing -> noMessages model
-  where
-  -- The viewport may have changed while the menu was open; return focus to the
-  -- switcher that is visible now.
-  openerFor opener
-    | opener == profileButtonDesktopId || opener == profileButtonMobileId =
-        if model.isMobile then profileButtonMobileId else profileButtonDesktopId
-    | otherwise = opener
+
+-- | The desktop and mobile chrome each have their own compose / Profile button and
+-- | only one of them is visible. The viewport may have crossed the breakpoint while
+-- | the overlay was open, so focus returns to the twin that is visible now.
+visibleOpener :: Model -> String -> String
+visibleOpener model opener
+  | opener == profileButtonDesktopId || opener == profileButtonMobileId =
+      if model.isMobile then profileButtonMobileId else profileButtonDesktopId
+  | opener == composeButtonDesktopId || opener == composeButtonMobileId =
+      if model.isMobile then composeButtonMobileId else composeButtonDesktopId
+  | otherwise = opener
+
+-- | The page behind a modal layer does not scroll: the compose form (both widths) and
+-- | the mobile Profile bottom sheet. The desktop Profile dropdown is not modal.
+scrollLocked :: Model -> Boolean
+scrollLocked model = isJust model.compose || (model.isMobile && isJust model.profileMenu)
+
+syncScrollLock :: Model -> Aff (Maybe Message)
+syncScrollLock model = effect (setScrollLock (scrollLocked model))
 
 -- | Esc closes the innermost layer only (ui-spec 投稿フォーム: an open visibility
 -- | menu closes before the form).
@@ -205,6 +233,9 @@ escape model = case model.compose of
 -- | Navigation closes any open overlay without moving focus back to its opener.
 closeOverlays :: Model -> Step
 closeOverlays model =
-  { model: model { compose = Nothing, profileMenu = Nothing }
-  , effects: if isJust model.compose || isJust model.profileMenu then [ effect (setScrollLock false) ] else []
-  }
+  let
+    next = model { compose = Nothing, profileMenu = Nothing }
+  in
+    { model: next
+    , effects: if scrollLocked model then [ syncScrollLock next ] else []
+    }
