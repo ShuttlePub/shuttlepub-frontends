@@ -1,9 +1,9 @@
 {
   "producer": {
     "repository": "ShuttlePub/Emumet",
-    "commit": "fdcc87d0f80f4f0978f6f64d4464797c807bf8a2",
+    "commit": "6504c9189899690926d0d3c47996519aef664669",
     "path": "openapi.json",
-    "ref": "profile-username-availability-api"
+    "ref": "main"
   },
   "schema": {
     "file": "emumet.json",
