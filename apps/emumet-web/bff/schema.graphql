@@ -4,6 +4,7 @@ type Account {
   id: ID!
   name: String!
   isBot: Boolean!
+  "Emumet は Account 単位の鍵を返さない (Profile モデル移行で廃止)。実 Emumet 接続時は値を持たず常に空文字。画面側の非表示・nullable 化は画面 PR"
   publicKey: String!
   createdAt: DateTime!
   moderation: Moderation
@@ -41,6 +42,7 @@ type Profile {
   usernameState: ProfileUsernameState!
 }
 
+"Account の fields の 1 件。nanoid は fields 内の位置 (0 始まりの index)。削除すると後続の位置が繰り上がる"
 type Metadata {
   nanoid: ID!
   accountId: ID!
@@ -83,6 +85,7 @@ type Mutation {
   updateProfile(accountId: ID!, input: UpdateProfileInput!): Profile!
   createMetadata(accountId: ID!, input: UpsertMetadataInput!): Metadata!
   updateMetadata(accountId: ID!, nanoid: ID!, input: UpsertMetadataInput!): Metadata!
+  "実 Emumet 接続時は未対応 (UNSUPPORTED): nanoid が fields 内の位置のため、画面が削除後に位置を振り直すまで安全に削除できない"
   deleteMetadata(accountId: ID!, nanoid: ID!): Boolean!
 }
 

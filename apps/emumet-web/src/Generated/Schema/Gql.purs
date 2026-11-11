@@ -92,7 +92,11 @@ newtype Account = Account
   , moderation :: {} -> AsGql "Moderation" (Data.Maybe.Maybe (AsGql "Moderation" Moderation))
   , name :: {} -> AsGql "String" String
   , profile :: {} -> AsGql "Profile" (Data.Maybe.Maybe (AsGql "Profile" Profile))
-  , publicKey :: {} -> AsGql "String" String
+  , publicKey ::
+      {}
+      ->
+      -- | Emumet は Account 単位の鍵を返さない (Profile モデル移行で廃止)。実 Emumet 接続時は値を持たず常に空文字。画面側の非表示・nullable 化は画面 PR
+      AsGql "String" String
   , profileUsername ::
       {}
       ->
@@ -133,14 +137,6 @@ newtype Profile = Profile
   }
 
 derive instance Data.Newtype.Newtype Profile _
-newtype Metadata = Metadata
-  { accountId :: {} -> AsGql "ID" GraphQL.Client.ID.ID
-  , content :: {} -> AsGql "String" String
-  , label :: {} -> AsGql "String" String
-  , nanoid :: {} -> AsGql "ID" GraphQL.Client.ID.ID
-  }
-
-derive instance Data.Newtype.Newtype Metadata _
 newtype RegistrationGateNotificationConnection = RegistrationGateNotificationConnection
   { notifications :: {} -> Array (AsGql "RegistrationGateNotification" RegistrationGateNotification)
   , unreadCount ::
@@ -213,7 +209,9 @@ newtype Mutation = Mutation
       { accountId :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
       , nanoid :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
       }
-      -> AsGql "Boolean" Boolean
+      ->
+      -- | 実 Emumet 接続時は未対応 (UNSUPPORTED): nanoid が fields 内の位置のため、画面が削除後に位置を振り直すまで安全に削除できない
+      AsGql "Boolean" Boolean
   , updateMetadata ::
       { accountId :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
       , input :: NotNull (AsGql "UpsertMetadataInput" UpsertMetadataInput)
@@ -253,6 +251,15 @@ newtype Mutation = Mutation
   }
 
 derive instance Data.Newtype.Newtype Mutation _
+-- | Account の fields の 1 件。nanoid は fields 内の位置 (0 始まりの index)。削除すると後続の位置が繰り上がる
+newtype Metadata = Metadata
+  { accountId :: {} -> AsGql "ID" GraphQL.Client.ID.ID
+  , content :: {} -> AsGql "String" String
+  , label :: {} -> AsGql "String" String
+  , nanoid :: {} -> AsGql "ID" GraphQL.Client.ID.ID
+  }
+
+derive instance Data.Newtype.Newtype Metadata _
 -- | override の状態。decision とは独立で、管理者閉鎖中でも active のまま保持される
 newtype RegistrationOverride = RegistrationOverride
   { activatedAt :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))

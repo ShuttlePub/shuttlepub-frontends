@@ -7,7 +7,7 @@
 //  (e) HTTP 経路 (createYogaHandler) でも分類が保たれ、上流の本文が漏れない。変更 mutation は存在しない
 // ============================================================
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, test } from "bun:test";
 import { graphql, isObjectType, type GraphQLSchema } from "graphql";
 import { createMockSessionAdapter, encodeMockCookie, type SessionAdapter } from "@shuttlepub/auth-bun";
 import { buildContext, type GraphQLContext } from "./context.ts";
@@ -15,6 +15,8 @@ import { createYogaHandler } from "./server.ts";
 import { makeSchema } from "./schema.ts";
 import { resolvers } from "./resolvers.ts";
 import { createMockEmumetClient } from "./emumet/mock.ts";
+import { createRealEmumetClient } from "./emumet/real.ts";
+import { jsonResponse, stubFetch } from "./test-utils.ts";
 import {
   EmumetAccountRestrictedError,
   EmumetApiError,
@@ -284,5 +286,94 @@ describe("(e) HTTP 経路 (createYogaHandler)", () => {
     expect(first.errors).toBeUndefined();
     const second = await post(handler, SET, { id: "prof_02", u: "robert" });
     expect(second.errors?.[0]?.extensions["code"]).toBe("USERNAME_ALREADY_SET");
+  });
+});
+
+describe("(f) 現行 UI と同じ選択項目が実 Emumet の AccountResponse (public_key なし) で動く (real クライアント + 上流 stub)", () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => {
+    Object.assign(globalThis, { fetch: originalFetch });
+  });
+
+  const wireAccount = {
+    id: "acc_r1",
+    name: "real",
+    is_bot: false,
+    created_at: "2026-11-11T00:00:00Z",
+    moderation: null,
+    profile_id: "prof_r1",
+    profile_username: null,
+    display_name: "Real Display",
+    summary: "s",
+    icon_url: null,
+    banner_url: null,
+    fields: [{ label: "Website", content: "https://real.example.com" }],
+  };
+
+  function realContext(): Promise<GraphQLContext> {
+    return authenticated(createRealEmumetClient({ baseUrl: "http://emumet.test" }, "tok"));
+  }
+
+  test("createAccount (id name isBot publicKey createdAt, username なし) は成功し、publicKey は空文字 (値を持たない)", async () => {
+    stubFetch(() => jsonResponse(201, wireAccount));
+    const result = await run(
+      'mutation { createAccount(input: { name: "real", isBot: false }) { id name isBot publicKey createdAt } }',
+      await realContext(),
+    );
+    expect(result.errors).toBeUndefined();
+    expect(result.data?.["createAccount"]).toEqual({ id: "acc_r1", name: "real", isBot: false, publicKey: "", createdAt: "2026-11-11T00:00:00Z" });
+  });
+
+  test("一覧・詳細 (profile / metadata を含む) は旧 /profiles・/metadata を使わず AccountResponse だけから作られる", async () => {
+    const { calls } = stubFetch(() => jsonResponse(200, { items: [wireAccount], first: null, last: null }));
+    const context = await realContext();
+    const list = await run("{ accounts { items { id name isBot publicKey createdAt } first last } }", context);
+    expect(list.errors).toBeUndefined();
+    const detail = await run(
+      '{ account(id: "acc_r1") { id name profile { nanoid displayName summary username usernameState } metadata { nanoid label content } } }',
+      context,
+    );
+    expect(detail.errors).toBeUndefined();
+    expect(detail.data?.["account"]).toEqual({
+      id: "acc_r1",
+      name: "real",
+      profile: { nanoid: "prof_r1", displayName: "Real Display", summary: "s", username: null, usernameState: "UNSET" },
+      metadata: [{ nanoid: "0", label: "Website", content: "https://real.example.com" }],
+    });
+    expect(calls.every((call) => new URL(call.url).pathname === "/api/v1/accounts")).toBe(true);
+  });
+
+  test("updateProfile / createMetadata / updateMetadata は PATCH /api/v1/accounts/{id} で書き込まれる", async () => {
+    const { calls } = stubFetch((call) => {
+      if (call.method === "GET") return jsonResponse(200, { items: [wireAccount], first: null, last: null });
+      const body = JSON.parse(call.body ?? "{}") as { fields?: unknown; display_name?: string };
+      return jsonResponse(200, { ...wireAccount, ...(body.display_name === undefined ? {} : { display_name: body.display_name }), fields: body.fields ?? wireAccount.fields });
+    });
+    const context = await realContext();
+    const profile = await run('mutation { updateProfile(accountId: "acc_r1", input: { displayName: "New" }) { nanoid displayName } }', context);
+    expect(profile.data?.["updateProfile"]).toEqual({ nanoid: "prof_r1", displayName: "New" });
+    const created = await run('mutation { createMetadata(accountId: "acc_r1", input: { label: "Blog", content: "b" }) { nanoid label content } }', context);
+    expect(created.data?.["createMetadata"]).toEqual({ nanoid: "1", label: "Blog", content: "b" });
+    const updated = await run('mutation { updateMetadata(accountId: "acc_r1", nanoid: "0", input: { label: "Web", content: "w" }) { nanoid label content } }', context);
+    expect(updated.data?.["updateMetadata"]).toEqual({ nanoid: "0", label: "Web", content: "w" });
+    expect(calls.filter((c) => c.method === "PATCH").every((c) => new URL(c.url).pathname === "/api/v1/accounts/acc_r1")).toBe(true);
+  });
+
+  test("deleteMetadata は UNSUPPORTED (何も書き換えず、HTTP 経路でもコードが保たれる)", async () => {
+    const { calls } = stubFetch(() => jsonResponse(200, { items: [wireAccount], first: null, last: null }));
+    const result = await run('mutation { deleteMetadata(accountId: "acc_r1", nanoid: "0") }', await realContext());
+    expect(code(result)).toBe("UNSUPPORTED");
+    expect(calls).toHaveLength(0);
+    const handler = createYogaHandler(createMockSessionAdapter("ratcap_session", false), (token) => createRealEmumetClient({ baseUrl: "http://emumet.test" }, token));
+    const response = await handler(
+      new Request("http://localhost/graphql", {
+        method: "POST",
+        headers: { "content-type": "application/json", cookie: `ratcap_session=${encodeMockCookie({ token: "t", username: "u" })}` },
+        body: JSON.stringify({ query: 'mutation { deleteMetadata(accountId: "acc_r1", nanoid: "0") }' }),
+      }),
+    );
+    const body = (await response.json()) as { errors?: { extensions: Record<string, unknown> }[] };
+    expect(body.errors?.[0]?.extensions["code"]).toBe("UNSUPPORTED");
+    expect(calls).toHaveLength(0);
   });
 });

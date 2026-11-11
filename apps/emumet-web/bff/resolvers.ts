@@ -13,7 +13,7 @@ import type {
   MetadataInput,
   ProfileFields,
 } from "./emumet/client.ts";
-import { EmumetNotFoundError } from "./emumet/client.ts";
+import { EmumetNotFoundError, EmumetUnsupportedError } from "./emumet/client.ts";
 import { requireEmumet, type GraphQLContext } from "./context.ts";
 import { registrationGateResolvers } from "./registration-gate-resolvers.ts";
 import { classifyCreateAccountError, profileIdentityResolvers } from "./profile-identity-resolvers.ts";
@@ -24,6 +24,10 @@ function toGraphQLError(error: unknown): GraphQLError {
   if (error instanceof GraphQLError) return error;
   if (error instanceof EmumetNotFoundError) {
     return new GraphQLError(error.message, { extensions: { code: "NOT_FOUND" }, originalError: error });
+  }
+  if (error instanceof EmumetUnsupportedError) {
+    // originalError を付けない: Yoga が INTERNAL_SERVER_ERROR にマスクして区別が消えるため
+    return new GraphQLError("This operation is not supported yet", { extensions: { code: "UNSUPPORTED" } });
   }
   return new GraphQLError("Internal server error", {
     extensions: { code: "INTERNAL_SERVER_ERROR" },

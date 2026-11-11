@@ -76,6 +76,10 @@ export function createMockEmumetClient(options: MockEmumetClientOptions = {}): M
     { accountId: "acc_03", nanoid: "prof_03", displayName: "News Bot", summary: "Automated news aggregator.", iconUrl: "https://api.dicebear.com/9.x/thumbs/svg?seed=bot", bannerUrl: null, username: "bot-news" },
   ];
 
+  /**
+   * mock の Metadata は従来どおり安定した nanoid を持つ (実 Emumet は fields 内の位置 ID で、削除は未対応。
+   * 現行の画面が位置 ID の振り直しを行わないため、mock の見え方は変えない)
+   */
   const metadata: Metadata[] = [
     { accountId: "acc_01", nanoid: "meta_01", label: "Website", content: "https://alice.example.com" },
     { accountId: "acc_01", nanoid: "meta_02", label: "Pronouns", content: "she/her" },

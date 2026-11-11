@@ -1,6 +1,13 @@
 // ============================================================
-// RealEmumetClient — Emumet REST API 実装 (REST 契約に準拠)
+// RealEmumetClient — Emumet REST API 実装 (固定した OpenAPI 契約に準拠)
 // ワイヤ形式は snake_case、DTO (client.ts) は camelCase。境界で相互変換する。
+//
+// Account / Profile / Metadata はすべて AccountResponse (`/api/v1/accounts`) から作る:
+//   Account   id / name / is_bot / created_at / moderation (Account 単位の鍵は返らないため publicKey は常に空文字)
+//   Profile   profile_id (= nanoid)・display_name・summary・icon_url・banner_url・profile_username
+//   Metadata  fields (label / content の配列。nanoid は無いため配列内の位置 (0 始まりの index) を nanoid にする)
+// 書込みは PATCH /api/v1/accounts/{id} だけ (Profile 属性は個別、fields は配列ごと置換。Metadata の削除は未対応)。
+// 旧 /profiles・/metadata・/accounts/{id}/profile 系は実 Emumet に存在しないため使わない。
 // ============================================================
 
 import { describeViolations, violationsForResponse } from "../openapi/contract.ts";
@@ -11,6 +18,7 @@ import {
   EmumetAccountRestrictedError,
   EmumetApiError,
   EmumetNotFoundError,
+  EmumetUnsupportedError,
   EmumetUsernameAlreadySetError,
   EmumetUsernameConflictError,
   EmumetUsernameInvalidError,
@@ -37,7 +45,7 @@ export type RealEmumetConfig = {
   readonly registrationGateTimeoutMs?: number;
 };
 
-/** Account の list / get / create (OpenAPI: `/api/v1/accounts`)。Profile の一回限り設定は `/api/v1/profiles/...` */
+/** Account の list / get / create / update (OpenAPI: `/api/v1/accounts`)。Profile の一回限り設定は `/api/v1/profiles/...` */
 const ACCOUNTS_PATH = "/api/v1/accounts";
 
 // --- ワイヤ型 (snake_case) ---
@@ -46,34 +54,30 @@ type WireModeration =
   | { type: "suspended"; reason: string; suspended_at: string; expires_at: string | null }
   | { type: "banned"; reason: string; banned_at: string };
 
+type WireField = { label: string; content: string };
+
+/** AccountResponse (OpenAPI)。任意フィールドは省略されうる */
 type WireAccount = {
   id: string;
   name: string;
   is_bot: boolean;
-  public_key: string;
   created_at: string;
   moderation?: WireModeration | null;
   /** この Account を記述する Profile の nanoid (OpenAPI では必須。組織 Account は最小 id の Profile) */
   profile_id: string;
   /** 未設定は null */
   profile_username?: string | null;
+  display_name?: string | null;
+  summary?: string | null;
+  icon_url?: string | null;
+  banner_url?: string | null;
+  fields: WireField[];
 };
 
 type WireAccounts = {
   items: WireAccount[];
   first: string | null;
   last: string | null;
-};
-
-type WireProfile = {
-  account_id: string;
-  nanoid: string;
-  display_name: string | null;
-  summary: string | null;
-  icon_url: string | null;
-  banner_url: string | null;
-  /** 未設定は null。旧形式の応答でフィールドが無い場合も未設定として扱う */
-  username?: string | null;
 };
 
 /** ProfileResponse (OpenAPI): Profile の nanoid は `id`、任意フィールドは省略されうる */
@@ -85,13 +89,6 @@ type WireProfileResponse = {
   icon_url?: string | null;
   banner_url?: string | null;
   username?: string | null;
-};
-
-type WireMetadata = {
-  account_id: string;
-  nanoid: string;
-  label: string;
-  content: string;
 };
 
 // --- snake_case → camelCase 変換 ---
@@ -122,23 +119,25 @@ function toAccount(wire: WireAccount): Account {
     id: wire.id,
     name: wire.name,
     isBot: wire.is_bot,
-    publicKey: wire.public_key,
+    // AccountResponse に Account 単位の公開鍵は無い (Profile モデル移行で廃止予定)。値は持たず空文字を返す
+    publicKey: "",
     createdAt: wire.created_at,
     moderation: wire.moderation ? toModeration(wire.moderation) : null,
-    profileId: wire.profile_id ?? null,
+    profileId: wire.profile_id,
     profileUsername: wire.profile_username ?? null,
   };
 }
 
-function toProfile(wire: WireProfile): Profile {
+/** Account を記述する Profile (AccountResponse の Profile 部分)。Account 名や所有者からは導出しない */
+function toProfileFromAccount(wire: WireAccount): Profile {
   return {
-    nanoid: wire.nanoid,
-    accountId: wire.account_id,
-    displayName: wire.display_name,
-    summary: wire.summary,
-    iconUrl: wire.icon_url,
-    bannerUrl: wire.banner_url,
-    username: wire.username ?? null,
+    nanoid: wire.profile_id,
+    accountId: wire.id,
+    displayName: wire.display_name ?? null,
+    summary: wire.summary ?? null,
+    iconUrl: wire.icon_url ?? null,
+    bannerUrl: wire.banner_url ?? null,
+    username: wire.profile_username ?? null,
   };
 }
 
@@ -154,13 +153,20 @@ function toProfileFromResponse(wire: WireProfileResponse): Profile {
   };
 }
 
-function toMetadata(wire: WireMetadata): Metadata {
-  return {
-    nanoid: wire.nanoid,
-    accountId: wire.account_id,
-    label: wire.label,
-    content: wire.content,
-  };
+/** fields[index] → Metadata。nanoid は配列内の位置 (0 始まり)。削除すると後続の位置が繰り上がる */
+function toMetadata(accountId: string, field: WireField, index: number): Metadata {
+  return { nanoid: String(index), accountId, label: field.label, content: field.content };
+}
+
+function toMetadataList(wire: WireAccount): Metadata[] {
+  return wire.fields.map((field, index) => toMetadata(wire.id, field, index));
+}
+
+/** Metadata の nanoid (位置) → fields の index。範囲外・非整数は null */
+function parseFieldIndex(nanoid: string, length: number): number | null {
+  if (!/^(0|[1-9][0-9]*)$/.test(nanoid)) return null;
+  const index = Number(nanoid);
+  return index < length ? index : null;
 }
 
 /** Tristate → JSON body: undefined → フィールド省略 / null → JSON null / 値 → 値 */
@@ -192,17 +198,30 @@ export function createRealEmumetClient(config: RealEmumetConfig, accessToken: st
     return await resp.json() as T;
   }
 
-  async function expectStatus(resp: Response, okStatuses: readonly number[]): Promise<void> {
-    if (!okStatuses.includes(resp.status)) {
-      throw new EmumetApiError(resp.status, await resp.text());
-    }
+  /** GET /api/v1/accounts[?ids=a,b]。0 件のとき Emumet は 404 "No accounts found" を返す → 空に正規化 */
+  async function fetchWireAccounts(ids?: readonly string[]): Promise<WireAccounts> {
+    const query = ids === undefined ? "" : `?ids=${ids.map(encodeURIComponent).join(",")}`;
+    const resp = await request("GET", `${ACCOUNTS_PATH}${query}`);
+    if (resp.status === 404) return { items: [], first: null, last: null };
+    return await expectJson<WireAccounts>(resp, [200]);
+  }
+
+  async function fetchWireAccount(accountId: string): Promise<WireAccount | null> {
+    const wire = await fetchWireAccounts([accountId]);
+    return wire.items.find((account) => account.id === accountId) ?? null;
+  }
+
+  /** 書込み (PATCH) の対象が無ければ NotFound。400 等は EmumetApiError のまま */
+  async function patchAccount(accountId: string, body: Record<string, unknown>): Promise<WireAccount> {
+    const resp = await request("PATCH", `${ACCOUNTS_PATH}/${encodeURIComponent(accountId)}`, body);
+    if (resp.status === 404) throw new EmumetNotFoundError(`account not found: accountId=${accountId}`);
+    return await expectJson<WireAccount>(resp, [200]);
   }
 
   async function listProfiles(accountIds: readonly string[]): Promise<readonly Profile[]> {
     if (accountIds.length === 0) return [];
-    const resp = await request("GET", `/profiles?account_ids=${accountIds.join(",")}`);
-    const wires = await expectJson<WireProfile[]>(resp, [200]);
-    return wires.map(toProfile);
+    const wire = await fetchWireAccounts(accountIds);
+    return wire.items.map(toProfileFromAccount);
   }
 
   async function getProfile(accountId: string): Promise<Profile | null> {
@@ -212,9 +231,8 @@ export function createRealEmumetClient(config: RealEmumetConfig, accessToken: st
 
   async function listMetadata(accountIds: readonly string[]): Promise<readonly Metadata[]> {
     if (accountIds.length === 0) return [];
-    const resp = await request("GET", `/metadata?account_ids=${accountIds.join(",")}`);
-    const wires = await expectJson<WireMetadata[]>(resp, [200]);
-    return wires.map(toMetadata);
+    const wire = await fetchWireAccounts(accountIds);
+    return wire.items.flatMap(toMetadataList);
   }
 
   /** 200 本文を契約 (ProfileResponse) で検証してから変換する。違反は成功扱いにしない */
@@ -241,7 +259,8 @@ export function createRealEmumetClient(config: RealEmumetConfig, accessToken: st
    * 409 は「設定済み」と「他で使用中」を本文で区別しない (空本文)。契約は次のとおり:
    *   - 再確認は 409 後の「現在の状態」であり、409 の原因そのものの証明ではない
    *   - 現在設定済み (競合で別セッションが先に設定した場合、送信応答失敗後の再送で同じ値が設定済みの場合を含む) → AlreadySet
-   *   - 現在未設定で、自分の Account 一覧にその Profile がある → Taken (文書化された 409 の残りの原因は重複と、認可後の所有者変更だけ。所有者変更は一覧から消えるためここには来ない)
+   *   - 現在未設定で、自分の Account 一覧にその Profile がある → Taken (文書化された 409 の残りの原因は重複と、認可後の所有者変更だけ。
+   *     所有者変更は一覧から消えるためここには来ない)
    *   - 確認できない (フィールドが来ない・対象が見つからない・取得失敗) → 推測せず Conflict
    */
   async function classifyUsernameConflict(profileId: string): Promise<Error> {
@@ -256,12 +275,7 @@ export function createRealEmumetClient(config: RealEmumetConfig, accessToken: st
   }
 
   async function listAccounts(): Promise<AccountConnection> {
-    const resp = await request("GET", ACCOUNTS_PATH);
-    if (resp.status === 404) {
-      // Emumet は 0 件時に 404 "No accounts found" を返す → 空 connection に正規化
-      return { items: [], first: null, last: null };
-    }
-    const wire = await expectJson<WireAccounts>(resp, [200]);
+    const wire = await fetchWireAccounts();
     return { items: wire.items.map(toAccount), first: wire.first, last: wire.last };
   }
 
@@ -275,11 +289,8 @@ export function createRealEmumetClient(config: RealEmumetConfig, accessToken: st
     listAccounts,
 
     async getAccount(id: string): Promise<Account | null> {
-      const resp = await request("GET", `${ACCOUNTS_PATH}?ids=${encodeURIComponent(id)}`);
-      if (resp.status === 404) return null;
-      const wire = await expectJson<WireAccounts>(resp, [200]);
-      const account = wire.items[0];
-      return account ? toAccount(account) : null;
+      const wire = await fetchWireAccount(id);
+      return wire ? toAccount(wire) : null;
     },
 
     async createAccount(input: CreateAccountInput): Promise<Account> {
@@ -301,17 +312,9 @@ export function createRealEmumetClient(config: RealEmumetConfig, accessToken: st
     listProfiles,
     getProfile,
 
+    /** Profile は Account 作成時に必ず作られるため作成 (POST) は無く、PATCH だけ。未指定フィールドは変更しない */
     async upsertProfile(accountId: string, fields: ProfileFields): Promise<Profile> {
-      const existing = await getProfile(accountId);
-      const body = profileFieldsToWire(fields);
-      if (existing) {
-        await expectStatus(await request("PUT", `/accounts/${encodeURIComponent(accountId)}/profile`, body), [204]);
-      } else {
-        await expectStatus(await request("POST", `/accounts/${encodeURIComponent(accountId)}/profile`, body), [201]);
-      }
-      const updated = await getProfile(accountId);
-      if (!updated) throw new EmumetApiError(500, `profile missing after upsert: accountId=${accountId}`);
-      return updated;
+      return toProfileFromAccount(await patchAccount(accountId, profileFieldsToWire(fields)));
     },
 
     async setProfileUsername(profileId: string, username: string): Promise<Profile> {
@@ -343,36 +346,40 @@ export function createRealEmumetClient(config: RealEmumetConfig, accessToken: st
 
     listMetadata,
 
+    // Metadata の書込みは fields 配列の読み出し → 加工 → 配列ごと置換 (PATCH)。同じ Account への同時書込みは後勝ち
+
     async createMetadata(accountId: string, input: MetadataInput): Promise<Metadata> {
-      const resp = await request("POST", `/accounts/${encodeURIComponent(accountId)}/metadata`, {
-        label: input.label,
-        content: input.content,
-      });
-      const wire = await expectJson<WireMetadata>(resp, [201]);
-      return toMetadata(wire);
+      const current = await fetchWireAccount(accountId);
+      if (!current) throw new EmumetNotFoundError(`account not found: accountId=${accountId}`);
+      const fields = [...current.fields, { label: input.label, content: input.content }];
+      const updated = await patchAccount(accountId, { fields });
+      const index = updated.fields.length - 1;
+      const created = updated.fields[index];
+      if (!created) throw new EmumetApiError(500, `fields missing after create: accountId=${accountId}`);
+      return toMetadata(accountId, created, index);
     },
 
     async updateMetadata(accountId: string, nanoid: string, input: MetadataInput): Promise<Metadata> {
-      await expectStatus(
-        await request("PUT", `/accounts/${encodeURIComponent(accountId)}/metadata/${encodeURIComponent(nanoid)}`, {
-          label: input.label,
-          content: input.content,
-        }),
-        [204],
-      );
-      // PUT は 204 (ボディなし) のため再フェッチして対象 nanoid を返す
-      const metas = await listMetadata([accountId]);
-      const updated = metas.find((m) => m.nanoid === nanoid);
-      if (!updated) throw new EmumetNotFoundError(`metadata not found after update: accountId=${accountId} nanoid=${nanoid}`);
-      return updated;
+      const current = await fetchWireAccount(accountId);
+      if (!current) throw new EmumetNotFoundError(`account not found: accountId=${accountId}`);
+      const index = parseFieldIndex(nanoid, current.fields.length);
+      if (index === null) throw new EmumetNotFoundError(`metadata not found: accountId=${accountId} nanoid=${nanoid}`);
+      const fields = current.fields.map((field, i) => (i === index ? { label: input.label, content: input.content } : field));
+      const updated = await patchAccount(accountId, { fields });
+      const field = updated.fields[index];
+      if (!field) throw new EmumetNotFoundError(`metadata not found after update: accountId=${accountId} nanoid=${nanoid}`);
+      return toMetadata(accountId, field, index);
     },
 
+    /**
+     * 未対応: nanoid は fields 内の位置のため、削除すると後続の位置が繰り上がるが、現行の画面は削除後に
+     * 残りの nanoid を振り直さない (同じ画面で次に編集・削除すると別の項目を変更する)。画面側の対応 (画面 PR) まで、
+     * 誤った項目を書き換えないよう削除は明示的なエラーにする (何も書き換えない)
+     */
     async deleteMetadata(accountId: string, nanoid: string): Promise<void> {
-      const resp = await request("DELETE", `/accounts/${encodeURIComponent(accountId)}/metadata/${encodeURIComponent(nanoid)}`);
-      if (resp.status === 404) {
-        throw new EmumetNotFoundError(`metadata not found: accountId=${accountId} nanoid=${nanoid}`);
-      }
-      await expectStatus(resp, [204]);
+      void accountId;
+      void nanoid;
+      throw new EmumetUnsupportedError("deleting metadata is not supported until the screen renumbers positional ids");
     },
   };
 }

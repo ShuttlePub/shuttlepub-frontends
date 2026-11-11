@@ -21,6 +21,10 @@ export type Account = {
   readonly id: string;
   readonly name: string;
   readonly isBot: boolean;
+  /**
+   * Account 単位の公開鍵。Emumet の AccountResponse には無く (Profile モデル移行で Account 単位の鍵が無くなる。
+   * 旧鍵 API は P4 で廃止)、real は値を持たず常に空文字を返す。画面側の Maybe 化・非表示は画面 PR で行う
+   */
   readonly publicKey: string;
   readonly createdAt: string;
   readonly moderation: Moderation | null;
@@ -80,6 +84,14 @@ export type MetadataInput = {
   readonly label: string;
   readonly content: string;
 };
+
+/** BFF がまだ対応していない操作 (安全に実装できる契約が揃っていない) */
+export class EmumetUnsupportedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EmumetUnsupportedError";
+  }
+}
 
 /** Emumet API が想定外のステータスを返した場合のエラー */
 export class EmumetApiError extends Error {
@@ -145,6 +157,10 @@ export class EmumetAccountRestrictedError extends Error {
 }
 
 /**
+ * Metadata (Account の fields) の nanoid は配列内の位置 (0 始まりの index の文字列)。Emumet の fields には
+ * 識別子が無く、書込みは配列ごとの置換のため、削除すると後続の位置が繰り上がる。画面側が位置を振り直すまで
+ * 安全に削除できないため、real の deleteMetadata は EmumetUnsupportedError を投げる。
+ *
  * バッチ契約: listProfiles / listMetadata は複数 accountId を 1 リクエストで取得する
  * 基本操作 (DataLoader の batchFn からそのまま呼ばれる)。getProfile は
  * listProfiles([id]) の薄いラッパとして各実装が提供する。

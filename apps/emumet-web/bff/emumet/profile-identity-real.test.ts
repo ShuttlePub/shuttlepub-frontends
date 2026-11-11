@@ -100,11 +100,20 @@ describe("(a) createAccount / Account の Profile 参照", () => {
     expect([items[1]?.profileId, items[1]?.profileUsername]).toEqual(["prof_02", "bob"]);
   });
 
-  test("listProfiles: username 付き・無し (旧形式) のどちらも Profile.username に変換する", async () => {
-    const wire = { account_id: "acc_01", nanoid: "prof_01", display_name: null, summary: null, icon_url: null, banner_url: null };
-    stubFetch(() => jsonResponse(200, [{ ...wire, username: "alice" }, { ...wire, nanoid: "prof_02", account_id: "acc_02" }]));
-    const profiles = await makeClient().listProfiles(["acc_01", "acc_02"]);
-    expect(profiles.map((p) => p.username)).toEqual(["alice", null]);
+  test("listProfiles: profile_username が値あり・null・省略のいずれでも Profile.username (値 / null / null) に変換する", async () => {
+    stubFetch(() =>
+      jsonResponse(200, {
+        items: [
+          { ...wireAccount, id: "acc_01", profile_id: "prof_01", profile_username: "alice" },
+          { ...wireAccount, id: "acc_02", profile_id: "prof_02", profile_username: null },
+          { ...wireAccount, id: "acc_03", profile_id: "prof_03" },
+        ],
+        first: null,
+        last: null,
+      }),
+    );
+    const profiles = await makeClient().listProfiles(["acc_01", "acc_02", "acc_03"]);
+    expect(profiles.map((p) => [p.nanoid, p.username])).toEqual([["prof_01", "alice"], ["prof_02", null], ["prof_03", null]]);
   });
 
   test("baseUrl は origin: 末尾の / を除いて /api/v1 を連結する (作成・一回限り設定・409 再確認とも同じ設定で二重 prefix にならない)", async () => {
