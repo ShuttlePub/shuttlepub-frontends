@@ -384,7 +384,7 @@ html.sp-scroll-locked { overflow: hidden; }
   padding: 6px; background: var(--color-bg-primary);
   border: 1px solid var(--color-border); border-radius: var(--radius-theme-lg); box-shadow: 0 16px 48px #0008;
 }
-.sp-menu-item.sp-danger { color: var(--color-error); }
+#sp-post-menu .sp-menu-item.sp-danger { color: var(--color-error); }
 .sp-menu-item .sp-mono { color: inherit; }
 
 /* Locked operation (3-3 / 4-1): pressable, with a small lock. */
@@ -434,6 +434,9 @@ a.sp-quote:hover { background: color-mix(in srgb, currentColor 4%, transparent);
 .sp-revealed-bar > .sp-icon { width: 14px; height: 14px; }
 .sp-restricted { display: flex; align-items: center; gap: 8px; padding: 16px; font-size: 13px; color: var(--color-text-muted); }
 .sp-restricted .sp-icon { width: 16px; height: 16px; }
+.sp-tl > .sp-restricted { border-bottom: 1px solid var(--sp-line); }
+.sp-tl > .sp-restricted:last-child { border-bottom: 0; }
+.sp-revealed .sp-tl, .sp-page-user .sp-revealed .sp-tl { margin: 0; border: 0; border-radius: 0; }
 
 /* Replies of controlled domains (3-5). */
 .sp-fold {

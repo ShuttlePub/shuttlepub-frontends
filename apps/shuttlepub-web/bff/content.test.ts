@@ -213,6 +213,15 @@ describe("replies (ui-spec 3-5) and user pages (3-6)", () => {
 });
 
 describe("Profile scope", () => {
+  test("a person's block names only that actor's follows (not the rest of its domain)", async () => {
+    const app = fresh();
+    const result = await run(app, `{ actorBlockImpact(profile: "${A}", actorUrl: "https://example.social/users/alice") { domain following followers } }`);
+    expect(result.data!.actorBlockImpact).toEqual({
+      domain: "example.social",
+      following: ["https://example.social/users/alice"],
+      followers: ["https://example.social/users/alice"],
+    });
+  });
   test("content needs one of the viewer's Profiles", async () => {
     const app = fresh();
     for (const query of [
