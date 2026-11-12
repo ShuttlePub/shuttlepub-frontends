@@ -1,10 +1,12 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 
-async function enterCredentials(page: Page): Promise<void> {
+const origin = "http://127.0.0.1:3211";
+
+async function enterCredentials(page: Page, identifier = "testuser@example.com", password = "testuser"): Promise<void> {
   await page.goto("/login");
-  await page.getByTestId("login-identifier").fill("testuser@example.com");
-  await page.getByTestId("login-password").fill("testuser");
+  await page.getByTestId("login-identifier").fill(identifier);
+  await page.getByTestId("login-password").fill(password);
   // The login form is hydrated client-side; a click fired before hydration is
   // inert, so retry click+wait until the login XHR actually fires.
   await expect(async () => {
@@ -59,6 +61,48 @@ test("fails closed when Hydra rejects an invalid authorization code", async ({ p
   await page.goto(`/auth/callback?code=invalid-code&state=${encodeURIComponent(state ?? "")}`);
   // Then: Hydra's token error is fail-closed at the BFF.
   await expect(page).toHaveURL(/\/login\?error=token_exchange_failed$/);
+  await expectSignedOut(page);
+});
+
+test("A logout -> B login is authenticated as B even though Hydra remembers A", async ({ page }) => {
+  // Given: A completes login + consent; the provider remembers A in Hydra (remember=true).
+  await enterCredentials(page);
+  await expect(page.locator("form[data-email]")).toHaveAttribute("data-email", "testuser@example.com");
+  await page.getByRole("button", { name: "Allow", exact: true }).click();
+  await expect(page).toHaveURL(/\/drive$/);
+  expect((await page.request.get("/auth/session")).status()).toBe(200);
+  // When: A logs out and B authenticates to Kratos only (no OAuth hand-off yet).
+  await page.getByTestId("logout-button").click();
+  await expect(page).toHaveURL(/\/login$/);
+  await expectSignedOut(page);
+  const login = await page.request.post("/auth/login", {
+    headers: { Origin: origin },
+    data: { identifier: "testuser-b@example.com", password: "testuser-b" },
+  });
+  expect(login.status()).toBe(200);
+
+  // Positive control: without prompt=login the provider's real remembered skip
+  // branch selects A although Kratos now belongs to B.
+  const probe = await page.request.get("/auth/oauth/start", { maxRedirects: 0 });
+  const remembered = new URL(probe.headers()["location"] ?? "");
+  expect(remembered.searchParams.get("prompt")).toBe("login");
+  remembered.searchParams.delete("prompt");
+  await page.goto(remembered.toString());
+  await expect(page.locator("form[data-email]")).toHaveAttribute("data-email", "testuser@example.com");
+  expect((await page.request.get("/auth/session")).status()).toBe(401);
+
+  // Then: the BFF's own authorization start rechecks Kratos and yields B.
+  await page.goto("/auth/oauth/start");
+  await expect(page.locator("form[data-email]")).toHaveAttribute("data-email", "testuser-b@example.com");
+  const callback = page.waitForResponse((response) => new URL(response.url()).pathname === "/auth/callback");
+  await page.getByRole("button", { name: "Allow", exact: true }).click();
+  expect((await callback).status()).toBe(302);
+  await expect(page).toHaveURL(/\/drive$/);
+  const session = await page.request.get("/auth/session");
+  expect(session.status()).toBe(200);
+  expect(await session.json()).toEqual({ authenticated: true, username: "testuser-b@example.com" });
+  await page.getByTestId("logout-button").click();
+  await expect(page).toHaveURL(/\/login$/);
   await expectSignedOut(page);
 });
 

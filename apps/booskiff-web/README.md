@@ -145,6 +145,15 @@ NixOS では `PLAYWRIGHT_CHROMIUM_PATH=$(command -v chromium)` を指定でき�
 負の系は Hydra 同意拒否、state 不一致、実 token endpoint の不正 code 拒否を
 検証します。署名不正等は既存 `bff/auth-oidc.test.ts` の担当です。
 
+認可要求は常に `prompt=login` を付け、Hydra の remembered login ではなく現在の Kratos identity を
+再確認させます。test provider は `PROVIDER_REMEMBER_LOGIN=true` で remembered subject の skip 分岐を
+再現し、A が logout した後に B の credentials を入れると、`prompt` を外した対照では A、通常の認可開始では
+B の consent/callback になることを検証します（B は `e2e/real/seed-second-user.json`）。
+同名 cookie（session / pending OAuth / `ory_kratos*`）は最初の値を採用せず、どれも使いません
+（共有 `parseCookieValue` と `CookieJar`。`bun test bff/` と `packages/auth-bun` で検証）。
+Hydra 側の remembered cookie は logout で終了しません（RP-initiated logout 未対応。有効期限まで残りますが、
+`prompt=login` により認証には使われません）。
+
 **検出した既存不具合と暫定措置:** [#17](https://github.com/ShuttlePub/shuttlepub-frontends/issues/17) /
 [#20](https://github.com/ShuttlePub/shuttlepub-frontends/issues/20) のログイン導線は修正済みです。
 ログイン成功後に BFF が `next: /auth/oauth/start?return_to=/drive` を返し、UI が
