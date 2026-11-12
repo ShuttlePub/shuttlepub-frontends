@@ -132,6 +132,12 @@ mkUpdate nav model = case _ of
     | otherwise ->
         let
           settled = model { content = model.content { revealing = filter (\pending -> pending.id /= id) model.content.revealing } }
+          -- No (new) reveal: the post is hidden again, with the error and its reveal button
+          -- to retry; nothing of an older reveal stays shown.
+          failed error =
+            Tuple
+              (settled { content = settled.content { reveals = filter (\view -> view.id /= id) settled.content.reveals, revealError = Just { id, error } } })
+              [ effect (focusIfLost [ revealButtonId id, contentHeadingId ]) ]
         in
           case result of
             Right (Just view) ->
@@ -140,8 +146,8 @@ mkUpdate nav model = case _ of
                 Tuple next effects = QR.postsShown (viewPosts [ view ]) shown
               in
                 Tuple next (effects <> [ effect (focusById (hideButtonId id)) ])
-            Right Nothing -> noMessages settled { content = settled.content { revealError = Just { id, error: Unexpected "The post is gone" } } }
-            Left error -> noMessages settled { content = settled.content { revealError = Just { id, error } } }
+            Right Nothing -> failed (Unexpected "The post is gone")
+            Left error -> failed error
   -- [隠す] drops the page's reveal and any reveal still on its way (S8: hide discards).
   HidePost id ->
     Tuple
@@ -167,6 +173,10 @@ mkUpdate nav model = case _ of
     | otherwise ->
         let
           settled = model { content = model.content { userRevealing = Nothing } }
+          failed error =
+            Tuple
+              (settled { content = settled.content { userRevealed = Nothing, userRevealError = Just error } })
+              [ effect (focusIfLost [ revealButtonId "user", contentHeadingId ]) ]
         in
           case result of
             Right (Just page) ->
@@ -174,8 +184,8 @@ mkUpdate nav model = case _ of
                 Tuple next effects = QR.postsShown (viewPosts page.posts) (settled { content = settled.content { userRevealed = Just page } })
               in
                 Tuple next (effects <> [ effect (focusById (hideButtonId "user")) ])
-            Right Nothing -> noMessages settled { content = settled.content { userRevealError = Just (Unexpected "The person is gone") } }
-            Left error -> noMessages settled { content = settled.content { userRevealError = Just error } }
+            Right Nothing -> failed (Unexpected "The person is gone")
+            Left error -> failed error
   HideUserPosts ->
     Tuple (model { content = model.content { userRevealed = Nothing, userRevealing = Nothing } }) [ effect (focusById (revealButtonId "user")) ]
 
@@ -312,7 +322,10 @@ enterRoute model = case _ of
 -- | Requests the shown screen's content for the current Profile context, in a new
 -- | epoch (older answers are dropped). Until the Profile context is known it waits:
 -- | the Profile's own domain controls decide what is shown. Revealed posts of the page
--- | are revealed again (after a mute/block change they may show more or less).
+-- | are revealed again (after a mute/block change they may show more or less): until
+-- | that answer they are hidden and pending, so nothing (operations included) of the
+-- | reveal made under the old controls is used; a failed answer leaves them hidden with
+-- | the error and the reveal button to retry (ui-spec 3-3 / 3-6).
 requestContent :: Model -> Step
 requestContent model = case model.profileContext of
   Loaded _ -> request
@@ -327,8 +340,12 @@ requestContent model = case model.profileContext of
         { epoch = epoch
         , profile = profile
         , waiting = false
+        , reveals = []
         , revealing = []
+        , revealError = Nothing
+        , userRevealed = Nothing
         , userRevealing = Nothing
+        , userRevealError = Nothing
         , controlsSeen = case model.muteBlock.domains of
             MuteBlock.Ready list -> Just list
             -- Still loading: the list that arrives is the one this content was asked with.

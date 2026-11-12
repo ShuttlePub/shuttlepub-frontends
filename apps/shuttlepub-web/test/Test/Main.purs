@@ -579,6 +579,23 @@ testPostDisplay = do
       (App.MuteBlockMsg (DomainsLoaded { profile: "p1", epoch: 0 } (Right [ muted, blocked ])))
     reRequest = refreshed.next.content.revealSeq
   assertEqual "a changed setting asks for the page's reveal again" (map _.id refreshed.next.content.revealing) [ "post-hidden" ]
+  -- Review 2: the reveal made under the old controls (its operations included) is not
+  -- used while it is asked again; a failed or empty answer leaves the post hidden with
+  -- the error and the reveal button to retry (3-3).
+  assertEqual "the old reveal is dropped while it is asked again" refreshed.next.content.reveals []
+  pendingHtml <- renderAfter (Just (PostDetail "post-hidden")) (const refreshed.next)
+  assertNotContains "no revealed post (nor its operations) while asking" pendingHtml "data-testid=\"revealed-post\""
+  assertContains "the post is hidden and pending meanwhile" pendingHtml "id=\"sp-reveal-post-hidden\" disabled=\"disabled\""
+  let refreshFailed = run refreshed.next (App.PostRevealed "post-hidden" reRequest (Left (NotImplemented "down")))
+  assertEqual "a failed re-reveal leaves the post hidden" refreshFailed.next.content.reveals []
+  assertEqual "with its error" (map _.id refreshFailed.next.content.revealError) (Just "post-hidden")
+  failedHtml <- renderAfter (Just (PostDetail "post-hidden")) (const refreshFailed.next)
+  assertContains "the error is shown on the hidden post" failedHtml "data-error=\"not_implemented\""
+  assertNotContains "and its reveal button can retry" failedHtml "id=\"sp-reveal-post-hidden\" disabled=\"disabled\""
+  assertEqual "a retry asks again" (run refreshFailed.next (App.RevealPost "post-hidden")).effects 1
+  let refreshGone = run refreshed.next (App.PostRevealed "post-hidden" reRequest (Right Nothing))
+  assertEqual "a post gone on re-reveal is hidden too" (Tuple refreshGone.next.content.reveals (map _.id refreshGone.next.content.revealError)) (Tuple [] (Just "post-hidden"))
+  assertEqual "a re-reveal brings the post back" (map _.id (run refreshed.next (App.PostRevealed "post-hidden" reRequest (Right (Just revealedView)))).next.content.reveals) [ "post-hidden" ]
   let hiddenDuringRefresh = run refreshed.next (App.HidePost "post-hidden")
   assertEqual "[隠す] during that re-reveal wins over its late answer"
     (run hiddenDuringRefresh.next (App.PostRevealed "post-hidden" reRequest (Right (Just revealedView)))).next.content.reveals
@@ -594,8 +611,29 @@ testPostDisplay = do
   assertEqual "posts revealed after [隠す] stay hidden"
     (run userHidden.next (App.UserPostsRevealed "mika@misskey.example" userRequest (Right (Just page { hidden = Nothing })))).next.content.userRevealed
     Nothing
-  assertTrue "the person's own reveal is applied"
-    (isJust (run userAsked.next (App.UserPostsRevealed "mika@misskey.example" userRequest (Right (Just page { hidden = Nothing })))).next.content.userRevealed)
+  let userGot = run userAsked.next (App.UserPostsRevealed "mika@misskey.example" userRequest (Right (Just page { hidden = Nothing })))
+  assertTrue "the person's own reveal is applied" (isJust userGot.next.content.userRevealed)
+  let
+    userRefreshed = run (userGot.next { muteBlock = ready, content = userGot.next.content { controlsSeen = Just [ { domain: "other.example", mode: MUTE, revision: 1, createdAt: "" } ] } })
+      (App.MuteBlockMsg (DomainsLoaded { profile: "p1", epoch: 0 } (Right [ muted, blocked ])))
+    userReRequest = userRefreshed.next.content.revealSeq
+  assertEqual "a person's revealed posts are asked again, not kept meanwhile"
+    (Tuple (isJust userRefreshed.next.content.userRevealed) userRefreshed.next.content.userRevealing)
+    (Tuple false (Just userReRequest))
+  userPendingHtml <- renderAfter (Just (UserProfile "mika@misskey.example")) (const userRefreshed.next)
+  assertNotContains "no revealed posts while asking" userPendingHtml "data-testid=\"revealed-posts\""
+  assertContains "the posts are hidden and pending meanwhile" userPendingHtml "id=\"sp-reveal-user\" disabled=\"disabled\""
+  let userFailed = run userRefreshed.next (App.UserPostsRevealed "mika@misskey.example" userReRequest (Left (NotImplemented "down")))
+  assertEqual "a failed re-reveal leaves the posts hidden, with the error"
+    (Tuple (isJust userFailed.next.content.userRevealed) userFailed.next.content.userRevealError)
+    (Tuple false (Just (NotImplemented "down")))
+  userFailedHtml <- renderAfter (Just (UserProfile "mika@misskey.example")) (const userFailed.next)
+  assertContains "shown on the hidden posts" userFailedHtml "data-error=\"not_implemented\""
+  assertNotContains "whose button can retry" userFailedHtml "id=\"sp-reveal-user\" disabled=\"disabled\""
+  assertEqual "a person gone on re-reveal is hidden too"
+    (isJust (run userRefreshed.next (App.UserPostsRevealed "mika@misskey.example" userReRequest (Right Nothing))).next.content.userRevealed)
+    false
+  assertEqual "a retry asks again" (run userFailed.next App.RevealUserPosts).effects 1
   let switched = run got.next (App.ProfileContextLoaded (Right { activeProfile: Just profile { id = "p2" } }))
   assertEqual "another Profile starts from hidden again" switched.next.content.reveals []
   assertTrue "and asks for its own content" (switched.next.content.epoch > 4 && switched.next.content.profile == Just "p2")
