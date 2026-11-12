@@ -247,6 +247,9 @@ async function prepareAdminScreen(page: Page, item: ScreenCase): Promise<string>
   const webhookReady = async () => {
     await expect(content.getByTestId("webhook-destinations")).toHaveCount(1);
     await expect(content.getByTestId("webhook-failed")).toHaveCount(ADMIN_WEBHOOK_FAILED_CASES.has(item.id) ? 1 : 0);
+    // Failure rows name the destination host only when there are two or more destinations.
+    await expect(content.getByTestId("webhook-failed-host")).toHaveCount(item.id === "admin-webhook-multiple" ? 1 : 0);
+    if (item.id === "admin-webhook-multiple") await expect(content.getByTestId("webhook-failed-host")).toHaveText("ops.example.org");
     // The full URL and the secret never reach the page; destinations show the masked form only.
     expect(await page.content()).not.toMatch(/https:\/\/hooks\.|0123456789abcdef/);
   };

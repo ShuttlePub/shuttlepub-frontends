@@ -160,12 +160,12 @@ adminTests = do
   let
     failure eventId = { endpointId: "1", eventId, eventType: OUTAGE_STARTED, failedAt: "2026-11-10T03:00:00Z" }
     endpoint = { id: "1", maskedUrl: "hooks.example.net/••••/a8f2", categories: [], status: EndpointStatus.FAILING, failingReasons: [ "failed_deliveries" ], configIssue: Nothing, secretConfigured: true, editable: true, revision: Just 1 }
-    onWebhook = adminModel
+    webhookModel = adminModel
       { route = Just AdminWebhook
       , page = pageForMaybeRoute (Just AdminWebhook)
       , admin = adminModel.admin { webhook = Loaded { endpoints: [ endpoint ], hasFailedDeliveries: true } }
       }
-    firstFailures = fst (updateAdmin onWebhook (FailuresLoaded { items: [ failure "13", failure "12" ], nextCursor: Just "c1" }))
+    firstFailures = fst (updateAdmin webhookModel (FailuresLoaded { items: [ failure "13", failure "12" ], nextCursor: Just "c1" }))
     allRetried = fst (updateAdmin (fst (updateAdmin firstFailures (DeliveryRetried "1" "13"))) (DeliveryRetried "1" "12"))
   assert "retried deliveries leave the list" (allRetried.admin.failures == [])
   assert "retrying every loaded failure keeps the next-page cursor" (allRetried.admin.failuresCursor == Just "c1")
@@ -177,6 +177,17 @@ adminTests = do
   assert "the last page removes the load-more control" (not (contains (Pattern "data-testid=\"webhook-failures-more\"") lastHtml))
   noFailureHtml <- FRS.render (view (fst (updateAdmin nextFailures (DeliveryRetried "1" "11"))))
   assert "no failures and no next page hides the section" (not (contains (Pattern "data-testid=\"webhook-failed\"") noFailureHtml))
+
+  -- 配送失敗の行: 送信先が 2 件以上のときだけ送信先のホスト名を添える (1 件のときは出さない)
+  let
+    other = endpoint { id = "2", maskedUrl = "ops.example.org/••••/9c1e" }
+    withFailure = fst (updateAdmin webhookModel (FailuresLoaded { items: [ (failure "13") { endpointId = "2" } ], nextCursor: Nothing }))
+    twoEndpoints = withFailure { admin = withFailure.admin { webhook = Loaded { endpoints: [ endpoint, other ], hasFailedDeliveries: true } } }
+    oneEndpoint = withFailure { admin = withFailure.admin { webhook = Loaded { endpoints: [ other ], hasFailedDeliveries: true } } }
+  twoHtml <- FRS.render (view twoEndpoints)
+  assert "with two destinations the failure row names the destination host" (contains (Pattern ">ops.example.org</span>") twoHtml)
+  oneHtml <- FRS.render (view oneEndpoint)
+  assert "with a single destination the failure row has no host" (not (contains (Pattern "webhook-failed-host") oneHtml))
 
   -- SSR: 管理画面の初期状態を渡すと、警告帯と状態チップが SSR の HTML に含まれ、そのまま hydration できる
   let ssrState = """{"username":"admin","isAdmin":true,"forbidden":false,"gate":{"revision":14,"status":"OVERRIDE","minimumMet":false,"adminOpen":true,"overrideActive":true,"enforcementVerified":true}}"""

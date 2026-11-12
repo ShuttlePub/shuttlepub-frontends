@@ -17,8 +17,10 @@ import App.Admin.Types (AdminModal(..), AdminModel, AdminMsg(..), Endpoint, Fail
 import App.Message (Message(..))
 import App.Model (Model)
 import App.Route (Route(..), routeCodec)
-import Data.Array (elem, null)
+import Data.Array (elem, find, length, null)
+import Data.Array as Array
 import Data.Maybe (Maybe(..), isNothing, maybe)
+import Data.String as String
 import Effect (Effect)
 import Flame (Html)
 import Flame.Types (NodeData)
@@ -371,7 +373,8 @@ destinations model webhook =
         )
 
 -- | 失敗があるときだけ出す。古い失敗へは［さらに読み込む］で到達し、1 件ずつ再試行する。
--- | 読み込んだ失敗をすべて再試行しても、次のページがある間は［さらに読み込む］を残す
+-- | 読み込んだ失敗をすべて再試行しても、次のページがある間は［さらに読み込む］を残す。
+-- | 送信先が 2 件以上のときだけ、どの送信先の失敗かをホスト名で添える (リード回答 question-012f38e5)
 failedSection :: AdminModel -> Array (Html Message)
 failedSection model =
   if null model.failures && isNothing model.failuresCursor then []
@@ -388,11 +391,21 @@ failedSection model =
       retrying = elem { endpointId: f.endpointId, eventId: f.eventId } model.retrying
     in
       HE.div [ HA.class' rowClass ]
-        [ timeText f.failedAt
-        , HE.span [ HA.class' ("flex-1 min-w-0 font-medium " <> T.textPrimary) ] [ HE.text (Text.eventTitle f.eventType Nothing) ]
-        , button (btnSmall <> " " <> outline) retrying (admin (RetryDelivery f.endpointId f.eventId))
-            (busyLabel retrying Text.buttonRetry)
-        ]
+        ( [ timeText f.failedAt
+          , HE.span [ HA.class' ("flex-1 min-w-0 font-medium " <> T.textPrimary) ] [ HE.text (Text.eventTitle f.eventType Nothing) ]
+          ]
+            <> maybe [] (\host -> [ HE.span [ HA.class' ("text-xs font-mono truncate " <> T.textMuted), attr "data-testid" "webhook-failed-host" ] [ HE.text host ] ]) (hostOf f.endpointId)
+            <>
+              [ button (btnSmall <> " " <> outline) retrying (admin (RetryDelivery f.endpointId f.eventId))
+                  (busyLabel retrying Text.buttonRetry)
+              ]
+        )
+  endpoints = case model.webhook of
+    Loaded webhook -> webhook.endpoints
+    _ -> []
+  hostOf endpointId =
+    if length endpoints < 2 then Nothing
+    else find (\e -> e.id == endpointId) endpoints >>= \e -> maskedHost e.maskedUrl
   loadMore = case model.failuresCursor of
     Just _ ->
       [ HE.div [ HA.class' "p-2 text-center" ]
@@ -401,6 +414,14 @@ failedSection model =
           ]
       ]
     Nothing -> []
+
+-- | 部分マスク URL のホスト部分 (host/••••/xxxx の host。伏せ字だけのときは出さない)
+maskedHost :: String -> Maybe String
+maskedHost masked = case String.split (String.Pattern "/") masked of
+  [] -> Nothing
+  parts -> case Array.head parts of
+    Just host | host /= "" && host /= "••••" -> Just host
+    _ -> Nothing
 
 -- | 送信先の登録・編集モーダルの中身。URL・シークレットは空で開き、入力したときだけ置き換える
 webhookModalBody :: AdminModel -> Array (Html Message)
