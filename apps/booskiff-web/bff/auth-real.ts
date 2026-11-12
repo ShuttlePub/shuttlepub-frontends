@@ -148,6 +148,9 @@ export async function startRealOAuth(req: Request, config: RealAuthConfig): Prom
   authorizeUrl.searchParams.set("state", state);
   authorizeUrl.searchParams.set("code_challenge", codeChallenge);
   authorizeUrl.searchParams.set("code_challenge_method", "S256");
+  // Hydra の remembered login (前ユーザー) ではなく、現在の Kratos identity を毎回再確認させる。
+  // これがないと A→logout→B で Hydra が A を skip 承認し、B のつもりのユーザーが A として認証される。
+  authorizeUrl.searchParams.set("prompt", "login");
 
   headers.set("Location", authorizeUrl.toString());
   return new Response(null, { status: 302, headers });
@@ -274,15 +277,12 @@ export async function revokeAndCollectKratosCookies(
   }
 
   try {
-    // ory_kratos_* cookie だけを Kratos へ転送 (CookieJar と同じ許可リスト)
-    const filteredCookies = (req.headers.get("cookie") ?? "")
-      .split(";")
-      .map((c) => c.trim())
-      .filter((c) => c.startsWith("ory_kratos"))
-      .join("; ");
+    // ory_kratos_* cookie だけを Kratos へ転送。login と同じ CookieJar 規則で、同名重複は転送しない
+    const jar = new CookieJar();
+    jar.mergeBrowserCookies(req);
 
     const kratosLogoutResp = await fetch(`${config.kratosPublicUrl}/self-service/logout/browser`, {
-      headers: { Accept: "application/json", Cookie: filteredCookies },
+      headers: { Accept: "application/json", Cookie: jar.toCookieHeader() },
     });
     if (kratosLogoutResp.ok) {
       const logoutFlow = await kratosLogoutResp.json() as { logout_url?: string };

@@ -18,15 +18,24 @@ export class CookieJar {
     return [...this.jar.entries()].map(([k, v]) => `${k}=${v}`).join("; ");
   }
 
-  /** Add only Kratos-relevant browser cookies (filter out app cookies to avoid leaking secrets) */
+  /**
+   * Add only Kratos-relevant browser cookies (filter out app cookies to avoid leaking secrets).
+   * 同名 cookie が複数ある名前は、どれが正規の cookie か判別できない (cookie tossing) ので
+   * 転送しない。upstream へは未認証・flow なしとして扱われ fail-closed になる。
+   */
   mergeBrowserCookies(req: Request): void {
     const browserCookies = req.headers.get("cookie");
     if (!browserCookies) return;
+    const seen = new Map<string, string[]>();
     for (const part of browserCookies.split(";")) {
       const [name, ...rest] = part.trim().split("=");
-      if (name && !this.jar.has(name) && name.startsWith("ory_kratos")) {
-        this.jar.set(name, rest.join("="));
-      }
+      if (!name || !name.startsWith("ory_kratos")) continue;
+      const values = seen.get(name) ?? [];
+      values.push(rest.join("="));
+      seen.set(name, values);
+    }
+    for (const [name, values] of seen) {
+      if (values.length === 1 && !this.jar.has(name)) this.jar.set(name, values[0]!);
     }
   }
 
