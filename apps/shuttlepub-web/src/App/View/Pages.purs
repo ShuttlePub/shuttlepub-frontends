@@ -145,7 +145,7 @@ settings model = HE.div [ HA.class' "sp-page sp-page-padded sp-page-settings" ]
   , case activeProfile model of
       Just profile ->
         let
-          rows = Reaction.settingsProfileRows model profile
+          rows = Reaction.settingsProfileRows model profile <> [ muteBlockRow ]
         in
           HE.section [ HA.class' "sp-section", attr "aria-label" "Profile の設定" ]
             [ HE.div [ HA.class' "sp-section-head" ]
@@ -164,6 +164,11 @@ settings model = HE.div [ HA.class' "sp-page sp-page-padded sp-page-settings" ]
         ]
     else emptySlot
   ]
+
+-- | Entry to 設定 > ミュート・ブロック (D08, personal-domain-controls-web-ui). The
+-- | settings apply to the selected Profile, so the row sits in its section.
+muteBlockRow :: Html Message
+muteBlockRow = routeLink MuteBlockDomains [ HA.class' "sp-set-row", testId "settings-mute-block" ] [ HE.text "ミュート・ブロック" ]
 
 -- | Navigation targets whose screens belong to later units.
 placeholder :: String -> Html Message

@@ -41,7 +41,7 @@ describe("mock mode", () => {
     expect(result.data).toEqual({
       apiMode: "MOCK",
       apiStatus: { apiVersion: apiStatusFixture.api_version },
-      profileContext: { activeProfile: profileContextFixture.activeProfile },
+      profileContext: { activeProfile: { id: profileContextFixture.activeProfile!.id, handle: profileContextFixture.activeProfile!.handle, displayName: profileContextFixture.activeProfile!.displayName } },
     });
   });
 
@@ -80,7 +80,7 @@ describe("mock mode", () => {
 
   test("lists every mock Profile and selects one without persisting it", async () => {
     const list = await run(app, "{ availableProfiles { id handle displayName } }");
-    expect(list.data!.availableProfiles).toEqual(availableProfilesFixture);
+    expect(list.data!.availableProfiles).toEqual(availableProfilesFixture.map(({ profileId: _, ...visible }) => visible));
     const second = availableProfilesFixture[1]!;
     const selected = await run(app, `mutation { selectProfile(id: "${second.id}") { activeProfile { id } } }`);
     expect(selected.data).toEqual({ selectProfile: { activeProfile: { id: second.id } } });
@@ -88,6 +88,22 @@ describe("mock mode", () => {
     expect(after.data).toEqual({ profileContext: { activeProfile: { id: profileContextFixture.activeProfile!.id } } });
     const unknown = await run(app, 'mutation { selectProfile(id: "someone-else") { activeProfile { id } } }');
     expect(unknown.errors![0]!.extensions).toMatchObject({ code: "PROFILE_UNAVAILABLE" });
+  });
+
+  test("mute/block settings act as the Profile the page shows (any mock Profile) and stay separate per Profile", async () => {
+    const [first, second] = availableProfilesFixture;
+    // The page switched to the second Profile (stateless mock selection): its own, empty settings.
+    await run(app, `mutation { selectProfile(id: "${second!.id}") { activeProfile { id } } }`);
+    expect(await run(app, `{ domainControls(profile: "${second!.id}") { domain } }`)).toEqual({ data: { domainControls: [] } });
+    const saved = await run(app, `mutation { setDomainControl(profile: "${second!.id}", domain: "only-b.example", mode: MUTE) { domain revision } }`);
+    expect(saved.data).toEqual({ setDomainControl: { domain: "only-b.example", revision: 1 } });
+    // The first Profile does not see it; the second still does.
+    const asA = await run(app, `{ domainControls(profile: "${first!.id}") { domain } }`);
+    expect((asA.data!.domainControls as { domain: string }[]).map((c) => c.domain)).not.toContain("only-b.example");
+    expect((await run(app, `{ domainControls(profile: "${second!.id}") { domain } }`)).data).toEqual({ domainControls: [{ domain: "only-b.example" }] });
+    // Someone else's Profile is refused.
+    const foreign = await run(app, '{ domainControls(profile: "someone-else") { domain } }');
+    expect(foreign.errors![0]!.extensions).toMatchObject({ code: "PROFILE_UNAVAILABLE" });
   });
 });
 

@@ -11,6 +11,7 @@ import {
   featuresInEmumetHtml,
   featuresInShuttlePubHtml,
   selectCases,
+  SHUTTLEPUB_PROBE_PATHS,
   type CaptureSide,
 } from "./features.ts";
 import { startApp, type AppServer } from "./servers.ts";
@@ -382,6 +383,24 @@ async function prepareShuttlePubShell(page: Page, item: ScreenCase) {
     await expect(content).toContainText("Fixture Profile");
   } else if (item.id.startsWith("reaction-")) {
     await prepareQuickReaction(page, item);
+  } else if (item.id.startsWith("mute-block-")) {
+    // Rows come from the BFF's stateful mock through GraphQL after hydration.
+    const panel = item.id === "mute-block-accounts" ? "account-panel" : "domain-panel";
+    await expect(page.getByTestId(panel).locator("section")).toHaveAttribute("data-state", "loaded");
+    if (item.id === "mute-block-accounts") {
+      await expect(page.locator('li[data-actor="https://spam.example/users/spam_bot"]')).toBeVisible();
+    } else {
+      await expect(page.locator('li[data-domain="bot-farm.example"]')).toBeVisible();
+    }
+    if (item.id === "mute-block-block-dialog") {
+      // "+" -> pasted URL -> ブロック: normalized domain, detached follows listed.
+      await page.locator("#mb-add-button").click();
+      await page.locator("#mb-add-input").fill("https://Example.social/@alice");
+      await page.getByTestId("add-dialog").getByRole("button", { name: "ブロック", exact: true }).click();
+      await expect(page.getByTestId("block-impact")).toContainText("フォロー中 3 人・フォロワー 5 人");
+      await page.getByTestId("block-impact").locator("summary").click();
+      await expect(page.getByTestId("block-dialog")).toContainText("example.social をブロックしますか？");
+    }
   }
 }
 
@@ -597,7 +616,7 @@ export async function captureScreens(frontendRoot: string, output: string, side:
     const capturedApps = new Set<ScreenApp>(servers.map((server) => server.app));
     const shuttlePub = servers.find((server) => server.app === "ShuttlePub")!;
     const emumet = servers.find((server) => server.app === "Emumet")!;
-    const shuttlePubHtml = await Promise.all(["/", "/login"].map(async (path) => (await fetch(`${shuttlePub.url}${path}`)).text()));
+    const shuttlePubHtml = await Promise.all(SHUTTLEPUB_PROBE_PATHS.map(async (path) => (await fetch(`${shuttlePub.url}${path}`)).text()));
     const features = new Set([
       ...featuresInShuttlePubHtml(shuttlePubHtml.join("\n")),
       ...featuresInEmumetHtml(await (await fetch(`${emumet.url}/accounts/new`)).text()),

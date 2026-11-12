@@ -23,6 +23,9 @@ data Route
   | Bookmarks
   | Settings
   | PostDetail String
+  -- | Settings page "ミュート・ブロック" and its two sub-pages (D08 UI mock v5, ui-spec 1-2).
+  | MuteBlockAccounts
+  | MuteBlockDomains
   -- | The login entry (FA). The credentials form itself is the IdP's (Emumet);
   -- | `error` is the BFF callback's fixed failure reason (bff/auth.ts LOGIN_ERROR_PATHS).
   | Login { error :: Maybe String }
@@ -48,5 +51,7 @@ routeCodec = root $ sum
   , "Bookmarks": "bookmarks" / noArgs
   , "Settings": "settings" / noArgs
   , "PostDetail": "posts" / segment
+  , "MuteBlockAccounts": "settings" / "mute-block" / "accounts" / noArgs
+  , "MuteBlockDomains": "settings" / "mute-block" / "domains" / noArgs
   , "Login": "login" ? { error: optional <<< string }
   }

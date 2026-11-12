@@ -9,12 +9,17 @@ export function captureSide(value: string | undefined): CaptureSide {
   throw new Error(`CAPTURE_SIDE must be "branch" or "baseline", got ${JSON.stringify(value)}`);
 }
 
-/** SSR markers proving a feature exists in the running app (see cases.ts ScreenFeature). Pass the HTML of `/` and `/login`. */
+/** ShuttlePub pages whose SSR HTML carries the feature markers (`/`, `/login`, the mute/block page). */
+export const SHUTTLEPUB_PROBE_PATHS = ["/", "/login", "/settings/mute-block/domains"] as const;
+
+/** SSR markers proving a feature exists in the running app (see cases.ts ScreenFeature). Pass the HTML of SHUTTLEPUB_PROBE_PATHS. */
 export function featuresInShuttlePubHtml(html: string): Set<ScreenFeature> {
   const features = new Set<ScreenFeature>();
   if (html.includes('data-testid="app-shell"')) features.add("sns-shell");
   if (html.includes('class="sp-reaction-layer"')) features.add("quick-reaction");
   if (html.includes('data-testid="login-page"')) features.add("sns-login");
+  // Only the mute/block page renders this marker; a baseline without the route serves NotFound there.
+  if (html.includes('data-testid="mute-block"')) features.add("mute-block-settings");
   return features;
 }
 

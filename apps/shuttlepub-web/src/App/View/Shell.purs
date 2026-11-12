@@ -197,6 +197,8 @@ sidebar model = HE.nav [ HA.class' "sp-sidebar", attr "aria-label" "メインナ
 isCurrent :: Model -> Route -> Boolean
 isCurrent model route = case model.route, route of
   Just (PostDetail _), Home -> true
+  Just MuteBlockAccounts, Settings -> true
+  Just MuteBlockDomains, Settings -> true
   Just current, _ -> current == route
   Nothing, _ -> false
 

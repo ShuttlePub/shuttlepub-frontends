@@ -36,6 +36,17 @@ mock / real 切替、SSR + hydration、Profile context の型・fixture、visual
 `createPost` は mock でも `NOT_IMPLEMENTED` です (投稿を模擬しない)。返信・リポスト・その他・画像・CW・絵文字は
 配置のみで `aria-disabled` です。mock の Profile は 3 件で、切替は応答を返すだけで保存しません (stateless)。
 
+### 設定「ミュート・ブロック」(D08 / personal-domain-controls-web-ui)
+
+`/settings/mute-block/domains`・`/settings/mute-block/accounts` (設定 > Profile の「ミュート・ブロック」から)。
+画面構成・文言は host の `intents/shuttlepub/features/personal-domain-controls-ui/ui-spec.md` (UI モック v5 合意) に従う。
+選択中 Profile の domain mute/block (Emumet domain-controls) と個別アカウントの mute/block (Emumet blocks/mutes)
+の一覧・追加・解除。Emumet で実適用されるのは Follow 制御 (block 時の既存関係の両方向解除・新規 Follow 拒否)
+だけで、投稿の表示抑制・反応拒否は ShuttlePub の後続実装 (未接続。画面の一覧下に注記)。投稿・プロフィールの
+「…」メニューと直接 URL・引用・返信の隠し表示 (ui-spec 3-x/4-x/5-x) は S8 契約後の別変更。
+自サーバーのドメインは `EMUMET_PUBLIC_HOST` (Emumet の `PUBLIC_BASE_URL` の host。real で必須、未設定なら追加できない)
+で判定し、入力・保存のどちらでも拒否する。
+
 ### クイックリアクション (D03, quick-reaction-web-ui)
 
 ui-spec v6 の C (投稿カードの反応状態)・P (ピッカー)・D (投稿詳細)・S (常用絵文字の設定) を

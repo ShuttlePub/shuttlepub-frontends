@@ -7,6 +7,8 @@ import App.Dom (keydownAction)
 import App.Extension.Reaction as Reaction
 import App.Message (Message(..))
 import App.Model (Model, RemoteData(..))
+import App.MuteBlock.Types (Tab(..))
+import App.MuteBlock.View as MuteBlock
 import App.Route (Route(..))
 import App.View.Auth as Auth
 import App.View.Common (attr, emptySlot, testId)
@@ -63,6 +65,8 @@ page model = case model.route of
   Just Home -> Pages.home model
   Just (PostDetail _) -> Pages.postDetail model
   Just Settings -> Pages.settings model
+  Just MuteBlockAccounts -> map MuteBlockMsg (MuteBlock.view AccountsTab model.muteBlock)
+  Just MuteBlockDomains -> map MuteBlockMsg (MuteBlock.view DomainsTab model.muteBlock)
   Just Notifications -> Pages.placeholder "通知"
   Just Search -> Pages.placeholder "検索"
   Just Bookmarks -> Pages.placeholder "ブックマーク"

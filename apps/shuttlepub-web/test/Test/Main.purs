@@ -5,20 +5,27 @@ import Prelude
 import App.Api.Error (ApiError(..), describe, fromGqlCode, isSignedOut, tag, withReason)
 import App.Dom (fullDateTime, relativeTime)
 import App.Model (DetailTab(..), Model, RemoteData(..), emptyCompose, fromEither, initialModel)
+import App.Model as AppModel
+import App.MuteBlock.Types as MuteBlock
+import App.MuteBlock.Types (Change(..), Dialog(..), Failure(..), InputProblem(..), Message(..), Undo(..), Write(..))
+import App.MuteBlock.Update as MuteBlockUpdate
+import Generated.Schema.Gql.Enum.PolicyMode (PolicyMode(..))
 import App.Post (Post, TimelineTab(..), Visibility(..), allTimelineTabs, timelineTabFromValue, timelineTabValue)
+import App.Reaction (ToastKind(..))
 import App.Route (Route(..), routeCodec)
 import App.View (view)
 import App.View.Auth (authActionId, authActionShown)
 import App.View.Common (loginHref)
 import App.View.Shell (profileButtonDesktopId, profileButtonMobileId)
 import Client.Update (visibleOpener)
-import Data.Array (length)
 import Data.Argonaut.Decode (class DecodeJson, decodeJson)
 import Data.Argonaut.Encode (class EncodeJson, encodeJson)
 import Data.Either (Either(..), hush)
+import Data.Array (length)
 import Data.Foldable (for_)
 import Data.Maybe (Maybe(..))
 import Data.String (Pattern(..), contains, split)
+import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Effect.Class.Console (log)
 import Effect.Exception (throw)
@@ -37,6 +44,7 @@ main = do
   testTimelineTabs
   testTimeFormatting
   testSsr
+  testMuteBlock
   testReaction
   testLoginHref
   testLoginScreens
@@ -82,6 +90,10 @@ testRouteCodec = do
     roundTrip ("route " <> path) route
   assertEqual "parse unknown path" (hush (parse routeCodec "/nope")) Nothing
   assertEqual "posts needs an id" (hush (parse routeCodec "/posts")) Nothing
+  assertEqual "parse mute-block domains" (hush (parse routeCodec "/settings/mute-block/domains")) (Just MuteBlockDomains)
+  assertEqual "parse mute-block accounts" (hush (parse routeCodec "/settings/mute-block/accounts")) (Just MuteBlockAccounts)
+  assertEqual "print mute-block domains" (print routeCodec MuteBlockDomains) "/settings/mute-block/domains"
+  assertEqual "mute-block root is not a page" (hush (parse routeCodec "/settings/mute-block")) Nothing
 
 samplePost :: Post
 samplePost =
@@ -212,6 +224,134 @@ testSsr = do
     html <- renderPage path
     assertContains ("SSR " <> path) html "data-testid=\"app-shell\""
     assertNotContains ("SSR " <> path) html "undefined"
+
+-- | D08 mute/block settings page: SSR shell, state round trip and the update
+-- | rules that keep writes honest (no silent success, no double write).
+testMuteBlock :: Effect Unit
+testMuteBlock = do
+  page <- renderPage "/settings/mute-block/domains"
+  assertContains "mute-block SSR" page "ミュート・ブロック"
+  assertContains "mute-block SSR claims no data" page "読み込み中"
+  assertContains "mute-block SSR tabs" page "/settings/mute-block/accounts"
+  assertNotContains "mute-block SSR" page "undefined"
+  let
+    muted = { domain: "noisy.social", mode: MUTE, revision: 3, createdAt: "2025-11-30T09:00:00Z" }
+    blocked = { domain: "bot-farm.example", mode: BLOCK, revision: 1, createdAt: "2025-12-20T09:00:00Z" }
+    ready = MuteBlock.init { profile = Just "acc-1", profileKnown = true, domains = MuteBlock.Ready [ muted, blocked ], actors = MuteBlock.Ready [] }
+    step model message = case MuteBlockUpdate.update model message of
+      Tuple next effects -> { next, effects: length effects }
+    row = { profile: "acc-1", epoch: 0, dialog: false }
+    fromDialog = { profile: "acc-1", epoch: 0, dialog: true }
+  roundTrip "mute-block model" (ready { dialog = Just (ConfirmBlock { domain: "example.social", current: Nothing, fromInput: true, impact: MuteBlock.Ready { following: [ "https://example.social/users/a" ], followers: [] }, acknowledged: false, pending: false, failure: Nothing }) })
+  roundTrip "app model with mute-block" ((initialModel (Just MuteBlockDomains)) { muteBlock = ready } :: AppModel.Model)
+  let none = step MuteBlock.init (ProfileKnown (Right Nothing))
+  assertEqual "no profile is an error, not an empty list" none.next.domains (MuteBlock.Failed (Failure "PROFILE_REQUIRED"))
+  let known = step MuteBlock.init (ProfileKnown (Right (Just "acc-1")))
+  assertEqual "a known profile loads both lists" known.effects 2
+  assertEqual "stale list response is dropped" (step ready (DomainsLoaded { profile: "acc-2", epoch: 0 } (Right []))).next.domains ready.domains
+  let adding = ready { dialog = Just (AddDomain { input: "noisy.social", problem: Nothing, pending: true }) }
+  assertEqual "adding the same mode again is refused"
+    (step adding (AddChecked MUTE (Right { domain: Just "noisy.social", error: Nothing }))).next.dialog
+    (Just (AddDomain { input: "noisy.social", problem: Just (AlreadySet MUTE), pending: false }))
+  assertEqual "a refused input shows its reason"
+    (step adding (AddChecked MUTE (Right { domain: Nothing, error: Just "WILDCARD" }))).next.dialog
+    (Just (AddDomain { input: "noisy.social", problem: Just (InputRefused "WILDCARD"), pending: false }))
+  let blockingMuted = step adding (AddChecked BLOCK (Right { domain: Just "noisy.social", error: Nothing }))
+  case blockingMuted.next.dialog of
+    Just (ConfirmBlock state) -> do
+      assertEqual "blocking a muted domain replaces its revision" (map _.revision state.current) (Just 3)
+      assertEqual "impact is loaded before blocking" state.impact MuteBlock.Loading
+    _ -> throw "expected the block confirmation"
+  let
+    detaching = ready { dialog = Just (ConfirmBlock { domain: "example.social", current: Nothing, fromInput: true, impact: MuteBlock.Ready { following: [ "https://example.social/users/a" ], followers: [] }, acknowledged: false, pending: false, failure: Nothing }) }
+  assertEqual "detaching follows needs the acknowledgement" (step detaching ConfirmBlockDomain).effects 0
+  let acknowledged = step (step detaching (ToggleAcknowledged true)).next ConfirmBlockDomain
+  assertEqual "acknowledged block writes once" acknowledged.effects 1
+  assertTrue "pending block is not sent twice" ((step acknowledged.next ConfirmBlockDomain).effects == 0)
+  let
+    writing = ready { writing = true }
+  assertEqual "no second write while one is in flight" (step writing (UnmuteDomain muted)).effects 0
+  let unmuted = step (ready { writing = true }) (Written row UnmuteDomainRow "noisy.social" (Right (DomainRemoved "noisy.social")))
+  assertEqual "unmute removes the row" unmuted.next.domains (MuteBlock.Ready [ blocked ])
+  assertEqual "unmute offers undo" (map _.undo unmuted.next.toast) (Just (Just (RestoreDomainMute "noisy.social")))
+  let conflict = step (acknowledged.next) (Written fromDialog BlockDomain "example.social" (Left (Failure "REVISION_CONFLICT")))
+  case conflict.next.dialog of
+    Just (ConfirmBlock state) -> assertEqual "a conflict stays visible in the dialog" state.failure (Just (Failure "REVISION_CONFLICT"))
+    _ -> throw "the dialog must stay open on failure"
+  assertEqual "a failed write never changes the list" conflict.next.domains ready.domains
+  let
+    swapped = step (ready { writing = true }) (Written fromDialog ActorToMute "remote.example/users/zed" (Right (ActorRemoved "rel-1")))
+  assertEqual "changing a block into a mute keeps its toast" (map _.rest swapped.next.toast) (Just " をミュートに変更しました")
+  assertEqual "and refetches the individual list" swapped.effects 2
+  -- Review round 2: the block waits for what it detaches; a failed lookup is retried, never skipped.
+  let
+    lookupFailed = detaching { dialog = Just (ConfirmBlock { domain: "example.social", current: Nothing, fromInput: true, impact: MuteBlock.Failed (Failure "UPSTREAM_UNAVAILABLE"), acknowledged: true, pending: false, failure: Nothing }) }
+  assertEqual "no block is sent while the detached follows are unknown" (step lookupFailed ConfirmBlockDomain).effects 0
+  let retried = step lookupFailed RetryImpact
+  assertEqual "retry looks the follows up again" retried.effects 1
+  case retried.next.dialog of
+    Just (ConfirmBlock state) -> do
+      assertEqual "retry is loading" state.impact MuteBlock.Loading
+      assertEqual "retry clears the acknowledgement" state.acknowledged false
+    _ -> throw "retry keeps the block confirmation"
+  assertEqual "no block is sent while the lookup is loading" (step retried.next ConfirmBlockDomain).effects 0
+  -- An undo (or row write) finishing while another dialog is open leaves that dialog and its input alone.
+  let
+    typing = AddDomain { input: "half-typed.exa", problem: Nothing, pending: false }
+    undone = step (ready { writing = true, dialog = Just typing }) (Written row UndoWrite "noisy.social" (Right (DomainUpserted muted)))
+  assertEqual "a finished undo keeps the open dialog" undone.next.dialog (Just typing)
+  assertEqual "and does not move focus" undone.effects 0
+  let
+    withToast = unmuted.next { dialog = Just typing }
+  assertEqual "undo cannot run behind an open dialog" (step withToast RunUndo).effects 0
+  -- Review round 3: a write that completes after the Profile changed is dropped,
+  -- even once the new Profile's list has arrived; its undo cannot write into B.
+  let
+    onB = (step (ready { writing = true }) (ProfileKnown (Right (Just "acc-2")))).next
+    bControl = { domain: "only-b.example", mode: MUTE, revision: 1, createdAt: "2026-01-01T00:00:00Z" }
+    bLoaded = (step onB (DomainsLoaded { profile: "acc-2", epoch: onB.epoch } (Right [ bControl ]))).next
+    late = step bLoaded (Written row UnmuteDomainRow "noisy.social" (Right (DomainRemoved "noisy.social")))
+  assertEqual "a switch starts a new epoch and frees the write flag" (Tuple onB.epoch onB.writing) (Tuple 1 false)
+  assertEqual "a late write of A does not touch B's list" late.next.domains (MuteBlock.Ready [ bControl ])
+  assertEqual "nor shows a toast (no undo into B)" late.next.toast Nothing
+  assertEqual "nor runs anything" late.effects 0
+  assertEqual "nothing to undo on B" (step late.next RunUndo).effects 0
+  assertEqual "A's late list is dropped on B" (step bLoaded (DomainsLoaded { profile: "acc-1", epoch: 0 } (Right []))).next.domains (MuteBlock.Ready [ bControl ])
+  let
+    backOnA = (step bLoaded (ProfileKnown (Right (Just "acc-1")))).next
+    lateOnA = step backOnA (Written row UnmuteDomainRow "noisy.social" (Right (DomainRemoved "noisy.social")))
+  assertEqual "switching back to A does not revive the old completion" lateOnA.next.toast Nothing
+  -- The undo belongs to the toast's owner.
+  assertEqual "undo restores into the owner's Profile" (step unmuted.next RunUndo).effects 1
+  assertEqual "undo of an earlier selection does nothing" (step (unmuted.next { epoch = 1 }) RunUndo).effects 0
+  -- Round 3: one write at a time, and a completion closes only the dialog that sent it.
+  let
+    confirming = ConfirmMute { domain: "calm.example", current: Nothing, fromInput: true, pending: false, failure: Nothing }
+    rowInFlight = ready { writing = true, dialog = Just confirming }
+  assertEqual "a confirmation cannot send while another write is in flight" (step rowInFlight ConfirmMuteDomain).effects 0
+  assertEqual "a row completion leaves the open confirmation alone"
+    (step rowInFlight (Written row UnmuteDomainRow "noisy.social" (Right (DomainRemoved "noisy.social")))).next.dialog
+    (Just confirming)
+  let
+    pendingDialog = ConfirmMute { domain: "calm.example", current: Nothing, fromInput: true, pending: true, failure: Nothing }
+    lateRow = step (ready { writing = true, dialog = Just pendingDialog }) (Written row UnmuteDomainRow "noisy.social" (Left (Failure "UPSTREAM_UNAVAILABLE")))
+  assertEqual "a row failure does not land in a pending dialog" lateRow.next.dialog (Just pendingDialog)
+  let
+    ownDone = step (ready { writing = true, dialog = Just pendingDialog }) (Written fromDialog MuteDomain "calm.example" (Right (DomainUpserted { domain: "calm.example", mode: MUTE, revision: 1, createdAt: "2026-01-01T00:00:00Z" })))
+  assertEqual "the dialog's own completion closes it" ownDone.next.dialog Nothing
+
+  -- Integration with quick reaction: its toast moves behind an open mute/block dialog and is inert.
+  let
+    reactionToast = { id: 1, kind: ReactionFailed "リアクションできませんでした" (NotImplemented "later"), holds: { hover: false, touch: false, focus: false }, armed: 1 }
+    withToast dialog m = m
+      { profileContext = Loaded { activeProfile: Nothing }
+      , muteBlock = ready { dialog = dialog }
+      , reaction = m.reaction { toast = Just reactionToast }
+      }
+  behind <- renderAfter (Just MuteBlockDomains) (withToast (Just (AddDomain { input: "keep-me.example", problem: Nothing, pending: false })))
+  assertContains "reaction toast is behind the mute/block dialog" behind "sp-toast sp-toast-behind"
+  free <- renderAfter (Just MuteBlockDomains) (withToast Nothing)
+  assertNotContains "without a dialog the reaction toast is usable" free "sp-toast-behind"
 
 testLoginHref :: Effect Unit
 testLoginHref = do

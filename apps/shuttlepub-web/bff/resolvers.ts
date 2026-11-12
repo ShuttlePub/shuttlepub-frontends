@@ -1,5 +1,7 @@
 import { GraphQLError } from "graphql";
 import { AuthError } from "./auth-error.ts";
+import { policyResolvers } from "./policy/resolvers.ts";
+import type { ProfilePolicySource } from "./policy/source.ts";
 import type { ProfileContextSource } from "./profile.ts";
 import { ShuttlePubApiError, type ShuttlePubApi, type ShuttlePubApiErrorKind, type ViewerAuth } from "./rest/client.ts";
 import type { PostVisibility, TimelineKind } from "./rest/posts.ts";
@@ -9,6 +11,10 @@ import type { ReactionGroup } from "./rest/reactions.ts";
 export type GraphQLContext = {
   api: ShuttlePubApi;
   profiles: ProfileContextSource;
+  /** Emumet Profile mute/block settings (mock or real, fixed at startup like api). */
+  policy: ProfilePolicySource;
+  /** This server's own actor domain(s) (EMUMET_PUBLIC_HOST), refused as a muted/blocked domain; null = not configured. */
+  selfDomains: readonly string[] | null;
   /** Bearer credentials of the viewer for S3 operations (mock: none; real: the session's token). */
   viewerAuth: () => Promise<ViewerAuth>;
 };
@@ -84,6 +90,7 @@ async function actingAs(context: GraphQLContext, profileId: string): Promise<Vie
 
 export const resolvers = {
   Mutation: {
+    ...policyResolvers.Mutation,
     selectProfile: (_root: unknown, args: { id: string }, context: GraphQLContext) =>
       guarded(() => context.profiles.selectProfile(args.id)),
     createPost: (_root: unknown, args: { input: { text: string; visibility: string } }, context: GraphQLContext) =>
@@ -121,6 +128,7 @@ export const resolvers = {
       guarded(() => context.api.getPost(args.id)),
     replies: (_root: unknown, args: { postId: string }, context: GraphQLContext) =>
       guarded(() => context.api.getReplies(args.postId)),
+    ...policyResolvers.Query,
     availableProfiles: (_root: unknown, _args: unknown, context: GraphQLContext) =>
       guarded(() => context.profiles.availableProfiles()),
     apiMode: (_root: unknown, _args: unknown, context: GraphQLContext) => context.api.mode.toUpperCase(),

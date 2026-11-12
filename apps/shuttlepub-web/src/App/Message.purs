@@ -5,6 +5,7 @@ import App.Dom (KeyAction)
 import App.Model (ApiStatus, DetailTab, PostDetailData)
 import App.Post (Post, TimelineTab, Visibility)
 import App.Profile (Profile, ProfileContext)
+import App.MuteBlock.Types as MuteBlock
 import App.Reaction (ReactionMsg)
 import App.Route (Route)
 import Data.Either (Either)
@@ -47,3 +48,4 @@ data Message
   -- | Quick reaction (D03): App.Reaction / Client.Reaction.
   | Reaction ReactionMsg
   | NoOp
+  | MuteBlockMsg MuteBlock.Message

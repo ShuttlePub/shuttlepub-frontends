@@ -17,6 +17,7 @@ package:
     - argonaut-generic
     - arrays
     - console
+    - datetime
     - effect
     - either
     - flame

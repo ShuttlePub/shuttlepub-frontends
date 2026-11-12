@@ -2,6 +2,10 @@ import type { AppConfig } from "./config.ts";
 import type { AuthConfig } from "./auth-config.ts";
 import { AuthError } from "./auth-error.ts";
 import { checkOrigin, createAuth, privateResponse, withCookies, type Auth, type FetchLike, type ViewerSession } from "./auth.ts";
+import { ownActorDomain } from "./policy/domain.ts";
+import { createMockProfilePolicy } from "./policy/mock.ts";
+import { createRealProfilePolicy } from "./policy/real.ts";
+import type { ProfilePolicySource } from "./policy/source.ts";
 import { createMockProfileContext, createRealProfileContext, type ProfileContextSource } from "./profile.ts";
 import type { ShuttlePubApi } from "./rest/client.ts";
 import { createMockApi } from "./rest/mock.ts";
@@ -27,9 +31,21 @@ export type AppDeps = {
   auth?: AuthConfig;
   authFetch?: FetchLike;
   emumetFetch?: FetchLike;
+  /** Mock mode only: the Profile mute/block mock (tests inject a seeded one). */
+  mockPolicy?: ProfilePolicySource;
   /** Test-only: expose POST /__mock/reset (mock mode only). */
   mockReset?: boolean;
 };
+
+/** The mock deployment's actor domain (the agreed D08 mock's own server). */
+export const MOCK_OWN_DOMAIN = "shuttle.example";
+
+/** Our own actor domain from EMUMET_PUBLIC_HOST; null when not configured (nothing guessed). */
+function selfDomainsOf(publicHost: string | undefined): string[] | null {
+  if (!publicHost) return null;
+  const domain = ownActorDomain(publicHost);
+  return domain === null ? null : [domain];
+}
 
 export function createApp(config: AppConfig, deps: AppDeps = {}): App {
   const mockApi = config.mode === "mock" ? createMockApi() : undefined;
@@ -37,11 +53,16 @@ export function createApp(config: AppConfig, deps: AppDeps = {}): App {
     : createRealApi({ baseUrl: config.apiUrl, ...(deps.fetch === undefined ? {} : { fetch: deps.fetch }) });
   const auth = config.mode === "real" && deps.auth ? createAuth(deps.auth, { fetch: deps.authFetch }) : undefined;
   const profiles = config.mode === "mock" ? createMockProfileContext() : createRealProfileContext();
+  // Mock mode: one stateful policy for the process. Real mode without an authenticated
+  // session (no auth config) must never reach mock data: every call is UNAUTHENTICATED.
+  const mockPolicy = config.mode === "mock" ? deps.mockPolicy ?? createMockProfilePolicy()
+    : createRealProfilePolicy({ baseUrl: "http://unconfigured.invalid", session: () => Promise.reject(new AuthError("UNAUTHENTICATED", 401)) });
   // Without a session there is no bearer token: real S3 operations are UNAUTHENTICATED.
   const viewerAuth = config.mode === "mock"
     ? async () => ({ accessToken: undefined })
     : async (): Promise<{ accessToken: string | undefined }> => { throw new AuthError("UNAUTHENTICATED", 401); };
-  const mockHandler = createGraphqlHandler({ api, profiles, viewerAuth });
+  const mockHandler = createGraphqlHandler({ api, profiles, viewerAuth, policy: mockPolicy,
+    selfDomains: config.mode === "mock" ? [MOCK_OWN_DOMAIN] : null });
   return { config, api, profiles, ...(auth ? { auth } : {}),
     ...(mockApi && deps.mockReset ? {
       handleMockReset(request: Request) {
@@ -71,8 +92,14 @@ export function createApp(config: AppConfig, deps: AppDeps = {}): App {
         fetch: deps.emumetFetch,
         async invalidated() { cookies.push(await auth.clearSession()); },
       });
+      const policy = createRealProfilePolicy({ baseUrl: auth.config.emumetApiUrl,
+        session: getSession,
+        fetch: deps.emumetFetch,
+        async invalidated() { cookies.push(await auth.clearSession()); },
+      });
+      const selfDomains = selfDomainsOf(auth.config.emumetPublicHost);
       try {
-        const response = await createGraphqlHandler({ api, profiles: requestProfiles,
+        const response = await createGraphqlHandler({ api, profiles: requestProfiles, policy, selfDomains,
           viewerAuth: async () => ({ accessToken: (await getSession()).accessToken }) })(request);
         return privateResponse(withCookies(response, cookies));
       } catch (error) {

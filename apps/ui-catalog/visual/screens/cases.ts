@@ -19,8 +19,10 @@ export type DataState = "populated" | "empty";
  *    the SSR marker data-username-dialog on /accounts/new.
  *  - sns-login: the ShuttlePub login screen (FA), detected by the /login SSR marker
  *    data-testid="login-page".
+ *  - mute-block-settings: 設定 > ミュート・ブロック (D08 UI mock v5), detected by the SSR
+ *    marker data-testid="mute-block" on /settings/mute-block/domains.
  */
-export type ScreenFeature = "sns-shell" | "quick-reaction" | "emumet-username-ui" | "sns-login" | "emumet-webhook-endpoints";
+export type ScreenFeature = "sns-shell" | "quick-reaction" | "emumet-username-ui" | "sns-login" | "emumet-webhook-endpoints" | "mute-block-settings";
 
 /**
  * ShuttlePub only. A case with a viewer is captured against the real-mode BFF (stub
@@ -121,6 +123,11 @@ const routes = [
   { app: "ShuttlePub", id: "login-failed", path: "/login?error=failed", authenticated: false, data: "populated", requires: "sns-login", viewer: "signed-out" },
   { app: "ShuttlePub", id: "home-signed-out", path: "/", authenticated: false, data: "populated", requires: "sns-login", viewer: "signed-out" },
   { app: "ShuttlePub", id: "home-session-expired", path: "/", authenticated: false, data: "populated", requires: "sns-login", viewer: "session-expired" },
+  // D08 mute/block settings (personal-domain-controls-web-ui, UI mock v5): both sub-pages
+  // with the stateful mock's seed, and the block confirmation with detached follows.
+  { app: "ShuttlePub", id: "mute-block-domains", path: "/settings/mute-block/domains", authenticated: false, data: "populated", requires: "mute-block-settings" },
+  { app: "ShuttlePub", id: "mute-block-accounts", path: "/settings/mute-block/accounts", authenticated: false, data: "populated", requires: "mute-block-settings" },
+  { app: "ShuttlePub", id: "mute-block-block-dialog", path: "/settings/mute-block/domains", authenticated: false, data: "populated", requires: "mute-block-settings" },
 ] as const satisfies readonly {
   app: ScreenApp; id: string; path: string; authenticated: boolean; data: DataState; scenario?: string; requires?: ScreenFeature; viewer?: ScreenViewer;
 }[];

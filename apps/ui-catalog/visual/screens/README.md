@@ -37,6 +37,8 @@ is captured at 1280×900 and 390×844, at device scale 1, with a full-page scree
   (no IdP is contacted; only the expected UNAUTHENTICATED / NOT_IMPLEMENTED GraphQL errors are allowed).
   `shuttlepub-verify.ts` additionally checks hydration, keyboard/focus behaviour, real-mode 501/500 and
   the login flow up to a stub provider's denial.
+  D08 mute/block settings (domains, accounts, block confirmation) come from the BFF's stateful mock and
+  require the `mute-block-settings` feature (marker on /settings/mute-block/domains).
 - Booskiff: login, populated Drive, empty Drive, selected folder, file detail, 404.
 - Emumet: login, populated accounts, new account, filled bot account form,
   account detail, profile edit form, settings, 404. The username screens

@@ -37,6 +37,12 @@ ui-spec（host `intents/shuttlepub/features/quick-reaction-ui/ui-spec.md` v6）�
 | `HYDRA_CLIENT_ID` / `HYDRA_CLIENT_SECRET` | このアプリ専用の confidential client、`client_secret_basic` |
 | `SHUTTLEPUB_COOKIE_SECRET_BASE64` | このアプリ専用のランダム32 bytes（base64）。他アプリの `COOKIE_SECRET_BASE64` は継承しない |
 
+任意（ミュート・ブロック設定を使うなら必須）:
+
+| 変数 | 内容 |
+| ---- | ---- |
+| `EMUMET_PUBLIC_HOST` | Emumet の `PUBLIC_BASE_URL` の host（port があれば `host:port`）。ローカル actor の URL に使われる公開ホストで、自分のサーバーをドメインとしてミュート・ブロックさせない判定に使う。`EMUMET_API_URL`（内部ホストでありうる）からは推測しない。未設定ならドメインを追加できない（`INSTANCE_HOST_NOT_CONFIGURED`） |
+
 URL は認証情報・path・query・fragment を含まない origin に限定します。
 内部 API を HTTP にする場合も、信頼されたネットワークに限定してください。
 Hydra client の redirect URI は厳密に `${APP_ORIGIN}/auth/callback`、
@@ -117,6 +123,9 @@ direction は実装上の `next` を使用します（Emumet route annotation �
 `id` は公開 **Account nanoid**、`handle` は `name`、`displayName` は `display_name`（null 時のみ `name`）。
 API は内部 Profile nanoid を返さないので作りません。今後その ID や未提供属性が必要なら、
 別途 upstream API 契約を追加する必要があります。空一覧は `[]`、未選択は `activeProfile: null`。
+Emumet が `AccountResponse.profile_id`（RX、Emumet 49acf9d 以降は必須）で返す Profile nanoid は BFF 内部だけで
+保持し、Profile 単位の Emumet API（domain-controls・blocks/mutes・following/followers）の宛先に使います。
+GraphQL の `Profile` には出しません。`profile_id` が無い応答は `INVALID_UPSTREAM_RESPONSE` です。
 選択先の消失・他人の ID は `PROFILE_UNAVAILABLE`、moderation 情報の不備/制限対象も fail closed。
 Profile の作成や一般登録は行いません。
 

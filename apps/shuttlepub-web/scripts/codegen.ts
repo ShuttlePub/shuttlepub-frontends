@@ -2,8 +2,10 @@
  * Usage: bun scripts/codegen.ts [--check]
  *
  * Regenerates every generated artifact from its pinned/owned source, offline:
- *   1. verifies openapi/shuttlepub.json against openapi/producer.lock.json
+ *   1. verifies openapi/shuttlepub.json against openapi/producer.lock.json and
+ *      openapi/emumet.json against openapi/emumet.lock.json
  *   2. openapi/shuttlepub.json -> bff/rest/generated/shuttlepub-api.ts   (openapi-typescript)
+ *      openapi/emumet.json     -> bff/rest/generated/emumet-api.ts       (openapi-typescript)
  *   3. bff/schema.graphql      -> src/Generated/**                       (scripts/sync-graphql.ts)
  *
  * --check regenerates and fails (exit 1) when the result differs from what is on
@@ -15,7 +17,7 @@
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 import { OpenApiLockError } from "../bff/openapi/lock.ts";
-import { REST_TYPES_RELATIVE_PATH, renderRestTypes } from "./rest-types.ts";
+import { REST_TYPES_RELATIVE_PATH, REST_TYPE_TARGETS, renderRestTypes } from "./rest-types.ts";
 
 const APP_DIR = join(import.meta.dir, "..");
 const REST_TYPES_FILE = join(APP_DIR, REST_TYPES_RELATIVE_PATH);
@@ -43,9 +45,12 @@ async function snapshot(): Promise<Map<string, string>> {
 }
 
 async function generateRestTypes(): Promise<void> {
-  const text = await renderRestTypes();
-  await mkdir(dirname(REST_TYPES_FILE), { recursive: true });
-  await writeFile(REST_TYPES_FILE, text);
+  for (const target of REST_TYPE_TARGETS) {
+    const text = await renderRestTypes(target.pin, target.tags);
+    const file = join(APP_DIR, target.path);
+    await mkdir(dirname(file), { recursive: true });
+    await writeFile(file, text);
+  }
 }
 
 async function generatePurescriptTypes(): Promise<void> {

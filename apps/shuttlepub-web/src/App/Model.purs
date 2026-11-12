@@ -6,6 +6,7 @@ import App.Api.Error (ApiError)
 import App.Emoji (Emoji)
 import App.Post (Post, TimelineTab(..), Visibility(..))
 import App.Profile (Profile, ProfileContext)
+import App.MuteBlock.Types as MuteBlock
 import App.Reaction (DetailFilter(..), NoteWrite, PendingRemoval, PickerState, PostReactions, QuickSettings, SettingsProblem, Toast)
 import App.Route (Route)
 import Data.Argonaut.Decode.Class (class DecodeJson)
@@ -104,6 +105,7 @@ type Model =
   , detailTab :: DetailTab
   , compose :: Maybe ComposeState
   , profileMenu :: Maybe ProfileMenuState
+  , muteBlock :: MuteBlock.Model
   , reaction :: ReactionModel
   -- Transport lifetime is independent of the visible Profile/epoch.
   , reactionWrites :: ReactionWrites
@@ -184,6 +186,7 @@ initialModel route =
   , detailTab: RepliesTab
   , compose: Nothing
   , profileMenu: Nothing
+  , muteBlock: MuteBlock.init
   , reaction: initialReactionModel
   , reactionWrites: { notes: [], versions: [], settings: [] }
   }

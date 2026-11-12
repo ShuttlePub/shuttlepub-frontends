@@ -326,6 +326,12 @@ test("real config requires app-only key and URLs; issuer is exact, not normalize
   expect(() => loadAuthConfig({ ...env, APP_ORIGIN: "http://production.example" })).toThrow();
   expect(() => loadAuthConfig({ ...env, EMUMET_API_URL: "https://user:secret@emumet.example" })).toThrow();
   expect(() => loadAuthConfig({ ...env, SHUTTLEPUB_COOKIE_SECRET_BASE64: "short" })).toThrow();
+  // The public actor host is optional at startup (never derived from EMUMET_API_URL) and must be host[:port].
+  expect(loadAuthConfig(env).emumetPublicHost).toBeUndefined();
+  expect(loadAuthConfig({ ...env, EMUMET_PUBLIC_HOST: "social.example:8443" }).emumetPublicHost).toBe("social.example:8443");
+  for (const bad of ["https://social.example", "social.example/path", "user@social.example"]) {
+    expect(() => loadAuthConfig({ ...env, EMUMET_PUBLIC_HOST: bad })).toThrow();
+  }
 });
 
 test("Kratos bridge uses its CSRF node and forwards only IdP cookies, never credentials or app cookies in responses", async () => {
@@ -388,7 +394,7 @@ test("Kratos errors/malformed flows are sanitized; logout never follows a suppli
 });
 
 describe("authenticated Emumet Profile context", () => {
-  const owned = { id: "owned-account", name: "owner", display_name: "My profile", moderation: null };
+  const owned = { id: "owned-account", name: "owner", display_name: "My profile", moderation: null, profile_id: "owned-profile", profile_username: null };
   async function graphql(app: ReturnType<typeof createApp>, sessionCookie: string, query: string) {
     return app.handleGraphql(req("/graphql", {
       method: "POST", headers: { Origin: origin, Cookie: sessionCookie, "Content-Type": "application/json" },
@@ -458,7 +464,7 @@ describe("authenticated Emumet Profile context", () => {
   test("unavailable/malformed/moderated data and unauthenticated access never fall back to mock", async () => {
     const f = await fixture();
     const session = await f.login();
-    for (const data of [{}, { items: [{ id: "made-up" }] }, { items: [owned, owned] }]) {
+    for (const data of [{}, { items: [{ id: "made-up" }] }, { items: [owned, owned] }, { items: [{ ...owned, profile_id: undefined }] }]) {
       const app = createApp({ mode: "real", apiUrl: "https://backend.example" }, {
         auth: f.config, emumetFetch: (async () => Response.json(data)) as FetchLike,
       });

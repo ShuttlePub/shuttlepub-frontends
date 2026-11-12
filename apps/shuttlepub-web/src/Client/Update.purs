@@ -8,7 +8,10 @@ import App.Api.GraphQL (createPost, fetchApiMode, fetchApiStatus, fetchAvailable
 import App.Dom (focusById, focusFirstIn, logoutAndReload, scrollToTop, setScrollLock)
 import App.Message (Message(..))
 import App.Model (DetailTab(..), Model, RemoteData(..), emptyCompose, fromEither)
+import App.MuteBlock.Types as MuteBlock
+import App.MuteBlock.Update as MuteBlockUpdate
 import App.Post (TimelineTab, timelineTabFromValue)
+import App.Reaction (ReactionMsg(..))
 import App.Route (Route(..), routeCodec)
 import App.View.Auth (authActionId, authActionShown)
 import App.View.Compose (composeTextId, visibilityButtonId)
@@ -41,8 +44,9 @@ mkUpdate nav model = case _ of
       Tuple left leaveEffects = QR.leaveScreen model
       closed = closeOverlays left
       entered = (closed.model { route = route }) `enterRoute` route
+      Tuple muteBlock muteBlockEffects = enterMuteBlock entered.model
     in
-      Tuple entered.model (leaveEffects <> closed.effects <> [ effect scrollToTop ] <> entered.effects <> if scrollLocked model then [ syncScrollLock entered.model ] else [])
+      Tuple muteBlock (leaveEffects <> closed.effects <> [ effect scrollToTop ] <> entered.effects <> muteBlockEffects <> if scrollLocked model then [ syncScrollLock muteBlock ] else [])
   Hydrated now isMobile ->
     let
       base = model
@@ -78,7 +82,7 @@ mkUpdate nav model = case _ of
   ApiStatusLoaded result ->
     noMessages $ model { apiStatus = fromEither result }
   ProfileContextLoaded result ->
-    QR.syncProfile (model { profileContext = fromEither result })
+    profileChanged (model { profileContext = fromEither result })
   AvailableProfilesLoaded result ->
     noMessages $ model { availableProfiles = fromEither result }
 
@@ -153,20 +157,27 @@ mkUpdate nav model = case _ of
     Right context ->
       let
         Tuple closed closeEffects = closeProfileMenu (model { profileContext = Loaded context })
-        Tuple synced syncEffects = QR.syncProfile closed
+        Tuple synced syncEffects = profileChanged closed
       in
         Tuple synced (closeEffects <> syncEffects)
-    -- Session-loss UI and reaction transport both follow the changed Profile context.
+    -- Session-loss UI, reaction transport and the mute/block page all follow the changed Profile context.
     Left error | endsSession error ->
       let
         next = model { profileContext = Failed error, availableProfiles = Failed error, profileMenu = Nothing }
-        Tuple synced reactionEffects = QR.syncProfile next
+        Tuple synced syncEffects = profileChanged next
       in
-        Tuple synced (reactionEffects <> [ syncScrollLock synced, effect (focusById authActionId) ])
+        Tuple synced (syncEffects <> [ syncScrollLock synced, effect (focusById authActionId) ])
     Left error -> case model.profileMenu of
       Just state -> noMessages $ model { profileMenu = Just state { error = Just error } }
       Nothing -> noMessages model
   Logout -> Tuple model [ effect logoutAndReload ]
+  MuteBlockMsg (MuteBlock.Go tab) ->
+    mkUpdate nav model (Navigate (if tab == MuteBlock.AccountsTab then MuteBlockAccounts else MuteBlockDomains))
+  MuteBlockMsg MuteBlock.OpenSettings -> mkUpdate nav model (Navigate Settings)
+  MuteBlockMsg message -> delegate model message
+  -- The reaction toast is inert behind an open mute/block dialog; its actions (which
+  -- may navigate away) are refused here too, so the dialog and its input survive.
+  Reaction message | isJust model.muteBlock.dialog && toastAction message -> noMessages model
   Reaction message ->
     let
       Tuple next effects = QR.update model message
@@ -250,7 +261,7 @@ headerSwitcher model = if model.isMobile then profileButtonMobileId else profile
 -- | The page behind a modal layer does not scroll: the compose form (both widths) and
 -- | the mobile Profile bottom sheet. The desktop Profile dropdown is not modal.
 scrollLocked :: Model -> Boolean
-scrollLocked model = isJust model.compose || (model.isMobile && isJust model.profileMenu) || QR.pickerLocksScroll model
+scrollLocked model = isJust model.compose || (model.isMobile && isJust model.profileMenu) || QR.pickerLocksScroll model || isJust model.muteBlock.dialog
 
 syncScrollLock :: Model -> Aff (Maybe Message)
 syncScrollLock model = effect (setScrollLock (scrollLocked model))
@@ -259,6 +270,7 @@ syncScrollLock model = effect (setScrollLock (scrollLocked model))
 -- | menu closes before the form).
 escape :: Model -> Tuple Model (Array (Aff (Maybe Message)))
 escape model = case model.compose of
+  _ | isJust model.muteBlock.dialog -> delegate model MuteBlock.CloseDialog
   Just state
     | state.visibilityMenuOpen ->
         Tuple (model { compose = Just state { visibilityMenuOpen = false } })
@@ -272,8 +284,61 @@ escape model = case model.compose of
 closeOverlays :: Model -> Step
 closeOverlays model =
   let
-    next = model { compose = Nothing, profileMenu = Nothing }
+    next = model { compose = Nothing, profileMenu = Nothing, muteBlock = model.muteBlock { dialog = Nothing } }
   in
     { model: next
     , effects: if scrollLocked model then [ syncScrollLock next ] else []
     }
+
+-- | The Profile context changed (loaded, switched or lost): quick reaction follows it,
+-- | and the mute/block page reloads for the new Profile (its stale answers are dropped).
+profileChanged :: Model -> Tuple Model (Array (Aff (Maybe Message)))
+profileChanged model =
+  let
+    Tuple synced syncEffects = QR.syncProfile (model { muteBlock = model.muteBlock { profileKnown = false } })
+    Tuple entered enterEffects = enterMuteBlock synced
+  in
+    Tuple entered (syncEffects <> enterEffects)
+
+-- | The mute/block page (D08) loads its lists once it is shown and the selected
+-- | Profile is known; a Profile switch reloads them. A failed Profile context is
+-- | shown as the page's error.
+enterMuteBlock :: Model -> Tuple Model (Array (Aff (Maybe Message)))
+enterMuteBlock model
+  | onMuteBlock model.route && not model.muteBlock.profileKnown = case model.profileContext of
+      Loaded context -> delegate model (MuteBlock.ProfileKnown (Right (map _.id context.activeProfile)))
+      Failed error -> delegate model (MuteBlock.ProfileKnown (Left (failureOf error)))
+      _ -> noMessages model
+  | otherwise = noMessages model
+
+onMuteBlock :: Maybe Route -> Boolean
+onMuteBlock = case _ of
+  Just MuteBlockAccounts -> true
+  Just MuteBlockDomains -> true
+  _ -> false
+
+delegate :: Model -> MuteBlock.Message -> Tuple Model (Array (Aff (Maybe Message)))
+delegate model message =
+  let
+    Tuple sub effects = MuteBlockUpdate.update model.muteBlock message
+    next = model { muteBlock = sub }
+    lock = if scrollLocked next /= scrollLocked model then [ syncScrollLock next ] else []
+  in
+    Tuple next (map (map (map MuteBlockMsg)) effects <> lock)
+
+toastAction :: ReactionMsg -> Boolean
+toastAction = case _ of
+  ToastUndo -> true
+  ToastAction -> true
+  _ -> false
+
+failureOf :: ApiError -> MuteBlock.Failure
+failureOf = MuteBlock.Failure <<< case _ of
+  Unauthenticated _ -> "UNAUTHENTICATED"
+  SessionExpired _ -> "SESSION_EXPIRED"
+  Forbidden _ -> "FORBIDDEN"
+  ProfileUnavailable _ -> "PROFILE_UNAVAILABLE"
+  NotImplemented _ -> "NOT_IMPLEMENTED"
+  Unavailable _ -> "UPSTREAM_UNAVAILABLE"
+  NetworkError _ -> "NETWORK"
+  _ -> "UPSTREAM_ERROR"

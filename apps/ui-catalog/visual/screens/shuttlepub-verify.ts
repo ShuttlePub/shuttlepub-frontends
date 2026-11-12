@@ -845,6 +845,173 @@ async function verifyAmbiguousReactionRestore(page: Page, viewport: Viewport, se
   console.info(`OK saved PUT with failed reply / delayed GET / Esc-before-focus restores picker and focus at ${viewport.name}`);
 }
 
+/**
+ * D08 設定「ミュート・ブロック」(personal-domain-controls-web-ui) inside the shell: reached
+ * from 設定, the mobile "‹ 設定" goes back to it, the unconnected post-side effects are stated,
+ * and a dialog owns the keyboard: the toast's "元に戻す" outside it is unreachable (inert)
+ * while the dialog is open, Tab stays inside, Esc closes it and returns focus.
+ */
+/**
+ * Quick reaction x mute/block in one browser: the "利用できません" toast (P2) outlives the
+ * navigation to the mute/block page. While the add dialog is open that toast is behind
+ * it and inert: Tab never reaches 「入れ替える」, and even a click delivered to it does not
+ * navigate away, so the URL, the typed domain and the focus stay.
+ */
+async function verifyReactionToastUnderMuteBlock(page: Page) {
+  await page.goto("/", { waitUntil: "networkidle" });
+  await expect(page.getByTestId("timeline")).toHaveAttribute("data-state", "loaded");
+  await expect(page.locator("#content article").first().getByTestId("reactions")).toBeVisible();
+  await page.locator("#react-post-mika-picker").click();
+  const picker = page.getByTestId("picker");
+  // aria-disabled: still clickable, it explains why it cannot be picked (P2).
+  await picker.getByTestId("picker-favorites").getByRole("button", { name: ":old_blob:（利用不可）" }).click({ force: true });
+  const toast = page.getByTestId("reaction-toast");
+  await expect(toast).toContainText("利用できません");
+  await page.keyboard.press("Escape");
+  await expect(picker).toHaveCount(0);
+  // In-app navigation keeps the toast (Client.Reaction.leaveScreen).
+  await page.getByRole("link", { name: "設定" }).filter({ visible: true }).first().click();
+  await page.locator("#content").getByTestId("settings-mute-block").click();
+  await expect(page).toHaveURL(/\/settings\/mute-block\/domains$/);
+  await expect(page.getByTestId("domain-panel").locator("section")).toHaveAttribute("data-state", "loaded");
+  await expect(toast).toBeVisible();
+  await page.locator("#mb-add-button").click();
+  const input = page.locator("#mb-add-input");
+  await expect(input).toBeFocused();
+  await page.keyboard.type("keep-me.example");
+  await expect(toast).toHaveAttribute("inert", "");
+  await expect(toast).toHaveAttribute("aria-hidden", "true");
+  await expect(page.getByRole("button", { name: "入れ替える" })).toHaveCount(0);
+  // A click that still reaches the button (dispatched directly, bypassing inert) is refused.
+  await toast.locator("button").dispatchEvent("click");
+  await expect(page).toHaveURL(/\/settings\/mute-block\/domains$/);
+  await expect(page.getByTestId("add-dialog")).toBeVisible();
+  await expect(input).toHaveValue("keep-me.example");
+  await expect(input).toBeFocused();
+  await expectTabStaysInside(page, page.getByTestId("add-dialog"));
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("add-dialog")).toHaveCount(0);
+}
+
+async function verifyMuteBlock(page: Page, viewport: Viewport) {
+  const content = page.locator("#content");
+  await page.goto("/settings", { waitUntil: "networkidle" });
+  await content.getByTestId("settings-mute-block").click();
+  await expect(page).toHaveURL(/\/settings\/mute-block\/domains$/);
+  const list = page.getByTestId("domain-panel").locator("section");
+  await expect(list).toHaveAttribute("data-state", "loaded");
+  await expect(page.getByTestId("mute-block-scope")).toContainText("投稿の非表示とリアクションの拒否はまだ反映されません");
+  const back = page.getByTestId("mute-block-back");
+  if (viewport.name === "mobile") {
+    await back.click();
+    await expect(page).toHaveURL(/\/settings$/);
+    await expect(content.getByTestId("settings-mute-block")).toBeVisible();
+    await content.getByTestId("settings-mute-block").click();
+    await expect(list).toHaveAttribute("data-state", "loaded");
+  } else {
+    await expect(back).toBeHidden();
+  }
+
+  // Keyboard: immediate unmute with an undo toast.
+  await page.getByRole("button", { name: "ミュート解除（noisy.social）" }).focus();
+  await page.keyboard.press("Enter");
+  const toast = page.getByTestId("toast");
+  await expect(toast).toContainText("noisy.social のミュートを解除しました");
+  await expect(page.getByRole("button", { name: "元に戻す" })).toHaveCount(1);
+
+  // A dialog opened meanwhile owns the keyboard; the toast is outside it and inert.
+  const opener = page.locator("#mb-add-button");
+  await opener.focus();
+  await page.keyboard.press("Enter");
+  const dialog = page.getByTestId("add-dialog");
+  await expect(dialog).toHaveAttribute("aria-modal", "true");
+  await expect(page.locator("#mb-add-input")).toBeFocused();
+  await page.keyboard.type("half-typed.exa");
+  await expect(page.getByTestId("toast-region")).toHaveAttribute("inert", "");
+  await expect(page.getByRole("button", { name: "元に戻す" })).toHaveCount(0);
+  await expectTabStaysInside(page, dialog);
+  await expectScrollLocked(page, true);
+  await expect(page.locator("#mb-add-input")).toHaveValue("half-typed.exa");
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await expect(opener).toBeFocused();
+  await expectScrollLocked(page, false);
+
+  // Put the shared stateful mock back (undo if the toast is still there).
+  const undo = page.getByRole("button", { name: "元に戻す" });
+  if (await undo.count()) {
+    await undo.click();
+  } else {
+    await opener.click();
+    await page.locator("#mb-add-input").fill("noisy.social");
+    await dialog.getByRole("button", { name: "ミュート", exact: true }).click();
+    await page.getByTestId("mute-dialog").getByRole("button", { name: "ミュート", exact: true }).click();
+  }
+  await expect(page.locator('li[data-domain="noisy.social"]')).toBeVisible();
+
+  // Our own server is refused; a block that detaches follows needs the acknowledgement.
+  await opener.click();
+  await page.locator("#mb-add-input").fill("https://shuttle.example/@me");
+  await dialog.getByRole("button", { name: "ブロック", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("自分のサーバーは指定できません");
+  await page.locator("#mb-add-input").fill("example.social");
+  await dialog.getByRole("button", { name: "ブロック", exact: true }).click();
+  const block = page.getByTestId("block-dialog");
+  await expect(block.getByTestId("block-impact")).toContainText("フォロー中 3 人・フォロワー 5 人");
+  await expect(block.getByRole("button", { name: "ブロック", exact: true })).toBeDisabled();
+  await expectTabStaysInside(page, block);
+  // The accounts a block detaches open from the keyboard: Tab reaches the disclosure,
+  // Enter / Space toggle it.
+  const disclosure = block.locator("summary");
+  const details = block.locator("details");
+  let reached = false;
+  for (let i = 0; i < 8 && !reached; i++) {
+    await page.keyboard.press("Tab");
+    reached = await disclosure.evaluate((element) => element === document.activeElement);
+  }
+  expect(reached, "Tab reaches 対象を表示 inside the block dialog").toBe(true);
+  await expect(details).not.toHaveAttribute("open");
+  await page.keyboard.press("Enter");
+  await expect(details).toHaveAttribute("open", "");
+  await expect(block.getByText("example.social/users/alice")).toBeVisible();
+  await page.keyboard.press("Space");
+  await expect(details).not.toHaveAttribute("open");
+  await page.keyboard.press("Space");
+  await expect(details).toHaveAttribute("open", "");
+  await page.keyboard.press("Escape");
+  await expect(block).toHaveCount(0);
+  await expect(opener).toBeFocused();
+
+  // Switching the Profile in the shell reloads the page for that Profile (the mock acts
+  // as the Profile the page shows); its settings stay separate from the first Profile.
+  await switchProfile(page, "Fixture Dev");
+  await expect(list).toHaveAttribute("data-state", "loaded");
+  await expect(page.locator('li[data-domain="noisy.social"]')).toHaveCount(0);
+  await opener.click();
+  await page.locator("#mb-add-input").fill("only-dev.example");
+  await dialog.getByRole("button", { name: "ミュート", exact: true }).click();
+  await page.getByTestId("mute-dialog").getByRole("button", { name: "ミュート", exact: true }).click();
+  await expect(toast).toContainText("only-dev.example をミュートしました");
+  await expect(page.locator('li[data-domain="only-dev.example"]')).toBeVisible();
+  await switchProfile(page, "Fixture Profile");
+  await expect(page.locator('li[data-domain="noisy.social"]')).toBeVisible();
+  await expect(page.locator('li[data-domain="only-dev.example"]')).toHaveCount(0);
+  await switchProfile(page, "Fixture Dev");
+  const devRow = page.locator('li[data-domain="only-dev.example"]');
+  await expect(devRow).toBeVisible();
+  await devRow.getByRole("button", { name: "ミュート解除（only-dev.example）" }).click();
+  await expect(devRow).toHaveCount(0);
+  await switchProfile(page, "Fixture Profile");
+  await expect(page.locator('li[data-domain="noisy.social"]')).toBeVisible();
+}
+
+async function switchProfile(page: Page, name: string) {
+  await visible(page, /投稿用 Profile を切り替え/).click();
+  await page.getByTestId("profile-menu").getByRole("menuitemradio", { name: new RegExp(name) }).click();
+  await expect(visible(page, new RegExp(`投稿用 Profile を切り替え（現在: ${name}）`))).toHaveCount(1);
+  await expect(page.getByTestId("domain-panel").locator("section")).toHaveAttribute("data-state", "loaded");
+}
+
 async function verifyMock(browser: Browser, frontendRoot: string, coreURL: string) {
   const server = await startApp(frontendRoot, "ShuttlePub", coreURL);
   try {
@@ -875,6 +1042,17 @@ async function verifyMock(browser: Browser, frontendRoot: string, coreURL: strin
         console.info(`OK mock mode hydrates and keeps the shell's keyboard/focus rules at ${viewport.name} (${viewport.width}x${viewport.height})`);
       } finally {
         await context.close();
+      }
+      // A fresh browser for the mute/block settings (D08), with the quick reaction mock at its fixtures.
+      await resetMock(server);
+      const muteBlock = await openPage(browser, server, viewport);
+      try {
+        await verifyReactionToastUnderMuteBlock(muteBlock.page);
+        await verifyMuteBlock(muteBlock.page, viewport);
+        expect(muteBlock.errors, `mute/block ${viewport.name}: browser errors`).toEqual([]);
+        console.info(`OK mute/block settings: keyboard, modal, reaction toast behind it, own server, Profile switch at ${viewport.name}`);
+      } finally {
+        await muteBlock.context.close();
       }
     }
     await resetMock(server);

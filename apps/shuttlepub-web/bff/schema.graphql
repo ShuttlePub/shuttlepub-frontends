@@ -156,6 +156,63 @@ type PostReactions {
   others: [ReactionGroup!]!
 }
 
+"""
+Mute or block (personal-domain-controls). Settings belong to one Profile and never apply to
+other Profiles or Accounts. A block also detaches existing follows in both directions in
+Emumet; removing it restores nothing.
+"""
+enum PolicyMode {
+  MUTE
+  BLOCK
+}
+
+"""
+Exact-match domain control of the selected Profile (Emumet domain-controls). domain is
+Emumet's normalized form; example.com does not cover sub.example.com.
+"""
+type DomainControl {
+  domain: String!
+  mode: PolicyMode!
+  """Send back as expectedRevision to replace or remove exactly this state."""
+  revision: Int!
+  createdAt: String!
+}
+
+"""Individual mute/block of the selected Profile. Emumet exposes only the target's canonical actor URL."""
+type ActorPolicy {
+  id: ID!
+  mode: PolicyMode!
+  actorUrl: String!
+  createdAt: String!
+}
+
+"""Existing follows of the selected Profile with actors on exactly this domain (canonical actor URLs)."""
+type DomainBlockImpact {
+  domain: String!
+  following: [String!]!
+  followers: [String!]!
+}
+
+"""Why a typed domain was refused before anything was sent to Emumet."""
+enum DomainInputError {
+  EMPTY
+  WILDCARD
+  INVALID
+  IP_ADDRESS
+  OWN_SERVER
+}
+
+"""Result of normalizing what the viewer typed: exactly one of domain / error is set."""
+type DomainInputCheck {
+  domain: String
+  error: DomainInputError
+}
+
+"""A removed setting: the domain or the actor policy id."""
+type PolicyRemoval {
+  key: String!
+}
+
 type Mutation {
   """Select an identity from the current viewer's owned Emumet accounts (integrated Profile API)."""
   selectProfile(id: ID!): ProfileContext!
@@ -167,6 +224,15 @@ type Mutation {
   setNoteReaction(profileId: ID!, noteId: ID!, emoji: EmojiInput!): NoteReaction!
   """DELETE .../notes/{noteId}/reaction (succeeds also for an unavailable emoji)."""
   removeNoteReaction(profileId: ID!, noteId: ID!): NoteReaction!
+  """
+  Create (expectedRevision omitted) or replace (expectedRevision = current revision) a domain
+  control of the selected Profile. profile is the Profile context id the client is showing;
+  a different selection fails with PROFILE_CHANGED. Conflicts fail with REVISION_CONFLICT.
+  """
+  setDomainControl(profile: ID!, domain: String!, mode: PolicyMode!, expectedRevision: Int): DomainControl!
+  removeDomainControl(profile: ID!, domain: String!, expectedRevision: Int!): PolicyRemoval!
+  addActorPolicy(profile: ID!, actorUrl: String!, mode: PolicyMode!): ActorPolicy!
+  removeActorPolicy(profile: ID!, id: ID!, mode: PolicyMode!): PolicyRemoval!
 }
 
 type Query {
@@ -186,4 +252,12 @@ type Query {
   postReactions(profileId: ID!, noteIds: [ID!]!): [PostReactions!]!
   """PROVISIONAL. The server's custom emoji (available or not)."""
   customEmojis: [Emoji!]!
+  """Domain controls of the selected Profile, newest first. profile: see setDomainControl."""
+  domainControls(profile: ID!): [DomainControl!]!
+  """Individual mutes/blocks of the selected Profile, newest first."""
+  actorPolicies(profile: ID!): [ActorPolicy!]!
+  """Follows that a block of this exact domain would detach (pending and accepted)."""
+  domainBlockImpact(profile: ID!, domain: String!): DomainBlockImpact!
+  """Normalizes a typed domain (URL, @user@host, path, port, case, trailing dot, IDN)."""
+  checkDomainInput(input: String!): DomainInputCheck!
 }
