@@ -23,6 +23,8 @@ data Route
   | Bookmarks
   | Settings
   | PostDetail String
+  -- | A person's page (D08 ui-spec 3-6), by handle (user@host).
+  | UserProfile String
   -- | Settings page "ミュート・ブロック" and its two sub-pages (D08 UI mock v5, ui-spec 1-2).
   | MuteBlockAccounts
   | MuteBlockDomains
@@ -51,6 +53,7 @@ routeCodec = root $ sum
   , "Bookmarks": "bookmarks" / noArgs
   , "Settings": "settings" / noArgs
   , "PostDetail": "posts" / segment
+  , "UserProfile": "users" / segment
   , "MuteBlockAccounts": "settings" / "mute-block" / "accounts" / noArgs
   , "MuteBlockDomains": "settings" / "mute-block" / "domains" / noArgs
   , "Login": "login" ? { error: optional <<< string }

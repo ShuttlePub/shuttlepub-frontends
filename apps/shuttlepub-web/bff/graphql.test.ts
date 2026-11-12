@@ -3,7 +3,6 @@ import { createApp, type App } from "./app.ts";
 import { loadConfig } from "./config.ts";
 import { profileContextFixture, availableProfilesFixture } from "./profile.ts";
 import { apiStatusFixture, notImplementedFixture } from "./rest/fixtures.ts";
-import { timelinePostFixtures, replyPostFixtures } from "./rest/post-fixtures.ts";
 
 type GraphQLResponse = {
   data: Record<string, unknown> | null;
@@ -45,17 +44,18 @@ describe("mock mode", () => {
     });
   });
 
-  const POST_FIELDS = "id noteId text createdAt replyCount repostCount inReplyToId author { id handle displayName } repostedBy { id handle displayName }";
+  const PROFILE = profileContextFixture.activeProfile!.id;
 
-  test("serves the provisional timeline fixtures per tab", async () => {
-    const home = await run(app, `{ timeline(kind: HOME) { ${POST_FIELDS} } }`);
+  test("serves the provisional timeline fixtures per tab (the mock Profile's controls applied, see content.test.ts)", async () => {
+    const home = await run(app, `{ timeline(profile: "${PROFILE}", kind: HOME) { id author { handle } repostedBy { displayName } } }`);
     expect(home.errors).toBeUndefined();
-    expect(home.data!.timeline).toEqual(timelinePostFixtures);
+    expect((home.data!.timeline as { id: string }[]).map((post) => post.id))
+      .toEqual(["post-mika-picker", "post-sora-zine", "post-nekota-coffee", "post-aoi-profiles", "post-kei-release"]);
 
-    const local = await run(app, "{ timeline(kind: LOCAL) { id author { handle } repostedBy { id } } }");
+    const local = await run(app, `{ timeline(profile: "${PROFILE}", kind: LOCAL) { id author { handle } repostedBy { id } } }`);
     const localPosts = local.data!.timeline as { author: { handle: string }; repostedBy: unknown }[];
     expect(localPosts.length).toBeGreaterThan(0);
-    expect(localPosts.length).toBeLessThan(timelinePostFixtures.length);
+    expect(localPosts.length).toBeLessThan((home.data!.timeline as unknown[]).length);
     for (const entry of localPosts) {
       expect(entry.author.handle.endsWith("@shuttlepub.example")).toBe(true);
       expect(entry.repostedBy).toBeNull();
@@ -63,13 +63,14 @@ describe("mock mode", () => {
   });
 
   test("post detail returns the post and its replies, and null for an unknown id", async () => {
-    const detail = await run(app, `{ post(id: "post-sora-zine") { ${POST_FIELDS} } replies(postId: "post-sora-zine") { id inReplyToId } }`);
+    const detail = await run(app, `{ postView(profile: "${PROFILE}", id: "post-sora-zine") { id post { id text } } replies(profile: "${PROFILE}", postId: "post-sora-zine") { id post { inReplyToId } hidden { domain } } }`);
     expect(detail.errors).toBeUndefined();
-    expect((detail.data!.post as { id: string }).id).toBe("post-sora-zine");
-    expect(detail.data!.replies).toEqual(replyPostFixtures.map((reply) => ({ id: reply.id, inReplyToId: "post-sora-zine" })));
+    expect((detail.data!.postView as { post: { id: string } }).post.id).toBe("post-sora-zine");
+    expect((detail.data!.replies as { id: string }[]).map((reply) => reply.id))
+      .toEqual(["post-taro-reply", "post-nana-reply", "post-deals-reply", "post-hina-reply"]);
 
-    const missing = await run(app, '{ post(id: "no-such-post") { id } replies(postId: "no-such-post") { id } }');
-    expect(missing).toEqual({ data: { post: null, replies: [] } });
+    const missing = await run(app, `{ postView(profile: "${PROFILE}", id: "no-such-post") { id } replies(profile: "${PROFILE}", postId: "no-such-post") { id } }`);
+    expect(missing).toEqual({ data: { postView: null, replies: [] } });
   });
 
   test("posting is not simulated: createPost is NOT_IMPLEMENTED even in mock mode", async () => {
@@ -153,12 +154,15 @@ describe("real mode", () => {
     const app = createApp(loadConfig({ SHUTTLEPUB_API_MODE: "real", SHUTTLEPUB_API_URL: url }));
     for (const query of [
       "{ timeline(kind: HOME) { id } }",
-      '{ post(id: "post-sora-zine") { id } }',
+      '{ postView(id: "post-sora-zine") { id } }',
       '{ replies(postId: "post-sora-zine") { id } }',
+      '{ userPage(handle: "nana@noisy.social") { bio } }',
+      'mutation { revealPost(id: "post-nana-playlist") { id } }',
+      'mutation { revealUserPage(handle: "nana@noisy.social") { bio } }',
       'mutation { createPost(input: { text: "hi", visibility: PUBLIC }) { id } }',
     ]) {
       const result = await run(app, query);
-      // A nullable field (post) is null alongside the error; nothing carries data.
+      // A nullable field (postView) is null alongside the error; nothing carries data.
       expect(Object.values(result.data ?? {}).every((value) => value === null)).toBe(true);
       expect(result.errors![0]!.extensions).toMatchObject({ code: "NOT_IMPLEMENTED" });
     }

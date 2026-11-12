@@ -702,13 +702,14 @@ testFetchedReactionRestoresUi = do
               ( \post ->
                   { id: post.postId
                   , noteId: post.noteId
-                  , author: me
+                  , author: { id: me.id, handle: me.handle, displayName: me.displayName, actorUrl: "https://shuttlepub.example/users/fixture", domain: "shuttlepub.example", local: true }
                   , text: "fixture"
                   , createdAt: "2026-11-11T00:00:00Z"
                   , replyCount: 0
                   , repostCount: 0
                   , repostedBy: Nothing
                   , inReplyToId: Nothing
+                  , quoted: Nothing
                   }
               )
               [ sora, mika ]

@@ -12,6 +12,7 @@ import Prelude
 import App.MuteBlock.Api as Api
 import App.MuteBlock.Dom (focusLater, reloadPage)
 import App.MuteBlock.Types (ActorPolicy, Change(..), Dialog(..), DomainControl, Failure(..), Filter(..), InputProblem(..), Load(..), Message(..), Model, Origin, Scope, Undo(..), Write(..), actorLabel, blockReady, fromResult)
+import Data.Maybe (isJust)
 import Data.Array (filter, find, snoc)
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..), fromMaybe)
@@ -41,6 +42,11 @@ dialogFirstId = "mb-dialog-first"
 
 headingId :: String
 headingId = "mb-heading"
+
+-- | The heading of the content pages (Home / post / person), where focus goes when
+-- | a menu's opener disappeared (e.g. its post was muted away).
+contentHeadingId :: String
+contentHeadingId = "sp-content-heading"
 
 toastSeconds :: Number
 toastSeconds = 6000.0
@@ -179,6 +185,78 @@ update model = case _ of
         [ effect (actorToMute profile state.policy) (Written (fromDialog profile) ActorToMute (actorLabel state.policy.actorUrl)) ]
     _ -> noEffects model
 
+  -- Post / profile menu (ui-spec 1-1 主導線). Mute is immediate with "元に戻す";
+  -- block asks first (2-1 … 2-3); an existing setting is undone the settings-page way.
+  MenuMuteDomain domain
+    | model.writing -> noEffects model
+    | Just profile <- model.profile ->
+        Tuple model { writing = true }
+          [ effect (Api.setDomainControl profile domain MUTE (map _.revision (findDomain domain)))
+              (Written (fromRow profile) QuickMuteDomain domain <<< map DomainUpserted)
+          ]
+    | otherwise -> noEffects model
+  MenuBlockDomain opener domain -> case openBlock domain (findDomain domain) false of
+    Tuple next effects -> Tuple next { opener = Just opener } effects
+  MenuUnmuteDomain domain -> case findDomain domain of
+    Just control | control.mode == MUTE -> update model (UnmuteDomain control)
+    _ -> noEffects model
+  MenuUnblockDomain opener domain -> case findDomain domain of
+    Just control | control.mode == BLOCK -> update model (OpenDomainUnblock opener control)
+    _ -> noEffects model
+  MenuMuteActor actorUrl label
+    | model.writing -> noEffects model
+    | Just profile <- model.profile ->
+        Tuple model { writing = true }
+          [ effect (Api.addActorPolicy profile actorUrl MUTE) (Written (fromRow profile) (QuickMuteActor actorUrl) label <<< map ActorAdded) ]
+    | otherwise -> noEffects model
+  MenuBlockActor opener actorUrl label -> case model.profile of
+    Just profile ->
+      Tuple
+        model
+          { dialog = Just (ConfirmActorBlock { actorUrl, label, impact: Loading, acknowledged: false, pending: false, failure: Nothing })
+          , opener = Just opener
+          }
+        [ effect (Api.fetchActorImpact profile actorUrl) (ActorImpactLoaded (scopeOf model profile) actorUrl), focus [ dialogFirstId ] ]
+    Nothing -> noEffects model
+  MenuUnmuteActor actorUrl -> case findActor MUTE actorUrl of
+    Just policy -> update model (UnmuteActor policy)
+    Nothing -> noEffects model
+  MenuUnblockActor opener actorUrl -> case findActor BLOCK actorUrl of
+    Just policy -> update model (OpenActorUnblock opener policy)
+    Nothing -> noEffects model
+  ActorImpactLoaded scope actorUrl result -> case model.dialog of
+    Just (ConfirmActorBlock state) | current scope && state.actorUrl == actorUrl ->
+      noEffects model { dialog = Just (ConfirmActorBlock state { impact = fromResult result }) }
+    _ -> noEffects model
+  RetryActorImpact -> case model.dialog, model.profile of
+    Just (ConfirmActorBlock state), Just profile | not state.pending ->
+      Tuple model { dialog = Just (ConfirmActorBlock state { impact = Loading, acknowledged = false }) }
+        [ effect (Api.fetchActorImpact profile state.actorUrl) (ActorImpactLoaded (scopeOf model profile) state.actorUrl) ]
+    _, _ -> noEffects model
+  ConfirmActorBlockNow -> case model.dialog of
+    Just (ConfirmActorBlock state) | not state.pending, not model.writing, blockReady state, Just profile <- model.profile ->
+      Tuple model { dialog = Just (ConfirmActorBlock state { pending = true, failure = Nothing }), writing = true }
+        [ effect (Api.addActorPolicy profile state.actorUrl BLOCK) (Written (fromDialog profile) BlockActor state.label <<< map ActorAdded) ]
+    _ -> noEffects model
+  ActorMuteInstead -> case model.dialog of
+    Just (ConfirmActorBlock state) | not state.pending, not model.writing, Just profile <- model.profile ->
+      Tuple model { dialog = Just (ConfirmActorBlock state { pending = true, failure = Nothing }), writing = true }
+        [ effect (Api.addActorPolicy profile state.actorUrl MUTE) (Written (fromDialog profile) MuteActorInstead state.label <<< map ActorAdded) ]
+    _ -> noEffects model
+  -- ui-spec 4-1 / 4-2: the locked operation's sheet, and from it the same unblock
+  -- dialog as the settings page (2-5, with [ミュートに変更]).
+  OpenBlockedSheet opener action domain revision ->
+    Tuple model { dialog = Just (BlockedSheet { action, domain, revision }), opener = Just opener } [ focus [ dialogFirstId ] ]
+  SheetUnblock -> case model.dialog of
+    Just (BlockedSheet sheet) ->
+      let
+        control = case findDomain sheet.domain of
+          Just known | known.mode == BLOCK -> known
+          _ -> { domain: sheet.domain, mode: BLOCK, revision: sheet.revision, createdAt: "" }
+      in
+        Tuple model { dialog = Just (ConfirmDomainUnblock { control, pending: false, failure: Nothing }) } [ focus [ dialogFirstId ] ]
+    _ -> noEffects model
+
   -- A completion from an earlier Profile selection changes nothing here (its
   -- Profile was written; this page now shows another one).
   Written origin _ _ _ | not (current { profile: origin.profile, epoch: origin.epoch }) -> noEffects model
@@ -212,6 +290,16 @@ update model = case _ of
       RestoreActorMute actorUrl ->
         Tuple model { writing = true, toast = Nothing }
           [ effect (Api.addActorPolicy owner.profile actorUrl MUTE) (Written (fromRow owner.profile) UndoWrite (actorLabel actorUrl) <<< map ActorAdded) ]
+      RemoveDomainMute domain -> case findDomain domain of
+        Just control | control.mode == MUTE ->
+          Tuple model { writing = true, toast = Nothing }
+            [ effect (Api.removeDomainControl owner.profile domain control.revision) (Written (fromRow owner.profile) UndoWrite domain <<< map DomainRemoved) ]
+        _ -> noEffects model { toast = Nothing }
+      RemoveActorMute actorUrl -> case findActor MUTE actorUrl of
+        Just policy ->
+          Tuple model { writing = true, toast = Nothing }
+            [ effect (Api.removeActorPolicy owner.profile policy.id MUTE) (Written (fromRow owner.profile) UndoWrite (actorLabel actorUrl) <<< map ActorRemoved) ]
+        Nothing -> noEffects model { toast = Nothing }
     _ -> noEffects model
   ToastHold held -> case model.toast of
     Just toast ->
@@ -236,6 +324,11 @@ update model = case _ of
   findDomain :: String -> Maybe DomainControl
   findDomain domain = case model.domains of
     Ready list -> find (\control -> control.domain == domain) list
+    _ -> Nothing
+
+  findActor :: PolicyMode -> String -> Maybe ActorPolicy
+  findActor mode actorUrl = case model.actors of
+    Ready list -> find (\policy -> policy.actorUrl == actorUrl && policy.mode == mode) list
     _ -> Nothing
 
   refuse state problem =
@@ -287,6 +380,8 @@ dialogPending model = case model.dialog of
   Just (ConfirmBlock state) -> state.pending
   Just (ConfirmDomainUnblock state) -> state.pending
   Just (ConfirmActorUnblock state) -> state.pending
+  Just (ConfirmActorBlock state) -> state.pending
+  Just (BlockedSheet _) -> false
   Nothing -> false
 
 withFailure :: Failure -> Dialog -> Dialog
@@ -296,11 +391,13 @@ withFailure failure = case _ of
   ConfirmBlock state -> ConfirmBlock state { pending = false, failure = Just failure }
   ConfirmDomainUnblock state -> ConfirmDomainUnblock state { pending = false, failure = Just failure }
   ConfirmActorUnblock state -> ConfirmActorUnblock state { pending = false, failure = Just failure }
+  ConfirmActorBlock state -> ConfirmActorBlock state { pending = false, failure = Just failure }
+  BlockedSheet state -> BlockedSheet state
 
 openerIds :: Model -> Array String
 openerIds model = case model.opener of
-  Just opener -> [ opener, headingId ]
-  Nothing -> [ headingId ]
+  Just opener -> [ opener, headingId, contentHeadingId ]
+  Nothing -> [ headingId, contentHeadingId ]
 
 applyChange :: Change -> Model -> Model
 applyChange change model = case change of
@@ -332,6 +429,10 @@ notice write subject = case write of
   UnmuteActorRow actorUrl -> Just { subject, rest: " のミュートを解除しました", undo: Just (RestoreActorMute actorUrl), failure: Nothing }
   UnblockActor -> plain " のブロックを解除しました"
   ActorToMute -> plain " をミュートに変更しました"
+  QuickMuteDomain -> Just { subject, rest: " をミュートしました", undo: Just (RemoveDomainMute subject), failure: Nothing }
+  QuickMuteActor actorUrl -> Just { subject, rest: " をミュートしました", undo: Just (RemoveActorMute actorUrl), failure: Nothing }
+  BlockActor -> plain " をブロックしました"
+  MuteActorInstead -> plain " をミュートしました"
   UndoWrite -> Nothing
   where
   plain rest = Just { subject, rest, undo: Nothing, failure: Nothing }

@@ -6,7 +6,7 @@
 -- | Deliberately absent (ui-spec "引き算"): explanations of mute vs. block, of
 -- | what a block does or keeps, banners and the target Profile (1-3: the
 -- | navigation's Profile switcher decides it).
-module App.MuteBlock.View (view, tabPath) where
+module App.MuteBlock.View (view, overlay, tabPath) where
 
 import Prelude
 
@@ -54,7 +54,15 @@ view tab model =
             , scopeNote
             ]
         ]
-    , dialogLayer model
+    ]
+
+-- | The dialogs and the toast of the mute/block settings, shown by the app shell on
+-- | every screen: the settings page and the post / profile menus share them (ui-spec
+-- | 4-2: the same unblock dialog everywhere).
+overlay :: Model -> Html Message
+overlay model =
+  HE.div_
+    [ dialogLayer model
     -- While a dialog is open the toast (and its "元に戻す") is outside the modal:
     -- inert, so neither the pointer nor the keyboard reaches it.
     , HE.div
@@ -367,7 +375,7 @@ dialogView busy = case _ of
     in
       dialogBox "block-dialog"
         [ dialogHead [ mono state.domain, HE.text " をブロックしますか？" ] state.fromInput Nothing
-        , dialogBody (impactView state.impact state.acknowledged state.pending <> failureLine state.failure)
+        , dialogBody (impactView RetryImpact state.impact state.acknowledged state.pending <> failureLine state.failure)
         , dialogFoot
             ( [ firstButton "muted" state.pending CloseDialog "キャンセル" ]
                 <> (if fromMute then [] else [ footButton "" (state.pending || busy) MuteInstead "代わりにミュート" ])
@@ -403,12 +411,33 @@ dialogView busy = case _ of
             , footButton "primary" (state.pending || busy) ConfirmActorUnblockNow "ブロック解除"
             ]
         ]
+  -- Blocking one person from the post / profile menu: like the domain block (2-1 … 2-3).
+  ConfirmActorBlock state ->
+    dialogBox "block-dialog"
+      [ dialogHead [ mono state.label, HE.text " をブロックしますか？" ] false Nothing
+      , dialogBody (impactView RetryActorImpact state.impact state.acknowledged state.pending <> failureLine state.failure)
+      , dialogFoot
+          [ firstButton "muted" state.pending CloseDialog "キャンセル"
+          , footButton "" (state.pending || busy) ActorMuteInstead "代わりにミュート"
+          , footButton "danger" (state.pending || busy || not (blockReady state)) ConfirmActorBlockNow "ブロック"
+          ]
+      ]
+  -- ui-spec 4-1: one line and two buttons. No explanation, nothing about other Profiles (4-5).
+  BlockedSheet sheet ->
+    dialogBox "blocked-sheet"
+      [ dialogHead [ HE.text (sheet.action <> "できません") ] false Nothing
+      , dialogBody [ HE.p [ HA.class' "m-0" ] [ mono sheet.domain, HE.text " をブロック中です。" ] ]
+      , dialogFoot
+          [ firstButton "muted" false CloseDialog "閉じる"
+          , footButton "" busy SheetUnblock "ブロックを解除…"
+          ]
+      ]
 
 -- | ui-spec 2-1 / 2-2: the number of follows a block detaches, the accounts
 -- | behind a disclosure, and the "does not come back" acknowledgement only when
 -- | something is detached. Nothing at all when nothing is.
-impactView :: Load Impact -> Boolean -> Boolean -> Array (Html Message)
-impactView load acknowledged pending = case load of
+impactView :: Message -> Load Impact -> Boolean -> Boolean -> Array (Html Message)
+impactView retry load acknowledged pending = case load of
   Ready impact
     | null impact.following && null impact.followers -> []
     | otherwise ->
@@ -443,7 +472,7 @@ impactView load acknowledged pending = case load of
   Failed failure ->
     [ HE.div [ HA.class' "flex flex-wrap items-center gap-2 text-xs", HA.createAttribute "role" "alert", HA.createAttribute "data-error" (code failure), HA.createAttribute "data-testid" "block-impact-error" ]
         [ HE.span [ HA.class' "text-error" ] [ HE.text "解除される関係を確認できませんでした" ]
-        , HE.button [ HA.type' "button", HA.disabled pending, HA.class' (button "text"), HA.onClick RetryImpact ] [ HE.text "再取得" ]
+        , HE.button [ HA.type' "button", HA.disabled pending, HA.class' (button "text"), HA.onClick retry ] [ HE.text "再取得" ]
         ]
     ]
   _ -> [ HE.div [ HA.class' ("text-xs " <> T.textMuted), HA.createAttribute "role" "status", HA.createAttribute "data-testid" "block-impact-loading" ] [ HE.text "解除される関係を確認しています…" ] ]

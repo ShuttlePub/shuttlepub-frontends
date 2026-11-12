@@ -155,13 +155,14 @@ async function verifyTimelineTabs(page: Page) {
 
 async function verifyPostDetail(page: Page) {
   // L4: the time link leads to the detail.
-  await page.locator("#content article").nth(1).getByRole("link").click();
+  await page.locator("#content article").nth(1).locator(".sp-post-time").click();
   await expect(page).toHaveURL(/\/posts\/post-sora-zine$/);
   await expect(page.getByTestId("post-detail")).toHaveAttribute("data-state", "loaded");
   const replies = page.getByRole("tab", { name: /返信/ });
   const reactions = page.getByRole("tab", { name: /リアクション/ });
   await expect(replies).toHaveAttribute("aria-selected", "true");
-  await expect(replies).toContainText("2");
+  // Two visible replies and two of controlled domains (folded, D08 3-5).
+  await expect(replies).toContainText("4");
   await replies.focus();
   await page.keyboard.press("ArrowRight");
   await expect(reactions).toHaveAttribute("aria-selected", "true");
@@ -438,7 +439,7 @@ async function verifyQuickReaction(page: Page, viewport: Viewport) {
   // Remove again and leave the screen: navigation confirms the removal at once.
   await expect(page.locator("#react-mine-post-mika-picker")).not.toHaveAttribute("aria-busy", "true");
   await page.locator("#react-mine-post-mika-picker").click();
-  await page.locator("#content article").nth(1).getByRole("link").first().click();
+  await page.locator("#content article").nth(1).locator(".sp-post-time").click();
   await expect(page).toHaveURL(/\/posts\/post-sora-zine$/);
   await expect.poll(() => sent.filter((name) => name === "RemoveNoteReaction").length).toBe(2);
   await expect(page.getByTestId("reaction-toast")).toHaveCount(0);
@@ -951,7 +952,7 @@ async function verifyMuteBlock(page: Page, viewport: Viewport) {
 
   // Our own server is refused; a block that detaches follows needs the acknowledgement.
   await opener.click();
-  await page.locator("#mb-add-input").fill("https://shuttle.example/@me");
+  await page.locator("#mb-add-input").fill("https://shuttlepub.example/@me");
   await dialog.getByRole("button", { name: "ブロック", exact: true }).click();
   await expect(dialog.getByRole("alert")).toContainText("自分のサーバーは指定できません");
   await page.locator("#mb-add-input").fill("example.social");
@@ -1005,6 +1006,377 @@ async function verifyMuteBlock(page: Page, viewport: Viewport) {
   await expect(page.locator('li[data-domain="noisy.social"]')).toBeVisible();
 }
 
+/**
+ * D08 second stage (host personal-domain-controls-ui ui-spec v5 1-1 主導線, 3-x, 4-1, 5-1;
+ * S8 contract in the mock): the post menu by keyboard, immediate mute with 元に戻す, the
+ * block confirmation over an inert shell, hidden / revealed direct views (reveal is
+ * page-local and never carried to another Profile or a reload), locked operations and
+ * the 4-1 sheet with the settings' unblock dialog, folded replies and a person's page.
+ * The shared policy mock is put back as it was (noisy.social muted, bot-farm.example blocked).
+ */
+async function verifyDomainContent(page: Page, viewport: Viewport) {
+  const content = page.locator("#content");
+  await page.goto("/", { waitUntil: "networkidle" });
+  await expect(page.getByTestId("timeline")).toHaveAttribute("data-state", "loaded");
+  await expect(content.locator("article")).toHaveCount(5);
+  // 5-1: the default Profile's muted / blocked domains leave no trace on the timeline.
+  for (const trace of ["noisy.social", "bot-farm.example", "Nana", "Deals Bot", "これめちゃくちゃ分かる"]) {
+    await expect(content).not.toContainText(trace);
+  }
+
+  // The menu by keyboard: first item focused, arrows move, Esc returns to the button.
+  const more = page.locator("#sp-more-post-mika-picker");
+  await more.focus();
+  await page.keyboard.press("Enter");
+  const menu = page.getByTestId("post-menu");
+  await expect(menu.getByRole("menuitem").first()).toBeFocused();
+  await expect(menu.getByRole("menuitem")).toHaveText(["@mika をミュート", "@mika をブロック", "misskey.example をミュート", "misskey.example をブロック"]);
+  await page.keyboard.press("ArrowDown");
+  await expect(menu.getByRole("menuitem").nth(1)).toBeFocused();
+  if (viewport.name === "mobile") {
+    await expect(page.getByRole("dialog", { name: "その他" })).toHaveAttribute("aria-modal", "true");
+    await expectScrollLocked(page, true);
+    await expectTabStaysInside(page, menu);
+  }
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(more).toBeFocused();
+  await expectScrollLocked(page, false);
+
+  // 1-1: mute is immediate, with 元に戻す; the post goes without trace and comes back.
+  await page.keyboard.press("Enter");
+  await menu.getByRole("menuitem", { name: "misskey.example をミュート" }).focus();
+  await page.keyboard.press("Enter");
+  const toast = page.getByTestId("toast");
+  await expect(toast).toContainText("misskey.example をミュートしました");
+  await expect(content.locator('article[data-post-id="post-mika-picker"]')).toHaveCount(0);
+  await expect(content.locator("article")).toHaveCount(4);
+  await expect.poll(() => page.evaluate(() => document.activeElement !== document.body && document.activeElement !== null)).toBe(true);
+  await toast.getByRole("button", { name: "元に戻す" }).click();
+  await expect(content.locator('article[data-post-id="post-mika-picker"]')).toHaveCount(1);
+
+  // 1-1 / 2-1 … 2-3: a block asks first; the shell behind the dialog is inert.
+  await page.locator("#sp-more-post-nekota-coffee").click();
+  await menu.getByRole("menuitem", { name: "mstdn.example をブロック" }).click();
+  const block = page.getByTestId("block-dialog");
+  await expect(block).toContainText("mstdn.example をブロックしますか？");
+  await expect(block.getByRole("button", { name: "代わりにミュート" })).toBeVisible();
+  await expect(page.locator(".sp-body")).toHaveAttribute("inert", "");
+  await expectTabStaysInside(page, block);
+  await page.keyboard.press("Escape");
+  await expect(block).toHaveCount(0);
+  await expect(page.locator("#sp-more-post-nekota-coffee")).toBeFocused();
+  await expect(page.locator(".sp-body")).not.toHaveAttribute("inert", "");
+
+  // 3-1 / 3-2: a muted domain's post by URL: kind and domain only, then this post only.
+  await page.goto("/posts/post-nana-playlist", { waitUntil: "networkidle" });
+  const hidden = page.getByTestId("hidden-post");
+  await expect(hidden).toHaveAttribute("data-mode", "mute");
+  await expect(hidden).toContainText("ミュート中のドメインの投稿です");
+  await expect(hidden).toContainText("noisy.social");
+  await expect(content).not.toContainText("プレイリスト");
+  await expect(content).not.toContainText("Nana");
+  await page.getByRole("button", { name: "この投稿だけ表示" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("revealed-bar")).toContainText("noisy.social · ミュート中");
+  await expect(page.getByRole("button", { name: "隠す" })).toBeFocused();
+  await expect(content).toContainText("プレイリスト");
+  // Mute adds no operation restriction.
+  await expect(content.locator("[data-locked]")).toHaveCount(0);
+  await page.keyboard.press("Enter");
+  await expect(hidden).toBeVisible();
+  await expect(page.getByRole("button", { name: "この投稿だけ表示" })).toBeFocused();
+  await page.getByRole("button", { name: "この投稿だけ表示" }).click();
+  await expect(content).toContainText("プレイリスト");
+  await page.reload({ waitUntil: "networkidle" });
+  await expect(page.getByTestId("hidden-post")).toBeVisible();
+  await expect(content).not.toContainText("プレイリスト");
+
+  // 3-3 / 4-1 / 4-2: a blocked domain's post stays locked after the reveal; the sheet
+  // leads to the settings' unblock dialog; unblocking and blocking again round-trip.
+  await page.goto("/posts/post-deals-sale", { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: "この投稿だけ表示" }).click();
+  const locked = page.locator('[data-locked="reply"]');
+  await expect(locked).toHaveAttribute("aria-label", "返信（ブロック中）");
+  await locked.focus();
+  await page.keyboard.press("Enter");
+  const sheet = page.getByTestId("blocked-sheet");
+  await expect(sheet.getByRole("heading")).toHaveText("返信できません");
+  await expect(sheet).toContainText("bot-farm.example をブロック中です。");
+  await expect(sheet.getByRole("button", { name: "閉じる" })).toBeFocused();
+  await expectTabStaysInside(page, sheet);
+  await page.keyboard.press("Escape");
+  await expect(sheet).toHaveCount(0);
+  await expect(locked).toBeFocused();
+  await page.keyboard.press("Enter");
+  await sheet.getByRole("button", { name: "ブロックを解除…" }).click();
+  const unblock = page.getByTestId("unblock-dialog");
+  await expect(unblock).toContainText("bot-farm.example のブロックを解除しますか？");
+  await expect(unblock.getByRole("button", { name: "ミュートに変更" })).toBeVisible();
+  await unblock.getByRole("button", { name: "ブロック解除" }).click();
+  await expect(toast).toContainText("bot-farm.example のブロックを解除しました");
+  // Unblocked: the page shows the post as is, nothing locked any more.
+  await expect(content.locator("[data-locked]")).toHaveCount(0);
+  await expect(page.getByTestId("revealed-bar")).toHaveCount(0);
+  await content.locator("#sp-more-post-deals-sale").click();
+  await menu.getByRole("menuitem", { name: "bot-farm.example をブロック" }).click();
+  await block.getByRole("button", { name: "ブロック", exact: true }).click();
+  await expect(toast).toContainText("bot-farm.example をブロックしました");
+  // The page's reveal still holds (3-2), now under the block again: locked.
+  await expect(page.getByTestId("revealed-bar")).toContainText("bot-farm.example · ブロック中");
+  await expect(locked).toBeVisible();
+  await page.getByRole("button", { name: "隠す" }).click();
+  await expect(page.getByTestId("hidden-post")).toHaveAttribute("data-mode", "block");
+
+  // A reveal belongs to the Profile that made it: another Profile (no controls) sees the
+  // post as is, and coming back starts hidden again.
+  await page.getByRole("button", { name: "この投稿だけ表示" }).click();
+  await expect(page.getByTestId("revealed-bar")).toBeVisible();
+  await visible(page, /投稿用 Profile を切り替え/).click();
+  await page.getByTestId("profile-menu").getByRole("menuitemradio", { name: /Fixture Dev/ }).click();
+  await expect(page.getByTestId("hidden-post")).toHaveCount(0);
+  await expect(page.getByTestId("revealed-bar")).toHaveCount(0);
+  await expect(content).toContainText("期間限定セール");
+  await visible(page, /投稿用 Profile を切り替え/).click();
+  await page.getByTestId("profile-menu").getByRole("menuitemradio", { name: /Fixture Profile/ }).click();
+  await expect(page.getByTestId("hidden-post")).toHaveAttribute("data-mode", "block");
+  await expect(content).not.toContainText("期間限定セール");
+
+  // 3-4 (S8): a quote of a muted post is hidden by the quoted domain; revealed, its
+  // target stays hidden and the quoter can be acted on.
+  await page.goto("/posts/post-ken-quote", { waitUntil: "networkidle" });
+  await expect(page.getByTestId("hidden-post")).toContainText("noisy.social");
+  await expect(content).not.toContainText("これめちゃくちゃ分かる");
+  await page.getByRole("button", { name: "この投稿だけ表示" }).click();
+  await expect(content).toContainText("これめちゃくちゃ分かる");
+  await expect(content.getByTestId("quote")).toHaveAttribute("data-state", "hidden");
+  await expect(content).not.toContainText("プレイリスト");
+  await expect(content.locator("[data-locked]")).toHaveCount(0);
+
+  // 3-5: replies of controlled domains fold, then show one by one.
+  await page.goto("/posts/post-sora-zine", { waitUntil: "networkidle" });
+  const fold = page.getByTestId("hidden-replies");
+  await expect(fold).toHaveText("非表示の返信 2 件");
+  await expect(fold).toHaveAttribute("aria-expanded", "false");
+  await fold.focus();
+  await page.keyboard.press("Enter");
+  await expect(fold).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByTestId("hidden-reply")).toHaveCount(2);
+  await expect(content).not.toContainText("通販あるなら絶対買う");
+  await page.getByTestId("hidden-reply").first().getByRole("button", { name: "表示" }).click();
+  await expect(content).toContainText("通販あるなら絶対買う");
+  await expect(page.getByTestId("hidden-reply")).toHaveCount(1);
+
+  // 3-6 / 4-1: a blocked person's page: badge and bio, posts hidden, follow locked.
+  await page.goto("/users/deals%40bot-farm.example", { waitUntil: "networkidle" });
+  await expect(page.getByTestId("domain-badge")).toHaveText("ブロック中のドメイン");
+  await expect(content).toContainText("セール情報を自動でお届けします。");
+  await expect(page.getByTestId("hidden-post")).toBeVisible();
+  await expect(content).not.toContainText("期間限定セール");
+  await page.locator("#sp-follow").click();
+  await expect(sheet.getByRole("heading")).toHaveText("フォローできません");
+  await expect(sheet.getByRole("button", { name: "閉じる" })).toBeFocused();
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#sp-follow")).toBeFocused();
+  await page.getByRole("button", { name: "投稿を表示" }).click();
+  await expect(page.getByTestId("revealed-posts")).toBeVisible();
+  await expect(content).toContainText("期間限定セール");
+  // A CW stays restricted after the reveal: no content.
+  await expect(page.getByTestId("restricted-post")).toHaveAttribute("data-reason", "cw");
+  await expect(content).not.toContainText("閲覧注意の本文");
+  await page.getByRole("button", { name: "隠す" }).click();
+  await expect(page.getByTestId("hidden-post")).toBeVisible();
+  await expect(page.getByRole("button", { name: "投稿を表示" })).toBeFocused();
+}
+
+/** Holds the page's GraphQL requests of one operation until released (a slow backend). */
+async function holdOperation(page: Page, operation: string) {
+  const held: Route[] = [];
+  const handler = async (route: Route) => {
+    const query = String(route.request().postDataJSON()?.query ?? "");
+    if (new RegExp(`^\\s*(?:query|mutation)\\s+${operation}\\b`).test(query)) held.push(route);
+    else await route.continue();
+  };
+  await page.route("**/graphql", handler);
+  return {
+    held,
+    async release() {
+      for (const route of held.splice(0)) await route.continue();
+      await page.unroute("**/graphql", handler);
+    },
+    /** The held requests fail: the BFF answers with an upstream error. */
+    async fail() {
+      for (const route of held.splice(0)) {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({ data: null, errors: [{ message: "upstream failed", extensions: { code: "UPSTREAM_ERROR" } }] }),
+        });
+      }
+      await page.unroute("**/graphql", handler);
+    },
+  };
+}
+
+/** Puts bot-farm.example back to block (the shared policy mock's seed) from the settings page. */
+async function restoreBotFarmBlock(page: Page) {
+  await page.goto("/settings/mute-block/domains", { waitUntil: "networkidle" });
+  await expect(page.getByTestId("domain-panel").locator("section")).toHaveAttribute("data-state", "loaded");
+  await page.locator("#mb-add-button").click();
+  await page.locator("#mb-add-input").fill("bot-farm.example");
+  await page.getByTestId("add-dialog").getByRole("button", { name: "ブロック", exact: true }).click();
+  await page.getByTestId("block-dialog").getByRole("button", { name: "ブロック", exact: true }).click();
+  await expect(page.getByTestId("toast")).toContainText("bot-farm.example をブロックしました");
+}
+
+/**
+ * Review follow-ups (PR #46): after a setting changed, a revealed post / person is
+ * hidden and pending until the reveal is answered again (nothing of the old reveal, its
+ * operations included, is used meanwhile), a failed answer leaves it hidden with the
+ * error and the reveal button to retry; a 409 recovered by
+ * reloading the settings brings the shown posts up to date (two tabs); a hidden post in a
+ * person's list is its own hidden card (Ken's quote of a muted post); the mock says the
+ * hiding is a preview; the post menu keeps focus across the breakpoint.
+ */
+async function verifyDomainContentReview(browser: Browser, server: AppServer, page: Page, viewport: Viewport) {
+  const content = page.locator("#content");
+
+  // Preview note where posts are shown (mock mode), short and visible.
+  for (const path of ["/", "/posts/post-nana-playlist", "/users/nana%40noisy.social"]) {
+    await page.goto(path, { waitUntil: "networkidle" });
+    await expect(page.getByTestId("content-preview-note")).toHaveText("投稿の非表示・操作の制限はプレビューです（サーバー未接続）");
+    await expect(page.getByTestId("content-preview-note")).toBeVisible();
+  }
+
+  // 1 (post): revealed under a mute (operations allowed) -> block it -> the reveal is asked
+  // again; meanwhile the post is hidden and pending (no old operations) -> that request
+  // fails -> hidden with the error, the reveal button retries -> revealed and locked.
+  await page.goto("/posts/post-nana-playlist", { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: "この投稿だけ表示" }).click();
+  await expect(page.getByTestId("revealed-bar")).toContainText("ミュート中");
+  await expect(content.locator("[data-locked]")).toHaveCount(0);
+  const reveals = await holdOperation(page, "RevealPost");
+  await content.locator("#sp-more-post-nana-playlist").click();
+  await page.getByTestId("post-menu").getByRole("menuitem", { name: "noisy.social をブロック" }).click();
+  const blockDialog = page.getByTestId("block-dialog");
+  // If the block detaches relations, confirm them first (2-2).
+  await expect(blockDialog.getByTestId("block-impact-loading")).toHaveCount(0);
+  if (await blockDialog.locator("#mb-acknowledge").count()) await blockDialog.locator("#mb-acknowledge").check();
+  await blockDialog.getByRole("button", { name: "ブロック", exact: true }).click();
+  await expect(page.getByTestId("toast")).toContainText("noisy.social をブロックしました");
+  await expect.poll(() => reveals.held.length).toBeGreaterThan(0);
+  const card = page.getByTestId("hidden-post");
+  await expect(card).toHaveAttribute("data-mode", "block");
+  await expect(card.getByRole("button", { name: "この投稿だけ表示" })).toBeDisabled();
+  await expect(page.getByTestId("revealed-bar")).toHaveCount(0);
+  await expect(content.locator('article[data-post-id="post-nana-playlist"]')).toHaveCount(0);
+  await reveals.fail();
+  await expect(card.getByRole("alert")).toContainText("表示できませんでした");
+  await expect(card.getByRole("alert")).toHaveAttribute("data-error", "upstream_error");
+  await expect(page.getByTestId("revealed-bar")).toHaveCount(0);
+  const retry = card.getByRole("button", { name: "この投稿だけ表示" });
+  await expect(retry).toBeEnabled();
+  await retry.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("revealed-bar")).toContainText("noisy.social · ブロック中");
+  await expect(page.locator('[data-locked="reply"]')).toBeVisible();
+  await content.locator("#sp-more-post-nana-playlist").click();
+  await page.getByTestId("post-menu").getByRole("menuitem", { name: "noisy.social のブロックを解除…" }).click();
+  await page.getByTestId("unblock-dialog").getByRole("button", { name: "ミュートに変更" }).click();
+  await expect(page.getByTestId("toast")).toContainText("noisy.social をミュートに変更しました");
+  await expect(page.getByTestId("revealed-bar")).toContainText("noisy.social · ミュート中");
+  await expect(content.locator("[data-locked]")).toHaveCount(0);
+
+  // A re-reveal can no longer be overtaken by [隠す] in the page (the post is hidden and
+  // its button disabled until the answer); the update itself still drops an answer that
+  // arrives after [隠す] (test/Test/Main.purs).
+  await page.getByRole("button", { name: "隠す" }).click();
+  await expect(card).toHaveAttribute("data-mode", "mute");
+
+  // 1 (person): the same for [投稿を表示] on a blocked person's page (changed to mute).
+  await page.goto("/users/deals%40bot-farm.example", { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: "投稿を表示" }).click();
+  await expect(page.getByTestId("revealed-posts")).toBeVisible();
+  const pages = await holdOperation(page, "RevealUserPage");
+  await page.locator('[id="sp-more-user-deals@bot-farm.example"]').click();
+  await page.getByTestId("post-menu").getByRole("menuitem", { name: "bot-farm.example のブロックを解除…" }).click();
+  await page.getByTestId("unblock-dialog").getByRole("button", { name: "ミュートに変更" }).click();
+  await expect(page.getByTestId("domain-badge")).toHaveText("ミュート中のドメイン");
+  await expect.poll(() => pages.held.length).toBeGreaterThan(0);
+  await expect(page.getByTestId("revealed-posts")).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "投稿を表示" })).toBeDisabled();
+  await pages.fail();
+  await expect(card).toHaveAttribute("data-mode", "mute");
+  await expect(card.getByRole("alert")).toContainText("表示できませんでした");
+  await card.getByRole("button", { name: "投稿を表示" }).click();
+  await expect(page.getByTestId("revealed-posts")).toBeVisible();
+  await expect(content.locator("[data-locked]")).toHaveCount(0);
+  await restoreBotFarmBlock(page);
+
+  // 2: another tab mutes misskey.example; this tab's menu still offers it, the write
+  // gets 409, and 再読み込み brings both the settings and the timeline up to date.
+  await page.goto("/", { waitUntil: "networkidle" });
+  await expect(content.locator('article[data-post-id="post-mika-picker"]')).toHaveCount(1);
+  const other = await openPage(browser, server, viewport);
+  try {
+    await other.page.goto("/", { waitUntil: "networkidle" });
+    await other.page.locator("#sp-more-post-mika-picker").click();
+    await other.page.getByTestId("post-menu").getByRole("menuitem", { name: "misskey.example をミュート" }).click();
+    await expect(other.page.getByTestId("toast")).toContainText("misskey.example をミュートしました");
+  } finally {
+    await other.context.close();
+  }
+  await page.locator("#sp-more-post-mika-picker").click();
+  await page.getByTestId("post-menu").getByRole("menuitem", { name: "misskey.example をミュート" }).click();
+  const toast = page.getByTestId("toast");
+  await expect(toast.locator("[data-error]")).toHaveAttribute("data-error", "REVISION_CONFLICT");
+  await expect(content.locator('article[data-post-id="post-mika-picker"]')).toHaveCount(1);
+  await toast.getByRole("button", { name: "再読み込み" }).click();
+  await expect(content.locator('article[data-post-id="post-mika-picker"]')).toHaveCount(0);
+  await page.locator("#sp-more-post-sora-zine").click();
+  await expect(page.getByTestId("post-menu")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await page.goto("/settings/mute-block/domains", { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: "ミュート解除（misskey.example）" }).click();
+  await expect(page.locator('li[data-domain="misskey.example"]')).toHaveCount(0);
+
+  // 3: Ken's page (from his name on the revealed quote): his quote of a muted post is a
+  // hidden card of its own, revealed and hidden like 3-1 / 3-2.
+  await page.goto("/posts/post-ken-quote", { waitUntil: "networkidle" });
+  await page.getByRole("button", { name: "この投稿だけ表示" }).click();
+  await content.getByRole("link", { name: "Ken", exact: true }).click();
+  await expect(page).toHaveURL(/\/users\/ken%40other\.example$/);
+  await expect(page.getByTestId("user-page")).toHaveAttribute("data-state", "loaded");
+  await expect(page.getByTestId("domain-badge")).toHaveCount(0);
+  const listed = page.getByTestId("hidden-post");
+  await expect(listed).toHaveAttribute("data-domain", "noisy.social");
+  await expect(content).not.toContainText("これめちゃくちゃ分かる");
+  await listed.getByRole("button", { name: "この投稿だけ表示" }).click();
+  await expect(content).toContainText("これめちゃくちゃ分かる");
+  await expect(page.getByRole("button", { name: "隠す" })).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("hidden-post")).toBeVisible();
+  await expect(content).not.toContainText("これめちゃくちゃ分かる");
+
+  // Optional follow-up: the post menu keeps focus when the width crosses the breakpoint.
+  if (viewport.name === "desktop") {
+    const mobile = VIEWPORTS[1];
+    await page.goto("/", { waitUntil: "networkidle" });
+    await page.locator("#sp-more-post-mika-picker").click();
+    const menu = page.getByTestId("post-menu");
+    await expect(menu.getByRole("menuitem").first()).toBeFocused();
+    await page.setViewportSize({ width: mobile.width, height: mobile.height });
+    await expect(page.getByRole("dialog", { name: "その他" })).toHaveAttribute("aria-modal", "true");
+    await expect.poll(() => menu.evaluate((element) => element.contains(document.activeElement))).toBe(true);
+    await expectScrollLocked(page, true);
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await expect.poll(() => menu.evaluate((element) => element.contains(document.activeElement))).toBe(true);
+    await expectScrollLocked(page, false);
+    await page.keyboard.press("Escape");
+    await expect(page.locator("#sp-more-post-mika-picker")).toBeFocused();
+  }
+}
+
 async function switchProfile(page: Page, name: string) {
   await visible(page, /投稿用 Profile を切り替え/).click();
   await page.getByTestId("profile-menu").getByRole("menuitemradio", { name: new RegExp(name) }).click();
@@ -1053,6 +1425,17 @@ async function verifyMock(browser: Browser, frontendRoot: string, coreURL: strin
         console.info(`OK mute/block settings: keyboard, modal, reaction toast behind it, own server, Profile switch at ${viewport.name}`);
       } finally {
         await muteBlock.context.close();
+      }
+      // D08 second stage: posts of muted / blocked domains, the post menu and the 4-1 sheet.
+      await resetMock(server);
+      const domainContent = await openPage(browser, server, viewport);
+      try {
+        await verifyDomainContent(domainContent.page, viewport);
+        await verifyDomainContentReview(browser, server, domainContent.page, viewport);
+        expect(domainContent.errors, `domain content ${viewport.name}: browser errors`).toEqual([]);
+        console.info(`OK post menu, hidden/revealed posts, locked operations, folded replies, person page at ${viewport.name}`);
+      } finally {
+        await domainContent.context.close();
       }
     }
     await resetMock(server);

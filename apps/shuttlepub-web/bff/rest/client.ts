@@ -3,7 +3,7 @@
 // (generated/shuttlepub-api.ts); nothing here is hand-copied from the backend.
 
 import type { components } from "./generated/shuttlepub-api.ts";
-import type { CreatePostInput, Post, TimelineKind } from "./posts.ts";
+import type { ContentViewer, CreatePostInput, Post, PostView, TimelineKind, UserPage } from "./posts.ts";
 import type { EmojiRef, EmojiView, QuickReactionSettings, ReactionState, UpdateQuickReactionSettings } from "./quick-reaction.ts";
 import type { NoteReactionSummary } from "./reactions.ts";
 
@@ -62,14 +62,22 @@ export interface ShuttlePubApi {
   /** GET /api/v1/status (operation getApiStatus). Resolves only with a 200 body; rejects with ShuttlePubApiError otherwise. */
   getApiStatus(): Promise<ApiStatus>;
   /**
-   * Timeline / post operations use the PROVISIONAL app-owned types in posts.ts: the
-   * pinned OpenAPI schema has no such endpoint yet. Real mode rejects them all with
-   * not_implemented without contacting the backend (no invented paths or data).
+   * Timeline / post operations use the PROVISIONAL app-owned types in posts.ts. The
+   * pinned OpenAPI has S8 (which items and how they are presented) but no endpoint for
+   * the display fields (author, time, counts), threads or user pages. Real mode rejects
+   * them all with not_implemented without contacting the backend (no invented paths or
+   * data); mock mode answers through the S8 projection (content-mock.ts).
    */
-  getTimeline(kind: TimelineKind): Promise<Post[]>;
-  /** Resolves null when the post does not exist. */
-  getPost(id: string): Promise<Post | null>;
-  getReplies(postId: string): Promise<Post[]>;
+  getTimeline(kind: TimelineKind, viewer: ContentViewer): Promise<Post[]>;
+  /**
+   * One post as the viewer's Profile sees it (S8 direct view: hidden at first, visible
+   * after an explicit reveal for this request only). Resolves null when it does not exist.
+   */
+  getPostView(id: string, viewer: ContentViewer, reveal: boolean): Promise<PostView | null>;
+  /** Direct replies, oldest first, each as its S8 direct view (never revealed). */
+  getReplies(postId: string, viewer: ContentViewer): Promise<PostView[]>;
+  /** A person's page (ui-spec 3-6): their posts stay hidden unless reveal is asked. */
+  getUserPage(handle: string, viewer: ContentViewer, reveal: boolean): Promise<UserPage | null>;
   /** Not implemented in either mode until the backend publishes a contract. */
   createPost(input: CreatePostInput): Promise<Post>;
 

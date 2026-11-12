@@ -1,7 +1,7 @@
 {
   "producer": {
     "repository": "ShuttlePub/ShuttlePub",
-    "commit": "5945e41a8c02650c1ddd29647a7c8c819740e81c",
+    "commit": "60cb47d60da3c5b4ff3fc570fe3bc1796f983b3b",
     "path": "server/tests/fixtures/quick_reaction/scenarios"
   },
   "files": [

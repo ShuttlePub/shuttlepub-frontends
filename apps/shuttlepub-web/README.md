@@ -19,6 +19,7 @@ mock / real 切替、SSR + hydration、Profile context の型・fixture、visual
 | ---- | ---- | ---- |
 | ホーム | `/` | タイムラインタブ (ホーム / ローカル / 連合)、投稿カード。TL 上部に投稿欄は置かない (L2) |
 | 投稿詳細 | `/posts/:id` | 投稿と「返信／リアクション」タブ (既定は返信)。本文クリックと投稿時刻リンクから開く (L4) |
+| ユーザー | `/users/:handle` | 名前・自己紹介・ミュート中／ブロック中のドメインのバッジと投稿一覧 (D08 ui-spec 3-6)。投稿者名から開く |
 | 設定 | `/settings` | 「Profile」節 (常用絵文字は quick-reaction-web-ui が差し込む) |
 | 通知 / 検索 / ブックマーク | `/notifications` `/search` `/bookmarks` | ナビゲーション先のみ (中身は後続) |
 
@@ -30,9 +31,11 @@ mock / real 切替、SSR + hydration、Profile context の型・fixture、visual
 - 未認証 (real) は Profile ボタンの代わりに `/auth/login` への「ログイン」だけを出します。
   ログイン画面そのものは認証 UI の後続変更です。
 
-データ: タイムライン・投稿・返信・投稿作成は固定 OpenAPI に endpoint が無いため、SDL の `timeline` / `post` /
-`replies` / `createPost` は**仮 (PROVISIONAL)** のアプリ所有型です (`bff/rest/posts.ts`)。mock は
-`bff/rest/post-fixtures.ts` (OpenAPI 照合の対象外) を返し、real は backend を呼ばず `NOT_IMPLEMENTED` を返します。
+データ: 固定 OpenAPI には S8 (個人 domain mute/block の投稿表示契約、下記) があるものの、投稿の表示データ
+(作者・時刻・件数)・スレッド・ユーザーページ・投稿作成の endpoint が無いため、SDL の `timeline` / `postView` /
+`replies` / `userPage` / `createPost` は**仮 (PROVISIONAL)** のアプリ所有型です (`bff/rest/posts.ts`)。mock は
+`bff/rest/post-fixtures.ts` の投稿を S8 の投影 (`bff/rest/content-mock.ts`) に通して返し、real は backend を呼ばず
+`NOT_IMPLEMENTED` を返します。
 `createPost` は mock でも `NOT_IMPLEMENTED` です (投稿を模擬しない)。返信・リポスト・その他・画像・CW・絵文字は
 配置のみで `aria-disabled` です。mock の Profile は 3 件で、切替は応答を返すだけで保存しません (stateless)。
 
@@ -42,10 +45,48 @@ mock / real 切替、SSR + hydration、Profile context の型・fixture、visual
 画面構成・文言は host の `intents/shuttlepub/features/personal-domain-controls-ui/ui-spec.md` (UI モック v5 合意) に従う。
 選択中 Profile の domain mute/block (Emumet domain-controls) と個別アカウントの mute/block (Emumet blocks/mutes)
 の一覧・追加・解除。Emumet で実適用されるのは Follow 制御 (block 時の既存関係の両方向解除・新規 Follow 拒否)
-だけで、投稿の表示抑制・反応拒否は ShuttlePub の後続実装 (未接続。画面の一覧下に注記)。投稿・プロフィールの
-「…」メニューと直接 URL・引用・返信の隠し表示 (ui-spec 3-x/4-x/5-x) は S8 契約後の別変更。
+だけで、投稿の表示抑制・反応拒否は ShuttlePub の後続実装 (未接続。画面の一覧下に注記)。
 自サーバーのドメインは `EMUMET_PUBLIC_HOST` (Emumet の `PUBLIC_BASE_URL` の host。real で必須、未設定なら追加できない)
 で判定し、入力・保存のどちらでも拒否する。
+
+### 投稿表示面と「…」メニュー (D08 第2段 / personal-domain-controls-web-ui)
+
+ui-spec v5 の 1-1 (主導線)・3-1〜3-6・4-1〜4-5・5-1 を、ShuttlePub の S8 契約 (`openapi/shuttlepub.json`、
+producer commit `60cb47d60da3c5b4ff3fc570fe3bc1796f983b3b`) どおりに表示します。
+
+- 投稿カードとユーザーページの「…」: 「@user をミュート／ブロック」「〈ドメイン〉 をミュート／ブロック」(自サーバーの
+  人にはドメイン項目なし)。設定済みなら「…のミュートを解除」「…のブロックを解除…」。ミュートは即時で「元に戻す」付き
+  トースト、ブロックは設定画面と同じ確認 (2-1〜2-3、個人のブロックはその人との関係だけを数える)。ダイアログ・トーストは
+  設定画面と共通 (`App.MuteBlock.View.overlay`、開いている間はシェル全体が `inert`)。
+- タイムライン: 対象ドメインの投稿・それを引用した第三者の投稿 (コメントごと)・純粋リポストを痕跡なく除く (5-1)。
+- 直接 URL (`/posts/:id`): 最初は隠し、種別とドメインだけ (3-1)。[この投稿だけ表示] はそのページの間だけ有効で、
+  [隠す]・再読込・再訪・Profile 切替で隠し直します (3-2、S8 の単一投稿 reveal。保存・同期しない)。設定変更で reveal を
+  取り直す間は、その投稿を隠し表示 (ボタンは無効) に戻し、古い設定での reveal 結果 (操作可否を含む) を使いません。
+  取り直しが失敗・不在なら隠し表示のままエラーを出し、［この投稿だけ表示］で再試行できます。［隠す］の後に届いた
+  reveal の応答は捨てます (要求ごとの番号で照合)。ユーザーページの［投稿を表示］も同じです。ブロック中は
+  返信・リポスト・リアクションが鍵付きで、押すと 4-1 のシート →［ブロックを解除…］で設定画面と同じ解除ダイアログ。
+  CW・センシティブ・削除・閲覧権は reveal しても解除せず、本文を出しません。
+- 引用 (S8 との差、ui-spec 3-4): S8 の hidden 応答は種別・ドメイン・revision だけで「引用かどうか」を含まないため、
+  隠し表示は引用でも 3-1 と同じ文言です。引用を reveal しても引用元は隠れたまま (S8 EmbeddedNotePresentation)。
+- 純粋リポスト: リポスト自体の画面は持たず、カードのリンクは元投稿の URL (通常の単一投稿 reveal) です
+  (S8 は boost wrapper の直接 reveal を未決として契約外にしています)。
+- 返信 (3-5): 対象ドメインの返信は「非表示の返信 n 件」に折りたたみ、展開後も 1 件ずつ［表示］。
+- ユーザーページ (3-6): 名前・自己紹介・バッジは常に表示し、投稿一覧は隠しから［投稿を表示］(各投稿を単一投稿 reveal)。
+  ブロック中はフォローも鍵付き (フォロー自体は未実装)。対象外の人の一覧に対象ドメインの投稿 (ミュート先を引用した投稿など)
+  があれば、その投稿だけ 3-1 と同じ隠しカードにして投稿単位で［この投稿だけ表示］／［隠す］できます。
+- 設定の反映: 「…」・設定画面での変更に加え、409 の後に［再読み込み］で別タブの変更を取り込んだときも、表示中の投稿を取り直します。
+- mock の注記: 投稿を表示する画面 (タイムライン・投稿詳細・ユーザーページ) の上部に「投稿の非表示・操作の制限は
+  プレビューです（サーバー未接続）」と出します。API モードが real と確定したら消します
+  (mock のときと、モードの取得前・取得失敗時は出したままです)。
+
+データの流れ: mock では Profile の Emumet domain-controls (設定画面と同じ状態 mock) を S8 の純関数投影
+(`bff/rest/content.ts`) に渡し、S8 の応答形 (`TimelineResponse` / `DirectNoteResponse`) を固定 schema で検証してから、
+見えている投稿だけに仮の表示データを note_id で結合します。hidden の投稿は何も結合しないため、本文・作者・引用は
+GraphQL 応答に載りません (`bff/content.test.ts`)。producer の S8 fixture (`openapi/personal-domain-fixtures/`、同じ
+commit から `bun run openapi:sync-scenarios` で取込) を投影に再生して一致を確認します (`bff/rest/content-fixtures.test.ts`)。
+**投稿の実抑制・反応拒否は ShuttlePub 側が未実装 (S8 は全 route 501)** で、real の投稿系は従来どおり
+`NOT_IMPLEMENTED` です。mock の既定 Profile は noisy.social をミュート・bot-farm.example をブロック済みで、
+他の Profile は未設定です (Profile ごとに分かれることを確認できます)。
 
 ### クイックリアクション (D03, quick-reaction-web-ui)
 
@@ -185,8 +226,8 @@ Browser (PureScript + Flame, hydrate)
 
 - `bff/rest/fixtures.ts` の fixture は `bff/openapi/contract.ts` で pin した OpenAPI に照合され、schema に反すると `bun test` が失敗します。
 - Profile / ProfileContext と投稿系 (`bff/rest/posts.ts`) はアプリ所有の型で、OpenAPI にはまだ endpoint が無いため fixture は OpenAPI 照合の対象外です。
-- `src/App/Route.purs`: ルート (`/`、`/posts/:id`、`/settings`、`/notifications`、`/search`、`/bookmarks`、`/login`。未知のパスは共有 NotFound)。
-- `src/App/View/*`: シェル (`Shell`)、投稿カード (`PostCard`)、画面 (`Pages`)、投稿フォーム (`Compose`)、ログイン画面と通知行 (`Auth`、[AUTH.md](AUTH.md))。スタイルは `src/style.css` の `sp-` クラス。
+- `src/App/Route.purs`: ルート (`/`、`/posts/:id`、`/users/:handle`、`/settings`、`/notifications`、`/search`、`/bookmarks`、`/login`。未知のパスは共有 NotFound)。
+- `src/App/View/*`: シェル (`Shell`)、投稿カード (`PostCard`)、画面 (`Pages`)、隠し表示と reveal (`Hidden`)、投稿フォーム (`Compose`)、ログイン画面と通知行 (`Auth`、[AUTH.md](AUTH.md))。スタイルは `src/style.css` の `sp-` クラス。
 
 ## テスト
 

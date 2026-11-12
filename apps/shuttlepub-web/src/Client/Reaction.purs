@@ -42,7 +42,7 @@ import App.Post (Post)
 import App.Reaction (DetailFilter(..), HoldReason(..), NoteRead, NoteWrite, PendingRemoval, PickerTarget(..), PostReactions, PostRef, ReactionMsg(..), ToastKind(..), held, maxFavorites, moveItem, noHolds, postReactionsFor, removeAt, replaceAt)
 import App.ReactionDom (clearPendingRemoval, setPendingRemoval)
 import App.Route (Route(..))
-import Data.Array (any, cons, filter, find, index, insertAt, length, nub, null, snoc)
+import Data.Array (any, cons, filter, find, index, insertAt, length, mapMaybe, nub, null, snoc)
 import Data.Either (Either(..))
 import Data.Foldable (foldl)
 import Data.Maybe (Maybe(..), fromMaybe, isJust, isNothing, maybe)
@@ -145,13 +145,17 @@ cancelPending model = Tuple (withReaction model _ { pendingRemoval = Nothing }) 
 -- | Keep the PostRef as well as the Note key: GET can restore a server-side
 -- | reaction after an ambiguous PUT, removing its button and any anchored picker.
 shownPosts :: Model -> Array Post
-shownPosts model = timeline <> detail
+shownPosts model = timeline <> detail <> user
   where
   timeline = case model.timeline of
     Loaded posts | model.route == Just Home -> posts
     _ -> []
+  -- Visible posts only (S8): hidden ones have nothing to react to; revealed ones count.
   detail = case model.detail of
-    Loaded { post: Just post, replies } -> cons post replies
+    Loaded found -> mapMaybe _.post (maybe [] pure found.view <> found.replies <> model.content.reveals)
+    _ -> []
+  user = case model.content.user of
+    Loaded (Just page) -> mapMaybe _.post (page.posts <> maybe [] _.posts model.content.userRevealed <> model.content.reveals)
     _ -> []
 
 shownNoteIds :: Model -> Array String

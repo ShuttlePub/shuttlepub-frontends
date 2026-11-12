@@ -221,3 +221,15 @@ export const avatarColor = (id) => {
 export const scrollToTop = () => { window.scrollTo(0, 0); };
 
 export const encodeQueryComponent = (value) => encodeURIComponent(value);
+
+// After the next render, focus the first visible element of `ids` only if focus was
+// lost (it sits on <body> or on an element that disappeared / became inert): e.g. a
+// post muted away from its own menu. A focus the viewer moved meanwhile is kept.
+export const focusIfLost = (ids) => () => afterRender(() => afterRender(() => {
+  const active = document.activeElement;
+  if (active !== null && active !== document.body && visibleFocusTarget(active)) return;
+  for (const id of ids) {
+    const element = document.getElementById(id);
+    if (visibleFocusTarget(element)) { element.focus({ preventScroll: true }); return; }
+  }
+}));

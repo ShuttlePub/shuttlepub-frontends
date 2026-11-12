@@ -27,7 +27,7 @@ type GqlMode = "MUTE" | "BLOCK";
 const fromGqlMode = (mode: GqlMode): PolicyMode => (mode === "BLOCK" ? "block" : "mute");
 const toGqlMode = (mode: PolicyMode): GqlMode => (mode === "block" ? "BLOCK" : "MUTE");
 
-function policyError(error: unknown): unknown {
+export function policyError(error: unknown): unknown {
   if (error instanceof PolicyError) {
     return new GraphQLError(error.message, {
       extensions: { code: error.code, ...(error.status === undefined ? {} : { upstreamStatus: error.status }) },
@@ -47,7 +47,7 @@ async function guarded<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
-async function activeProfileId(context: PolicyContext, shown: string): Promise<string> {
+export async function activeProfileId(context: PolicyContext, shown: string): Promise<string> {
   if (context.profiles.mode === "mock") {
     // Mock selection is stateless (bff/profile.ts): the Profile the page shows acts, as
     // long as it is one of the mock Profiles (like the quick reaction mock). Real mode
@@ -105,6 +105,16 @@ export const policyResolvers = {
         const matches = (url: string) => actorDomain(url) === domain;
         return {
           domain,
+          following: [...new Set(relations.following.filter(matches))],
+          followers: [...new Set(relations.followers.filter(matches))],
+        };
+      }),
+    actorBlockImpact: (_root: unknown, args: { profile: string; actorUrl: string }, context: PolicyContext) =>
+      guarded(async () => {
+        const relations = await context.policy.followRelations(await activeProfileId(context, args.profile));
+        const matches = (url: string) => url === args.actorUrl;
+        return {
+          domain: actorDomain(args.actorUrl) ?? "",
           following: [...new Set(relations.following.filter(matches))],
           followers: [...new Set(relations.followers.filter(matches))],
         };

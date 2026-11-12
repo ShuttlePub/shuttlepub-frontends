@@ -150,6 +150,21 @@ blockReady state = case state.impact of
 
 type DomainUnblockState = { control :: DomainControl, pending :: Boolean, failure :: Maybe Failure }
 
+-- | Blocking one person from the post / profile menu: the follows with exactly that
+-- | actor it detaches, acknowledged like a domain block (ui-spec 2-1 / 2-2).
+type ActorBlockState =
+  { actorUrl :: String
+  , label :: String
+  , impact :: Load Impact
+  , acknowledged :: Boolean
+  , pending :: Boolean
+  , failure :: Maybe Failure
+  }
+
+-- | ui-spec 4-1: a locked operation on a blocked domain's post or person
+-- | ("〈action〉できません" / "〈domain〉 をブロック中です。").
+type BlockedState = { action :: String, domain :: String, revision :: Int }
+
 type ActorUnblockState = { policy :: ActorPolicy, pending :: Boolean, failure :: Maybe Failure }
 
 data Dialog
@@ -158,6 +173,8 @@ data Dialog
   | ConfirmBlock BlockState
   | ConfirmDomainUnblock DomainUnblockState
   | ConfirmActorUnblock ActorUnblockState
+  | ConfirmActorBlock ActorBlockState
+  | BlockedSheet BlockedState
 
 derive instance Generic Dialog _
 derive instance Eq Dialog
@@ -181,6 +198,11 @@ data Write
   | UnmuteActorRow String
   | UnblockActor
   | ActorToMute
+  -- | From the post / profile menu (ui-spec 1-1): immediate, with "元に戻す".
+  | QuickMuteDomain
+  | QuickMuteActor String
+  | BlockActor
+  | MuteActorInstead
   | UndoWrite
 
 derive instance Generic Write _
@@ -214,7 +236,12 @@ instance DecodeJson Change where
   decodeJson = genericDecodeJson
 
 -- | What "元に戻す" does after an immediate unmute (ui-spec 1-6).
-data Undo = RestoreDomainMute String | RestoreActorMute String
+data Undo
+  = RestoreDomainMute String
+  | RestoreActorMute String
+  -- | Undo a mute just added from the menu (by domain / by actor URL).
+  | RemoveDomainMute String
+  | RemoveActorMute String
 
 derive instance Generic Undo _
 derive instance Eq Undo
@@ -314,6 +341,24 @@ data Message
   | OpenActorUnblock String ActorPolicy
   | ConfirmActorUnblockNow
   | ActorUnblockToMute
+  -- | Post / profile menu (ui-spec 1-1 主導線, 4-2). Openers are element ids for focus.
+  | MenuMuteDomain String
+  | MenuBlockDomain String String
+  | MenuUnmuteDomain String
+  | MenuUnblockDomain String String
+  -- | actor URL, label (@handle)
+  | MenuMuteActor String String
+  -- | opener, actor URL, label
+  | MenuBlockActor String String String
+  | MenuUnmuteActor String
+  | MenuUnblockActor String String
+  | ActorImpactLoaded Scope String (Either Failure Impact)
+  | RetryActorImpact
+  | ConfirmActorBlockNow
+  | ActorMuteInstead
+  -- | ui-spec 4-1: opener, the operation's label, the blocking control (domain, revision).
+  | OpenBlockedSheet String String String Int
+  | SheetUnblock
   | Written Origin Write String (Either Failure Change)
   | RunUndo
   | ToastHold Boolean

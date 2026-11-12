@@ -9,7 +9,7 @@
 // mock mode needs no image host.
 
 import { availableProfilesFixture } from "../profile.ts";
-import { NOTE_IDS, replyPostFixtures, timelinePostFixtures } from "./post-fixtures.ts";
+import { NOTE_IDS, allMockNoteIds } from "./post-fixtures.ts";
 import type { CustomEmojiSetup, EmojiRef, QuickReactionSetup, QuickReactionStore } from "./quick-reaction.ts";
 import type { NoteReactionSummary, ReactionGroup, Reactor } from "./reactions.ts";
 
@@ -37,7 +37,7 @@ const [profile1, profile2, profile3] = availableProfilesFixture.map((profile) =>
 export const MOCK_QUICK_REACTION_SETUP: QuickReactionSetup = {
   emoji: MOCK_CUSTOM_EMOJI,
   profiles: [profile1, profile2, profile3],
-  notes: [...timelinePostFixtures, ...replyPostFixtures].map((post) => post.noteId),
+  notes: allMockNoteIds(),
   settings: {
     [profile1]: { revision: 3, favorites: [u("👍"), u("🎉"), c("neko_yes"), u("🙏"), c("old_blob")] },
     [profile3]: { revision: 1, favorites: [u("✨"), u("💜"), c("kusa")] },

@@ -15,7 +15,7 @@ import App.View.Common (attr, emptySlot, testId)
 import App.View.Compose as Compose
 import App.View.Pages as Pages
 import App.View.Shell as Shell
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe(..), isJust)
 import Flame (Html)
 import Flame.Html.Attribute as HA
 import Flame.Html.Element as HE
@@ -39,8 +39,10 @@ view model = HE.main [ HA.id "app", HA.lang "ja" ]
           action <- keydownAction event
           pure if action.action == "" then Nothing else Just (KeyPressed action)
       ]
-      [ Shell.header model
-      , HE.div [ HA.class' "sp-body" ]
+      -- While a mute/block dialog (settings page, post menu, 4-1 sheet) is open, the
+      -- whole shell behind it is inert: neither pointer nor keyboard reaches it.
+      [ HE.div ([ HA.class' "sp-contents" ] <> behind) [ Shell.header model ]
+      , HE.div ([ HA.class' "sp-body" ] <> behind)
           [ Shell.sidebar model
           , HE.div [ HA.id "content", HA.class' "sp-content" ]
               [ backendStatus model
@@ -48,13 +50,15 @@ view model = HE.main [ HA.id "app", HA.lang "ja" ]
               , page model
               ]
           ]
-      , Shell.tabbar model
+      , HE.div ([ HA.class' "sp-contents" ] <> behind) [ Shell.tabbar model ]
       , Shell.profileMenu model
       , Compose.compose model
       , Reaction.overlay model
+      , map MuteBlockMsg (MuteBlock.overlay model.muteBlock)
       ]
   ]
   where
+  behind = if isJust model.muteBlock.dialog then [ attr "inert" "", attr "aria-hidden" "true" ] else []
   apiModeValue = case model.apiMode of
     Loaded MOCK -> "mock"
     Loaded REAL -> "real"
@@ -64,6 +68,7 @@ page :: Model -> Html Message
 page model = case model.route of
   Just Home -> Pages.home model
   Just (PostDetail _) -> Pages.postDetail model
+  Just (UserProfile handle) -> Pages.userPage model handle
   Just Settings -> Pages.settings model
   Just MuteBlockAccounts -> map MuteBlockMsg (MuteBlock.view AccountsTab model.muteBlock)
   Just MuteBlockDomains -> map MuteBlockMsg (MuteBlock.view DomainsTab model.muteBlock)

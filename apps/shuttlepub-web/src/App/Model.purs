@@ -4,7 +4,7 @@ import Prelude
 
 import App.Api.Error (ApiError)
 import App.Emoji (Emoji)
-import App.Post (Post, TimelineTab(..), Visibility(..))
+import App.Post (Post, PostView, TimelineTab(..), UserPage, Visibility(..))
 import App.Profile (Profile, ProfileContext)
 import App.MuteBlock.Types as MuteBlock
 import App.Reaction (DetailFilter(..), NoteWrite, PendingRemoval, PickerState, PostReactions, QuickSettings, SettingsProblem, Toast)
@@ -46,10 +46,10 @@ type ApiStatus =
   { apiVersion :: String
   }
 
--- | Post detail screen data: Nothing when the post does not exist.
+-- | Post detail screen data (S8 direct views): view is Nothing when the post does not exist.
 type PostDetailData =
-  { post :: Maybe Post
-  , replies :: Array Post
+  { view :: Maybe PostView
+  , replies :: Array PostView
   }
 
 -- | Tabs of the post detail screen (ui-spec D1: 返信 is the default).
@@ -84,6 +84,60 @@ type ProfileMenuState =
   , error :: Maybe ApiError
   }
 
+-- | The post menu ("…", ui-spec 1-1 主導線) of one post card. opener is the button's id.
+type PostMenuState = { postId :: String, opener :: String }
+
+-- | Content shown on Home / post detail / a person's page (D08 second stage, S8).
+-- |
+-- | epoch is bumped whenever the route's content is (re)requested; an answer of another
+-- | epoch is dropped. profile is the Profile context the content was requested for:
+-- | content waits until the Profile context is known and is requested again when it
+-- | changes, so one Profile's controls never decide what another Profile is shown.
+-- | Reveals (S8 single-note reveal) are page-local: kept only while the page is shown,
+-- | never stored or synced; leaving, reloading or [隠す] hides again. Every reveal
+-- | request has its own id (revealSeq); only the request a target is waiting for is
+-- | applied, so [隠す] (which forgets it) wins over an answer still on its way.
+-- | controlsSeen is the Profile's domain-control list the shown content follows: when
+-- | the list changes by any path (a write here, or a reload after a conflict), the
+-- | content is asked for again.
+type ContentState =
+  { epoch :: Int
+  , profile :: Maybe String
+  , waiting :: Boolean
+  , reveals :: Array PostView
+  , revealSeq :: Int
+  , revealing :: Array { id :: String, request :: Int }
+  , revealError :: Maybe { id :: String, error :: ApiError }
+  , repliesOpen :: Boolean
+  , user :: RemoteData (Maybe UserPage)
+  , userRevealed :: Maybe UserPage
+  , userRevealing :: Maybe Int
+  , userRevealError :: Maybe ApiError
+  , controlsSeen :: Maybe (Array MuteBlock.DomainControl)
+  , menu :: Maybe PostMenuState
+  -- | Where focus returns if a menu action took its post away (opener id).
+  , refocus :: Maybe String
+  }
+
+initialContent :: ContentState
+initialContent =
+  { epoch: 0
+  , profile: Nothing
+  , waiting: false
+  , reveals: []
+  , revealSeq: 0
+  , revealing: []
+  , revealError: Nothing
+  , repliesOpen: false
+  , user: NotAsked
+  , userRevealed: Nothing
+  , userRevealing: Nothing
+  , userRevealError: Nothing
+  , controlsSeen: Nothing
+  , menu: Nothing
+  , refocus: Nothing
+  }
+
 -- | Record encode/decode instances come from argonaut-codecs, so the Flame
 -- | serialized state round-trips without hand-written instances.
 -- |
@@ -106,6 +160,7 @@ type Model =
   , compose :: Maybe ComposeState
   , profileMenu :: Maybe ProfileMenuState
   , muteBlock :: MuteBlock.Model
+  , content :: ContentState
   , reaction :: ReactionModel
   -- Transport lifetime is independent of the visible Profile/epoch.
   , reactionWrites :: ReactionWrites
@@ -187,6 +242,7 @@ initialModel route =
   , compose: Nothing
   , profileMenu: Nothing
   , muteBlock: MuteBlock.init
+  , content: initialContent
   , reaction: initialReactionModel
   , reactionWrites: { notes: [], versions: [], settings: [] }
   }

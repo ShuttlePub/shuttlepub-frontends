@@ -21,8 +21,10 @@ export type DataState = "populated" | "empty";
  *    data-testid="login-page".
  *  - mute-block-settings: 設定 > ミュート・ブロック (D08 UI mock v5), detected by the SSR
  *    marker data-testid="mute-block" on /settings/mute-block/domains.
+ *  - domain-content: D08 second stage (post menu, hidden / revealed posts, 4-1 sheet,
+ *    person page), detected by the SSR marker data-testid="user-page" on /users/….
  */
-export type ScreenFeature = "sns-shell" | "quick-reaction" | "emumet-username-ui" | "sns-login" | "emumet-webhook-endpoints" | "mute-block-settings";
+export type ScreenFeature = "sns-shell" | "quick-reaction" | "emumet-username-ui" | "sns-login" | "emumet-webhook-endpoints" | "mute-block-settings" | "domain-content";
 
 /**
  * ShuttlePub only. A case with a viewer is captured against the real-mode BFF (stub
@@ -128,6 +130,19 @@ const routes = [
   { app: "ShuttlePub", id: "mute-block-domains", path: "/settings/mute-block/domains", authenticated: false, data: "populated", requires: "mute-block-settings" },
   { app: "ShuttlePub", id: "mute-block-accounts", path: "/settings/mute-block/accounts", authenticated: false, data: "populated", requires: "mute-block-settings" },
   { app: "ShuttlePub", id: "mute-block-block-dialog", path: "/settings/mute-block/domains", authenticated: false, data: "populated", requires: "mute-block-settings" },
+  // D08 second stage (personal-domain-controls-web-ui, ui-spec v5 1-1 / 3-x / 4-1, S8 mock): the
+  // mock Profile mutes noisy.social and blocks bot-farm.example (BFF policy seed).
+  ...([
+    ["domain-post-menu", "/"],
+    ["domain-post-hidden", "/posts/post-nana-playlist"],
+    ["domain-post-revealed-block", "/posts/post-deals-sale"],
+    ["domain-blocked-sheet", "/posts/post-deals-sale"],
+    ["domain-quote-revealed", "/posts/post-ken-quote"],
+    ["domain-replies", "/posts/post-sora-zine"],
+    ["domain-user-hidden", "/users/deals%40bot-farm.example"],
+    ["domain-user-revealed", "/users/deals%40bot-farm.example"],
+    ["domain-user-list-hidden", "/users/ken%40other.example"],
+  ] as const).map(([id, path]) => ({ app: "ShuttlePub", id, path, authenticated: false, data: "populated", requires: "domain-content" }) as const),
 ] as const satisfies readonly {
   app: ScreenApp; id: string; path: string; authenticated: boolean; data: DataState; scenario?: string; requires?: ScreenFeature; viewer?: ScreenViewer;
 }[];
