@@ -951,7 +951,7 @@ async function verifyMuteBlock(page: Page, viewport: Viewport) {
 
   // Our own server is refused; a block that detaches follows needs the acknowledgement.
   await opener.click();
-  await page.locator("#mb-add-input").fill("https://shuttle.example/@me");
+  await page.locator("#mb-add-input").fill("https://shuttlepub.example/@me");
   await dialog.getByRole("button", { name: "ブロック", exact: true }).click();
   await expect(dialog.getByRole("alert")).toContainText("自分のサーバーは指定できません");
   await page.locator("#mb-add-input").fill("example.social");

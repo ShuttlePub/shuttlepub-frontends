@@ -9,6 +9,7 @@ import type { ProfilePolicySource } from "./policy/source.ts";
 import { createMockProfileContext, createRealProfileContext, type ProfileContextSource } from "./profile.ts";
 import type { ShuttlePubApi } from "./rest/client.ts";
 import { createMockApi } from "./rest/mock.ts";
+import { MOCK_LOCAL_HOST } from "./rest/post-fixtures.ts";
 import { createRealApi } from "./rest/real.ts";
 import { createGraphqlHandler } from "./server.ts";
 
@@ -37,8 +38,8 @@ export type AppDeps = {
   mockReset?: boolean;
 };
 
-/** The mock deployment's actor domain (the agreed D08 mock's own server). */
-export const MOCK_OWN_DOMAIN = "shuttle.example";
+/** The mock deployment's actor domain: the host of its local users (rest/post-fixtures.ts). */
+export const MOCK_OWN_DOMAIN = MOCK_LOCAL_HOST;
 
 /** Our own actor domain from EMUMET_PUBLIC_HOST; null when not configured (nothing guessed). */
 function selfDomainsOf(publicHost: string | undefined): string[] | null {

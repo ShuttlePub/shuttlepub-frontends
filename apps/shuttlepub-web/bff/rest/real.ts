@@ -76,16 +76,19 @@ export function createRealApi(options: RealApiOptions): ShuttlePubApi {
         { status: response.status, ...(body === undefined ? {} : { body }) },
       );
     },
-    // No endpoint for these exists in the pinned schema: never guess a path, never
-    // fall back to fixtures.
+    // No endpoint for the posts' display data exists in the pinned schema (S8 alone has
+    // no author, time or thread): never guess a path, never fall back to fixtures.
     async getTimeline() {
       throw missingEndpoint("getTimeline");
     },
-    async getPost() {
-      throw missingEndpoint("getPost");
+    async getPostView() {
+      throw missingEndpoint("getPostView");
     },
     async getReplies() {
       throw missingEndpoint("getReplies");
+    },
+    async getUserPage() {
+      throw missingEndpoint("getUserPage");
     },
     async createPost() {
       throw missingEndpoint("createPost");

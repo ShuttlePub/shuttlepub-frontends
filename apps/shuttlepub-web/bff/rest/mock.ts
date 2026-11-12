@@ -1,6 +1,6 @@
 import { missingEndpoint, type ShuttlePubApi } from "./client.ts";
 import { apiStatusFixture } from "./fixtures.ts";
-import { postFixture, repliesFixture, timelineFixture } from "./post-fixtures.ts";
+import { createMockContent } from "./content-mock.ts";
 import { QuickReactionStore, type EmojiView, type OperationPath, type QuickReactionOperation, type QuickReactionSettings, type ReactionState } from "./quick-reaction.ts";
 import { interpretReply } from "./quick-reaction-reply.ts";
 import { MOCK_QUICK_REACTION_SETUP, mockReactionSummary } from "./reaction-fixtures.ts";
@@ -14,7 +14,8 @@ export type MockApi = ShuttlePubApi & {
 
 /**
  * Serves fixtures. Selected only by SHUTTLEPUB_API_MODE=mock. The status fixture is
- * contract-checked; timeline/post fixtures are app-owned and provisional (post-fixtures.ts).
+ * contract-checked; timeline/post fixtures are app-owned and provisional (post-fixtures.ts)
+ * and what a Profile sees of them goes through the S8 projection (content-mock.ts).
  * Posting is not simulated: there is no contract to model it on.
  *
  * Quick reaction (S3) is stateful: one QuickReactionStore per process answers like the
@@ -24,6 +25,7 @@ export type MockApi = ShuttlePubApi & {
  */
 export function createMockApi(): MockApi {
   const store = new QuickReactionStore(MOCK_QUICK_REACTION_SETUP);
+  const content = createMockContent();
   const quickReaction = async <T>(operation: QuickReactionOperation, path: OperationPath, body?: unknown): Promise<T> =>
     interpretReply<T>(operation, structuredClone(store.handle(operation, path, structuredClone(body))));
   return {
@@ -33,15 +35,10 @@ export function createMockApi(): MockApi {
     async getApiStatus() {
       return structuredClone(apiStatusFixture);
     },
-    async getTimeline(kind) {
-      return timelineFixture(kind);
-    },
-    async getPost(id) {
-      return postFixture(id);
-    },
-    async getReplies(postId) {
-      return repliesFixture(postId);
-    },
+    getTimeline: (kind, viewer) => content.getTimeline(kind, viewer),
+    getPostView: (id, viewer, reveal) => content.getPostView(id, viewer, reveal),
+    getReplies: (postId, viewer) => content.getReplies(postId, viewer),
+    getUserPage: (handle, viewer, reveal) => content.getUserPage(handle, viewer, reveal),
     async createPost() {
       throw missingEndpoint("createPost");
     },

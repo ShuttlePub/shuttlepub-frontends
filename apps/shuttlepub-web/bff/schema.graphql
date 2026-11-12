@@ -32,10 +32,13 @@ type ProfileContext {
 }
 
 # --- Timeline / posts (PROVISIONAL) -------------------------------------------------
-# The pinned OpenAPI schema has no timeline/post endpoint yet. These types are owned by
-# this app so the screen layout can be built against mock fixtures; in real mode every
-# field below fails with extensions.code = NOT_IMPLEMENTED (no invented data).
-# Reaction data (D03) is added by the quick-reaction section below.
+# The pinned OpenAPI has the S8 personal domain content contract (which items a Profile
+# sees, how one post is presented) but no endpoint for the posts' display data (author,
+# time, counts), threads or user pages. These types are owned by this app; in mock mode
+# what they show goes through the S8 projection (bff/rest/content-mock.ts), in real mode
+# every field below fails with extensions.code = NOT_IMPLEMENTED (no invented data).
+# profile is the Profile context id the page shows (see setDomainControl); the Profile's
+# Emumet domain controls decide what is hidden. Reaction data (D03) is added below.
 
 """PROVISIONAL. Which timeline to read."""
 enum TimelineKind {
@@ -57,6 +60,67 @@ type PostAuthor {
   id: ID!
   handle: String!
   displayName: String!
+  """Canonical actor URL: what an individual mute/block of this person names."""
+  actorUrl: String!
+  """Host of actorUrl: the only domain whose mute/block applies to this person (S8 exact match)."""
+  domain: String!
+  """On this server: its domain cannot be muted or blocked."""
+  local: Boolean!
+}
+
+"""S8 ContentRestriction: an independent gate. A reveal never clears it and none of the gated content is sent."""
+enum ContentRestriction {
+  CW
+  SENSITIVE
+  DELETED
+  VISIBILITY
+}
+
+"""A Profile's domain control as S8 reports it on content: mode, the exact domain and the E8 revision. Nothing else about the item."""
+type ContentControl {
+  mode: PolicyMode!
+  domain: String!
+  revision: Int!
+}
+
+"""S8 EmbeddedNotePresentation of a quote's target: exactly one of post / hidden / restriction."""
+type QuotedPost {
+  post: Post
+  hidden: ContentControl
+  restriction: ContentRestriction
+}
+
+"""S8 PostOperationAvailability (domain part only): null = not refused by a domain block; set = the block that refuses it."""
+type PostOperations {
+  reply: ContentControl
+  quote: ContentControl
+  repost: ContentControl
+  like: ContentControl
+  emojiReaction: ContentControl
+}
+
+"""
+One post seen directly (S8 DirectNoteResponse), by its provisional id. Exactly one of post /
+hidden / restriction is set. hidden carries only the control (no text, author or quote).
+operations accompany a visible or restricted post; a reveal never clears a block.
+"""
+type PostView {
+  id: ID!
+  post: Post
+  hidden: ContentControl
+  restriction: ContentRestriction
+  operations: PostOperations
+}
+
+"""PROVISIONAL. A person's page (ui-spec 3-6): the person is always shown, their posts are hidden while control is set."""
+type UserPage {
+  author: PostAuthor!
+  bio: String!
+  """The Profile's control on the person's domain (the badge)."""
+  control: ContentControl
+  """Set while the posts are hidden (posts is then empty)."""
+  hidden: ContentControl
+  posts: [PostView!]!
 }
 
 """PROVISIONAL. A post as shown on a timeline or the post detail screen."""
@@ -73,6 +137,8 @@ type Post {
   """Set when this timeline entry is someone's repost."""
   repostedBy: PostAuthor
   inReplyToId: ID
+  """Set for a quote: its target (S8 EmbeddedNotePresentation)."""
+  quoted: QuotedPost
 }
 
 """PROVISIONAL. Input of the compose form."""
@@ -233,6 +299,10 @@ type Mutation {
   removeDomainControl(profile: ID!, domain: String!, expectedRevision: Int!): PolicyRemoval!
   addActorPolicy(profile: ID!, actorUrl: String!, mode: PolicyMode!): ActorPolicy!
   removeActorPolicy(profile: ID!, id: ID!, mode: PolicyMode!): PolicyRemoval!
+  """S8 POST .../notes/{noteId}/reveal: this one post for the current page only. Null when it does not exist."""
+  revealPost(profile: ID, id: ID!): PostView
+  """A person's page with each of their posts revealed on its own (S8 single-note reveal)."""
+  revealUserPage(profile: ID, handle: String!): UserPage
 }
 
 type Query {
@@ -240,12 +310,14 @@ type Query {
   apiMode: ApiMode!
   apiStatus: ApiStatus!
   profileContext: ProfileContext!
-  """PROVISIONAL. Newest first."""
-  timeline(kind: TimelineKind!): [Post!]!
-  """PROVISIONAL. Null when the post does not exist."""
-  post(id: ID!): Post
-  """PROVISIONAL. Direct replies, oldest first."""
-  replies(postId: ID!): [Post!]!
+  """PROVISIONAL. Newest first; items the Profile's controls suppress are left out without trace (S8)."""
+  timeline(profile: ID, kind: TimelineKind!): [Post!]!
+  """S8 GET .../notes/{noteId} (initially hidden for a controlled domain). Null when the post does not exist."""
+  postView(profile: ID, id: ID!): PostView
+  """PROVISIONAL. Direct replies, oldest first, each as its S8 direct view."""
+  replies(profile: ID, postId: ID!): [PostView!]!
+  """PROVISIONAL. A person's page; null when unknown."""
+  userPage(profile: ID, handle: String!): UserPage
   """GET .../quick-reaction-settings."""
   quickReactionSettings(profileId: ID!): QuickReactionSettings!
   """Reactions on each Note (at most 100), in the order asked."""

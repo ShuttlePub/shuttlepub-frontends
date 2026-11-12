@@ -1,10 +1,11 @@
 import { GraphQLError } from "graphql";
 import { AuthError } from "./auth-error.ts";
-import { policyResolvers } from "./policy/resolvers.ts";
-import type { ProfilePolicySource } from "./policy/source.ts";
+import { activeProfileId, policyError, policyResolvers } from "./policy/resolvers.ts";
+import { PolicyError, type ProfilePolicySource } from "./policy/source.ts";
 import type { ProfileContextSource } from "./profile.ts";
 import { ShuttlePubApiError, type ShuttlePubApi, type ShuttlePubApiErrorKind, type ViewerAuth } from "./rest/client.ts";
-import type { PostVisibility, TimelineKind } from "./rest/posts.ts";
+import type { DomainControlRef } from "./rest/content.ts";
+import type { ContentControl, ContentViewer, Post, PostOperations, PostView, PostVisibility, QuotedPost, TimelineKind, UserPage } from "./rest/posts.ts";
 import type { EmojiRef, EmojiView } from "./rest/quick-reaction.ts";
 import type { ReactionGroup } from "./rest/reactions.ts";
 
@@ -50,9 +51,67 @@ async function guarded<T>(work: () => Promise<T>): Promise<T> {
   try {
     return await work();
   } catch (error) {
-    throw toGraphQLError(error);
+    throw error instanceof PolicyError ? policyError(error) : toGraphQLError(error);
   }
 }
+
+/**
+ * The Profile a content request is for (the Profile context the page shows, checked like the
+ * mute/block settings) and its Emumet domain controls, both read only when the content
+ * source asks: real mode answers NOT_IMPLEMENTED before touching either.
+ */
+function contentViewer(context: GraphQLContext, shown: string | null | undefined): ContentViewer {
+  let resolved: Promise<string> | undefined;
+  const profileId = () => resolved ??= shown == null
+    ? Promise.reject(new GraphQLError("No Profile is shown", { extensions: { code: "PROFILE_REQUIRED" } }))
+    : activeProfileId(context, shown);
+  return {
+    profileId,
+    async controls(): Promise<DomainControlRef[]> {
+      const profile = await profileId();
+      return (await context.policy.listDomainControls(profile))
+        .map((control) => ({ profile_id: profile, domain: control.domain, mode: control.mode, revision: control.revision }));
+    },
+    selfDomains: context.selfDomains ?? [],
+  };
+}
+
+const controlOut = (control: ContentControl | null) =>
+  control === null ? null : { mode: control.mode.toUpperCase(), domain: control.domain, revision: control.revision };
+
+const restrictionOut = (restriction: string | null) => restriction === null ? null : restriction.toUpperCase();
+
+function postOut(post: Post): unknown {
+  return { ...post, quoted: post.quoted === null ? null : quotedOut(post.quoted) };
+}
+
+function quotedOut(quoted: QuotedPost): unknown {
+  return { post: quoted.post === null ? null : postOut(quoted.post), hidden: controlOut(quoted.hidden), restriction: restrictionOut(quoted.restriction) };
+}
+
+const operationsOut = (operations: PostOperations | null) => operations === null ? null : {
+  reply: controlOut(operations.reply),
+  quote: controlOut(operations.quote),
+  repost: controlOut(operations.repost),
+  like: controlOut(operations.like),
+  emojiReaction: controlOut(operations.emojiReaction),
+};
+
+const viewOut = (view: PostView) => ({
+  id: view.id,
+  post: view.post === null ? null : postOut(view.post),
+  hidden: controlOut(view.hidden),
+  restriction: restrictionOut(view.restriction),
+  operations: operationsOut(view.operations),
+});
+
+const userPageOut = (page: UserPage) => ({
+  author: page.author,
+  bio: page.bio,
+  control: controlOut(page.control),
+  hidden: controlOut(page.hidden),
+  posts: page.posts.map(viewOut),
+});
 
 const TIMELINE_KINDS: Record<string, TimelineKind> = { HOME: "home", LOCAL: "local", FEDERATED: "federated" };
 const VISIBILITIES: Record<string, PostVisibility> = { PUBLIC: "public", HOME: "home", FOLLOWERS: "followers", DIRECT: "direct" };
@@ -91,6 +150,16 @@ async function actingAs(context: GraphQLContext, profileId: string): Promise<Vie
 export const resolvers = {
   Mutation: {
     ...policyResolvers.Mutation,
+    revealPost: (_root: unknown, args: { profile?: string | null; id: string }, context: GraphQLContext) =>
+      guarded(async () => {
+        const view = await context.api.getPostView(args.id, contentViewer(context, args.profile), true);
+        return view === null ? null : viewOut(view);
+      }),
+    revealUserPage: (_root: unknown, args: { profile?: string | null; handle: string }, context: GraphQLContext) =>
+      guarded(async () => {
+        const page = await context.api.getUserPage(args.handle, contentViewer(context, args.profile), true);
+        return page === null ? null : userPageOut(page);
+      }),
     selectProfile: (_root: unknown, args: { id: string }, context: GraphQLContext) =>
       guarded(() => context.profiles.selectProfile(args.id)),
     createPost: (_root: unknown, args: { input: { text: string; visibility: string } }, context: GraphQLContext) =>
@@ -122,12 +191,20 @@ export const resolvers = {
       }),
   },
   Query: {
-    timeline: (_root: unknown, args: { kind: string }, context: GraphQLContext) =>
-      guarded(() => context.api.getTimeline(TIMELINE_KINDS[args.kind]!)),
-    post: (_root: unknown, args: { id: string }, context: GraphQLContext) =>
-      guarded(() => context.api.getPost(args.id)),
-    replies: (_root: unknown, args: { postId: string }, context: GraphQLContext) =>
-      guarded(() => context.api.getReplies(args.postId)),
+    timeline: (_root: unknown, args: { profile?: string | null; kind: string }, context: GraphQLContext) =>
+      guarded(async () => (await context.api.getTimeline(TIMELINE_KINDS[args.kind]!, contentViewer(context, args.profile))).map(postOut)),
+    postView: (_root: unknown, args: { profile?: string | null; id: string }, context: GraphQLContext) =>
+      guarded(async () => {
+        const view = await context.api.getPostView(args.id, contentViewer(context, args.profile), false);
+        return view === null ? null : viewOut(view);
+      }),
+    replies: (_root: unknown, args: { profile?: string | null; postId: string }, context: GraphQLContext) =>
+      guarded(async () => (await context.api.getReplies(args.postId, contentViewer(context, args.profile))).map(viewOut)),
+    userPage: (_root: unknown, args: { profile?: string | null; handle: string }, context: GraphQLContext) =>
+      guarded(async () => {
+        const page = await context.api.getUserPage(args.handle, contentViewer(context, args.profile), false);
+        return page === null ? null : userPageOut(page);
+      }),
     ...policyResolvers.Query,
     availableProfiles: (_root: unknown, _args: unknown, context: GraphQLContext) =>
       guarded(() => context.profiles.availableProfiles()),

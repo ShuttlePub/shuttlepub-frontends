@@ -27,7 +27,7 @@ type GqlMode = "MUTE" | "BLOCK";
 const fromGqlMode = (mode: GqlMode): PolicyMode => (mode === "BLOCK" ? "block" : "mute");
 const toGqlMode = (mode: PolicyMode): GqlMode => (mode === "block" ? "BLOCK" : "MUTE");
 
-function policyError(error: unknown): unknown {
+export function policyError(error: unknown): unknown {
   if (error instanceof PolicyError) {
     return new GraphQLError(error.message, {
       extensions: { code: error.code, ...(error.status === undefined ? {} : { upstreamStatus: error.status }) },
@@ -47,7 +47,7 @@ async function guarded<T>(work: () => Promise<T>): Promise<T> {
   }
 }
 
-async function activeProfileId(context: PolicyContext, shown: string): Promise<string> {
+export async function activeProfileId(context: PolicyContext, shown: string): Promise<string> {
   if (context.profiles.mode === "mock") {
     // Mock selection is stateless (bff/profile.ts): the Profile the page shows acts, as
     // long as it is one of the mock Profiles (like the quick reaction mock). Real mode
