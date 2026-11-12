@@ -1,0 +1,39 @@
+{
+  "producer": {
+    "repository": "ShuttlePub/ShuttlePub",
+    "commit": "60cb47d60da3c5b4ff3fc570fe3bc1796f983b3b",
+    "path": "server/tests/fixtures/personal_domain"
+  },
+  "files": [
+    {
+      "file": "counts.json",
+      "sha256": "f4eee0fd87afea52061623121f4164933a9c23605050183352a8e670d3af6603",
+      "bytes": 1732
+    },
+    {
+      "file": "e8_contract.json",
+      "sha256": "080823c0ecfe5a14119fa00b5223355ef1688d6349268e57ce4989f87d487610",
+      "bytes": 5040
+    },
+    {
+      "file": "rejections.json",
+      "sha256": "ce55eb66a36c8ba703ee72750ccd7b94207e1eb648a973e1df6d01eef1abde29",
+      "bytes": 4320
+    },
+    {
+      "file": "reveal.json",
+      "sha256": "7b93ff4aba6e81ffc34edb2aa03e0e658e6ee170a13e96bbbf891a85f6a49c21",
+      "bytes": 21604
+    },
+    {
+      "file": "schema_cases.json",
+      "sha256": "b4ddc59ec40ec629a8c23628ac632f522a33c2a5b0cd1315d72f925d471364bb",
+      "bytes": 33536
+    },
+    {
+      "file": "surfaces.json",
+      "sha256": "1bd27cc7fb28510f2fdb6b19d7051969bf959ef83110365e30005fe58f3c80c5",
+      "bytes": 29369
+    }
+  ]
+}

@@ -7,7 +7,8 @@
 // (bff/rest/quick-reaction-scenarios.test.ts), so the mock is held to the producer's
 // examples, not to a reading of the contract made here. The lock records the producer
 // commit (the same commit as producer.lock.json) and the SHA-256 of every file.
-// Update only through `bun run openapi:sync-scenarios` (scripts/sync-reaction-scenarios.ts).
+// Update only through `bun run openapi:sync-scenarios` (scripts/sync-reaction-scenarios.ts),
+// which also vendors the S8 fixture set below.
 
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -16,6 +17,18 @@ import { OPENAPI_DIR, OpenApiLockError, isCommitSha, sha256Hex } from "./lock.ts
 export const SCENARIO_DIR = join(OPENAPI_DIR, "quick-reaction-scenarios");
 export const SCENARIO_LOCK_FILE = "scenarios.lock.json";
 export const PRODUCER_SCENARIO_PATH = "server/tests/fixtures/quick_reaction/scenarios";
+
+// The producer's S8 (personal domain content) contract fixtures: surfaces, single-note
+// reveal, schema cases, refusals and counts. Vendored the same way and replayed
+// against the mock's S8 projection (bff/rest/content-fixtures.test.ts).
+export const PERSONAL_DOMAIN_DIR = join(OPENAPI_DIR, "personal-domain-fixtures");
+export const PRODUCER_PERSONAL_DOMAIN_PATH = "server/tests/fixtures/personal_domain";
+
+/** Every vendored fixture set (scripts/sync-reaction-scenarios.ts, scripts/verify-openapi.ts). */
+export const PRODUCER_FIXTURE_SETS = [
+  { label: "quick reaction scenarios", directory: SCENARIO_DIR, producerPath: PRODUCER_SCENARIO_PATH },
+  { label: "personal domain content fixtures", directory: PERSONAL_DOMAIN_DIR, producerPath: PRODUCER_PERSONAL_DOMAIN_PATH },
+] as const;
 
 export type ScenarioLock = {
   producer: { repository: string; commit: string; path: string };
