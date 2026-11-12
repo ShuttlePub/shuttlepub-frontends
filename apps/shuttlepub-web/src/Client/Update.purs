@@ -4,10 +4,13 @@ import Prelude
 
 import App.Api.Error (ApiError(..))
 import App.Api.Error as Error
-import App.Api.GraphQL (createPost, fetchApiMode, fetchApiStatus, fetchAvailableProfiles, fetchPostDetail, fetchProfileContext, fetchTimeline, selectProfile)
-import App.Dom (focusById, focusFirstIn, logoutAndReload, scrollToTop, setScrollLock)
+import App.Api.GraphQL (createPost, fetchApiMode, fetchApiStatus, fetchAvailableProfiles, fetchPostDetail, fetchProfileContext, fetchTimeline, fetchUserPage, revealPost, revealUserPage, selectProfile)
+import App.Dom (focusById, focusFirstIn, focusIfLost, logoutAndReload, scrollToTop, setScrollLock)
 import App.Message (Message(..))
-import App.Model (DetailTab(..), Model, RemoteData(..), emptyCompose, fromEither)
+import App.Model (DetailTab(..), Model, PostDetailData, RemoteData(..), activeProfile, emptyCompose, fromEither)
+import App.Post (Post, PostView, UserPage)
+import App.View.Hidden (hideButtonId, revealButtonId)
+import App.View.Pages (contentHeadingId)
 import App.MuteBlock.Types as MuteBlock
 import App.MuteBlock.Update as MuteBlockUpdate
 import App.Post (TimelineTab, timelineTabFromValue)
@@ -18,9 +21,9 @@ import App.View.Compose (composeTextId, visibilityButtonId)
 import App.View.Pages (detailTabId, timelineTabId)
 import App.View.Shell (composeButtonDesktopId, composeButtonMobileId, profileButtonDesktopId, profileButtonMobileId, profileMenuId)
 import Client.Reaction as QR
-import Data.Array (cons)
+import Data.Array (cons, elem, filter, find, mapMaybe, snoc)
 import Data.Either (Either(..), either)
-import Data.Maybe (Maybe(..), isJust, maybe)
+import Data.Maybe (Maybe(..), fromMaybe, isJust, isNothing, maybe)
 import Data.String.Common (trim)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
@@ -101,14 +104,85 @@ mkUpdate nav model = case _ of
   DocumentEscape -> escape model
 
   SelectTimelineTab tab -> selectTimelineTab model tab false
-  TimelineLoaded tab result
-    | tab == model.timelineTab -> QR.postsShown (either (const []) identity result) (model { timeline = fromEither result })
+  TimelineLoaded tab epoch result
+    | tab == model.timelineTab && epoch == model.content.epoch ->
+        withRefocus (QR.postsShown (either (const []) identity result) (model { timeline = fromEither result }))
     | otherwise -> noMessages model
-  PostDetailLoaded postId result
-    | model.route == Just (PostDetail postId) ->
-        QR.postsShown (either (const []) (\found -> maybe [] (\post -> cons post found.replies) found.post) result)
-          (model { detail = fromEither result })
+  PostDetailLoaded postId epoch result
+    | model.route == Just (PostDetail postId) && epoch == model.content.epoch ->
+        withRefocus (QR.postsShown (either (const []) detailPosts result) (model { detail = fromEither result }))
     | otherwise -> noMessages model
+  UserPageLoaded handle epoch result
+    | model.route == Just (UserProfile handle) && epoch == model.content.epoch ->
+        withRefocus (QR.postsShown (either (const []) (maybe [] (\page -> viewPosts page.posts)) result) (model { content = model.content { user = fromEither result } }))
+    | otherwise -> noMessages model
+
+  -- ui-spec 3-1 / 3-2 / 3-5 (S8 single-note reveal, page-local).
+  RevealPost id -> case model.content.profile of
+    Just profile | not (elem id model.content.revealing) ->
+      Tuple (model { content = model.content { revealing = snoc model.content.revealing id, revealError = Nothing } })
+        [ Just <<< PostRevealed id model.content.epoch <$> revealPost profile id ]
+    _ -> noMessages model
+  PostRevealed id epoch result
+    | epoch /= model.content.epoch -> noMessages model
+    | otherwise ->
+        let
+          settled = model { content = model.content { revealing = filter (_ /= id) model.content.revealing } }
+        in
+          case result of
+            Right (Just view) ->
+              let
+                shown = settled { content = settled.content { reveals = snoc (filter (\other -> other.id /= id) settled.content.reveals) view } }
+                Tuple next effects = QR.postsShown (viewPosts [ view ]) shown
+              in
+                Tuple next (effects <> [ effect (focusById (hideButtonId id)) ])
+            Right Nothing -> noMessages settled { content = settled.content { revealError = Just { id, error: Unexpected "The post is gone" } } }
+            Left error -> noMessages settled { content = settled.content { revealError = Just { id, error } } }
+  HidePost id ->
+    Tuple (model { content = model.content { reveals = filter (\view -> view.id /= id) model.content.reveals } })
+      [ effect (focusById (revealButtonId id)) ]
+  ToggleHiddenReplies -> noMessages model { content = model.content { repliesOpen = not model.content.repliesOpen } }
+  RevealUserPosts -> case model.content.profile, model.route of
+    Just profile, Just (UserProfile handle) | not model.content.userRevealing ->
+      Tuple (model { content = model.content { userRevealing = true, userRevealError = Nothing } })
+        [ Just <<< UserPostsRevealed handle model.content.epoch <$> revealUserPage profile handle ]
+    _, _ -> noMessages model
+  UserPostsRevealed handle epoch result
+    | epoch /= model.content.epoch || model.route /= Just (UserProfile handle) -> noMessages model
+    | otherwise ->
+        let
+          settled = model { content = model.content { userRevealing = false } }
+        in
+          case result of
+            Right (Just page) ->
+              let
+                Tuple next effects = QR.postsShown (viewPosts page.posts) (settled { content = settled.content { userRevealed = Just page } })
+              in
+                Tuple next (effects <> [ effect (focusById (hideButtonId "user")) ])
+            Right Nothing -> noMessages settled { content = settled.content { userRevealError = Just (Unexpected "The person is gone") } }
+            Left error -> noMessages settled { content = settled.content { userRevealError = Just error } }
+  HideUserPosts ->
+    Tuple (model { content = model.content { userRevealed = Nothing } }) [ effect (focusById (revealButtonId "user")) ]
+
+  -- The "…" menu (ui-spec 1-1 主導線). Desktop: popover under the button; mobile:
+  -- bottom sheet. Esc / click-away close it and return focus to the button.
+  OpenPostMenu key opener ->
+    let
+      next = model { content = model.content { menu = Just { postId: key, opener } }, profileMenu = Nothing, reaction = model.reaction { picker = Nothing, chipMenu = Nothing } }
+    in
+      Tuple next [ syncScrollLock next, effect (focusFirstIn "#sp-post-menu") ]
+  ClosePostMenu -> closePostMenu model
+  MenuAction message -> case model.content.menu of
+    Just menu ->
+      let
+        closed = model { content = model.content { menu = Nothing, refocus = Just menu.opener } }
+        Tuple next effects = delegate closed message
+        -- A dialog takes focus itself; an immediate action returns it to the button
+        -- (or, once its post is gone, to the page heading).
+        back = if isJust next.muteBlock.dialog then [] else [ effect (focusIfLost [ menu.opener, contentHeadingId ]) ]
+      in
+        Tuple next (effects <> [ syncScrollLock next ] <> back)
+    Nothing -> noMessages model
   SelectDetailTab tab -> selectDetailTab model tab false
 
   OpenCompose opener ->
@@ -197,27 +271,104 @@ type Step = { model :: Model, effects :: Array (Aff (Maybe Message)) }
 effect :: Effect Unit -> Aff (Maybe Message)
 effect run = liftEffect run $> Nothing
 
--- | Loads what the screen needs. Only Home and PostDetail have data today.
+-- | Loads what the screen needs: Home, a post and a person's page have content. A new
+-- | screen starts with nothing revealed (S8 reveals are page-local).
 enterRoute :: Model -> Maybe Route -> Step
 enterRoute model = case _ of
-  Just Home ->
-    { model: model { timeline = Loading }
-    , effects: [ loadTimeline model.timelineTab ]
-    }
-  Just (PostDetail postId) ->
-    { model: model { detail = Loading, detailTab = RepliesTab }
-    , effects: [ Just <<< PostDetailLoaded postId <$> fetchPostDetail postId ]
-    }
+  Just Home -> requestContent (fresh model) { timeline = Loading }
+  Just (PostDetail _) -> requestContent (fresh model) { detail = Loading, detailTab = RepliesTab }
+  Just (UserProfile _) -> requestContent (fresh model) { content { user = Loading } }
   _ -> { model, effects: [] }
   where
-  loadTimeline tab = Just <<< TimelineLoaded tab <$> fetchTimeline tab
+  fresh m = m
+    { content = m.content
+        { reveals = []
+        , revealing = []
+        , revealError = Nothing
+        , repliesOpen = false
+        , userRevealed = Nothing
+        , userRevealing = false
+        , userRevealError = Nothing
+        , menu = Nothing
+        , refocus = Nothing
+        }
+    }
+
+-- | Requests the shown screen's content for the current Profile context, in a new
+-- | epoch (older answers are dropped). Until the Profile context is known it waits:
+-- | the Profile's own domain controls decide what is shown. Revealed posts of the page
+-- | are revealed again (after a mute/block change they may show more or less).
+requestContent :: Model -> Step
+requestContent model = case model.profileContext of
+  Loaded _ -> request
+  Failed _ -> request
+  _ -> { model: model { content = model.content { waiting = true } }, effects: [] }
+  where
+  profile = map _.id (activeProfile model)
+  epoch = model.content.epoch + 1
+  reveals = map _.id model.content.reveals
+  request =
+    { model: model
+        { content = model.content
+            { epoch = epoch
+            , profile = profile
+            , waiting = false
+            , revealing = reveals
+            , userRevealing = isJust model.content.userRevealed
+            }
+        }
+    , effects: case model.route of
+        Just Home -> [ Just <<< TimelineLoaded model.timelineTab epoch <$> fetchTimeline profile model.timelineTab ]
+        Just (PostDetail postId) ->
+          [ Just <<< PostDetailLoaded postId epoch <$> fetchPostDetail profile postId ]
+            <> case profile of
+              Just id -> map (\post -> Just <<< PostRevealed post epoch <$> revealPost id post) reveals
+              Nothing -> []
+        Just (UserProfile handle) ->
+          [ Just <<< UserPageLoaded handle epoch <$> fetchUserPage profile handle ]
+            <> case profile, model.content.userRevealed of
+              Just id, Just _ -> [ Just <<< UserPostsRevealed handle epoch <$> revealUserPage id handle ]
+              _, _ -> []
+        _ -> []
+    }
+
+contentRoute :: Maybe Route -> Boolean
+contentRoute = case _ of
+  Just Home -> true
+  Just (PostDetail _) -> true
+  Just (UserProfile _) -> true
+  _ -> false
+
+-- | The posts a screen shows (for their reactions, D03): visible views only.
+viewPosts :: Array PostView -> Array Post
+viewPosts = mapMaybe _.post
+
+detailPosts :: PostDetailData -> Array Post
+detailPosts found = viewPosts (maybe [] pure found.view <> found.replies)
+
+-- | Content arrived: if a menu action took the focused post away, focus goes back to
+-- | its button or the page heading (only when focus was actually lost).
+withRefocus :: Tuple Model (Array (Aff (Maybe Message))) -> Tuple Model (Array (Aff (Maybe Message)))
+withRefocus (Tuple model effects) = case model.content.refocus of
+  Just opener -> Tuple (model { content = model.content { refocus = Nothing } }) (effects <> [ effect (focusIfLost [ opener, contentHeadingId ]) ])
+  Nothing -> Tuple model effects
+
+closePostMenu :: Model -> Tuple Model (Array (Aff (Maybe Message)))
+closePostMenu model = case model.content.menu of
+  Just menu ->
+    let
+      next = model { content = model.content { menu = Nothing } }
+    in
+      Tuple next [ syncScrollLock next, effect (focusById menu.opener) ]
+  Nothing -> noMessages model
 
 selectTimelineTab :: Model -> TimelineTab -> Boolean -> Tuple Model (Array (Aff (Maybe Message)))
 selectTimelineTab model tab moveFocus =
-  Tuple (model { timelineTab = tab, timeline = Loading })
-    ( [ Just <<< TimelineLoaded tab <$> fetchTimeline tab ]
-        <> if moveFocus then [ effect (focusById (timelineTabId tab)) ] else []
-    )
+  let
+    requested = requestContent (model { timelineTab = tab, timeline = Loading })
+  in
+    Tuple requested.model
+      (requested.effects <> if moveFocus then [ effect (focusById (timelineTabId tab)) ] else [])
 
 selectDetailTab :: Model -> DetailTab -> Boolean -> Tuple Model (Array (Aff (Maybe Message)))
 selectDetailTab model tab moveFocus =
@@ -262,6 +413,7 @@ headerSwitcher model = if model.isMobile then profileButtonMobileId else profile
 -- | the mobile Profile bottom sheet. The desktop Profile dropdown is not modal.
 scrollLocked :: Model -> Boolean
 scrollLocked model = isJust model.compose || (model.isMobile && isJust model.profileMenu) || QR.pickerLocksScroll model || isJust model.muteBlock.dialog
+  || (model.isMobile && isJust model.content.menu)
 
 syncScrollLock :: Model -> Aff (Maybe Message)
 syncScrollLock model = effect (setScrollLock (scrollLocked model))
@@ -271,6 +423,7 @@ syncScrollLock model = effect (setScrollLock (scrollLocked model))
 escape :: Model -> Tuple Model (Array (Aff (Maybe Message)))
 escape model = case model.compose of
   _ | isJust model.muteBlock.dialog -> delegate model MuteBlock.CloseDialog
+  _ | isJust model.content.menu -> closePostMenu model
   Just state
     | state.visibilityMenuOpen ->
         Tuple (model { compose = Just state { visibilityMenuOpen = false } })
@@ -284,7 +437,7 @@ escape model = case model.compose of
 closeOverlays :: Model -> Step
 closeOverlays model =
   let
-    next = model { compose = Nothing, profileMenu = Nothing, muteBlock = model.muteBlock { dialog = Nothing } }
+    next = model { compose = Nothing, profileMenu = Nothing, muteBlock = model.muteBlock { dialog = Nothing }, content = model.content { menu = Nothing } }
   in
     { model: next
     , effects: if scrollLocked model then [ syncScrollLock next ] else []
@@ -297,15 +450,19 @@ profileChanged model =
   let
     Tuple synced syncEffects = QR.syncProfile (model { muteBlock = model.muteBlock { profileKnown = false } })
     Tuple entered enterEffects = enterMuteBlock synced
+    -- Content shown for another Profile (or still waiting for one) is requested again,
+    -- from scratch: reveals were the previous Profile's.
+    changed = contentRoute entered.route && (entered.content.waiting || entered.content.profile /= map _.id (activeProfile entered))
+    content = if changed then enterRoute entered entered.route else { model: entered, effects: [] }
   in
-    Tuple entered (syncEffects <> enterEffects)
+    Tuple content.model (syncEffects <> enterEffects <> content.effects)
 
 -- | The mute/block page (D08) loads its lists once it is shown and the selected
 -- | Profile is known; a Profile switch reloads them. A failed Profile context is
 -- | shown as the page's error.
 enterMuteBlock :: Model -> Tuple Model (Array (Aff (Maybe Message)))
 enterMuteBlock model
-  | onMuteBlock model.route && not model.muteBlock.profileKnown = case model.profileContext of
+  | (onMuteBlock model.route || contentRoute model.route) && not model.muteBlock.profileKnown = case model.profileContext of
       Loaded context -> delegate model (MuteBlock.ProfileKnown (Right (map _.id context.activeProfile)))
       Failed error -> delegate model (MuteBlock.ProfileKnown (Left (failureOf error)))
       _ -> noMessages model
@@ -323,8 +480,12 @@ delegate model message =
     Tuple sub effects = MuteBlockUpdate.update model.muteBlock message
     next = model { muteBlock = sub }
     lock = if scrollLocked next /= scrollLocked model then [ syncScrollLock next ] else []
+    -- A written domain control changes what the content screens show (S8): ask again.
+    refreshed = case model.muteBlock.domains, sub.domains of
+      MuteBlock.Ready before, MuteBlock.Ready after | before /= after && contentRoute next.route -> requestContent next
+      _, _ -> { model: next, effects: [] }
   in
-    Tuple next (map (map (map MuteBlockMsg)) effects <> lock)
+    Tuple refreshed.model (map (map (map MuteBlockMsg)) effects <> lock <> refreshed.effects)
 
 toastAction :: ReactionMsg -> Boolean
 toastAction = case _ of

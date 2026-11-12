@@ -5,6 +5,7 @@ module App.MuteBlock.Api
   ( fetchDomainControls
   , fetchActorPolicies
   , fetchImpact
+  , fetchActorImpact
   , checkDomain
   , setDomainControl
   , removeDomainControl
@@ -89,6 +90,12 @@ fetchImpact :: String -> String -> Aff (Either Failure Impact)
 fetchImpact profile domain = run (\raw -> { following: raw.domainBlockImpact.following, followers: raw.domainBlockImpact.followers })
   $ queryFullRes decodeJson identity queryClient "DomainBlockImpact"
       { domainBlockImpact: { profile: ID profile, domain } =>> { following: unit, followers: unit } }
+
+-- | Follows with exactly this actor that an individual block detaches.
+fetchActorImpact :: String -> String -> Aff (Either Failure Impact)
+fetchActorImpact profile actorUrl = run (\raw -> { following: raw.actorBlockImpact.following, followers: raw.actorBlockImpact.followers })
+  $ queryFullRes decodeJson identity queryClient "ActorBlockImpact"
+      { actorBlockImpact: { profile: ID profile, actorUrl } =>> { following: unit, followers: unit } }
 
 checkDomain :: String -> Aff (Either Failure { domain :: Maybe String, error :: Maybe String })
 checkDomain input = run (\raw -> { domain: raw.checkDomainInput.domain, error: map show raw.checkDomainInput.error })

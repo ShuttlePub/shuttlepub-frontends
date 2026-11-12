@@ -354,7 +354,8 @@ async function prepareShuttlePubShell(page: Page, item: ScreenCase) {
   // Quick reaction UI (D03) present on this revision: wait for its data, which arrives
   // after the posts (reaction chips) or the Profile (favourites).
   const reactionUi = await page.locator(".sp-reaction-layer").count() > 0;
-  if (reactionUi && (item.path === "/" || item.path.startsWith("/posts/"))) {
+  // D08 cases open hidden posts (no reactions to wait for) and wait for their own state below.
+  if (reactionUi && !item.id.startsWith("domain-") && (item.path === "/" || item.path.startsWith("/posts/"))) {
     await expect(content.getByTestId("reactions").first()).toBeVisible();
   }
   if (reactionUi && item.path === "/settings") {
@@ -383,6 +384,8 @@ async function prepareShuttlePubShell(page: Page, item: ScreenCase) {
     await expect(content).toContainText("Fixture Profile");
   } else if (item.id.startsWith("reaction-")) {
     await prepareQuickReaction(page, item);
+  } else if (item.id.startsWith("domain-")) {
+    await prepareDomainContent(page, item);
   } else if (item.id.startsWith("mute-block-")) {
     // Rows come from the BFF's stateful mock through GraphQL after hydration.
     const panel = item.id === "mute-block-accounts" ? "account-panel" : "domain-panel";
@@ -401,6 +404,52 @@ async function prepareShuttlePubShell(page: Page, item: ScreenCase) {
       await page.getByTestId("block-impact").locator("summary").click();
       await expect(page.getByTestId("block-dialog")).toContainText("example.social をブロックしますか？");
     }
+  }
+}
+
+/**
+ * D08 second stage (host personal-domain-controls-ui ui-spec v5): the post menu, a muted
+ * domain's post opened by URL (hidden), a blocked one revealed (locked operations) and
+ * its 4-1 sheet, a revealed quote whose target stays hidden (S8), folded replies opened,
+ * and a blocked person's page hidden / revealed. Reveals are stateless; nothing is written.
+ */
+async function prepareDomainContent(page: Page, item: ScreenCase) {
+  const content = page.locator("#content");
+  const reveal = async () => {
+    await expect(page.getByTestId("hidden-post")).toBeVisible();
+    await page.getByRole("button", { name: /この投稿だけ表示|投稿を表示/ }).click();
+  };
+  if (item.id === "domain-post-menu") {
+    await expect(content.getByTestId("reactions").first()).toBeVisible();
+    await page.locator("#sp-more-post-mika-picker").click();
+    await expect(page.getByTestId("post-menu").getByRole("menuitem")).toHaveCount(4);
+  } else if (item.id === "domain-post-hidden") {
+    await expect(page.getByTestId("hidden-post")).toHaveAttribute("data-mode", "mute");
+  } else if (item.id === "domain-post-revealed-block" || item.id === "domain-blocked-sheet") {
+    await reveal();
+    await expect(page.locator('[data-locked="reply"]')).toBeVisible();
+    if (item.id === "domain-blocked-sheet") {
+      await page.locator('[data-locked="reply"]').click();
+      await expect(page.getByTestId("blocked-sheet").getByRole("button", { name: "閉じる" })).toBeFocused();
+    } else {
+      await expect(page.getByRole("button", { name: "隠す" })).toBeFocused();
+    }
+  } else if (item.id === "domain-quote-revealed") {
+    await reveal();
+    await expect(content.getByTestId("quote")).toHaveAttribute("data-state", "hidden");
+  } else if (item.id === "domain-replies") {
+    await expect(content.getByTestId("reactions").first()).toBeVisible();
+    await page.getByTestId("hidden-replies").click();
+    await page.getByTestId("hidden-reply").first().getByRole("button", { name: "表示" }).click();
+    await expect(page.getByTestId("revealed-reply")).toBeVisible();
+  } else if (item.id === "domain-user-hidden") {
+    await expect(page.getByTestId("user-page")).toHaveAttribute("data-state", "loaded");
+    await expect(page.getByTestId("hidden-post")).toBeVisible();
+  } else if (item.id === "domain-user-revealed") {
+    await expect(page.getByTestId("user-page")).toHaveAttribute("data-state", "loaded");
+    await reveal();
+    await expect(page.getByTestId("revealed-posts")).toBeVisible();
+    await expect(page.getByTestId("restricted-post")).toBeVisible();
   }
 }
 

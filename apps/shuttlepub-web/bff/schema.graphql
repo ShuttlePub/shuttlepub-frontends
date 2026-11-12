@@ -330,6 +330,8 @@ type Query {
   actorPolicies(profile: ID!): [ActorPolicy!]!
   """Follows that a block of this exact domain would detach (pending and accepted)."""
   domainBlockImpact(profile: ID!, domain: String!): DomainBlockImpact!
+  """Follows with exactly this actor that an individual block would detach (domain = the actor's host)."""
+  actorBlockImpact(profile: ID!, actorUrl: String!): DomainBlockImpact!
   """Normalizes a typed domain (URL, @user@host, path, port, case, trailing dot, IDN)."""
   checkDomainInput(input: String!): DomainInputCheck!
 }

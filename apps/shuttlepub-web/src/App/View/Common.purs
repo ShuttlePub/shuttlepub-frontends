@@ -76,6 +76,9 @@ icon kind = HE.svg
     "logout" -> "M15 4h4v16h-4M10 8l-4 4 4 4M6 12h11"
     "login" -> "M9 4H5v16h4M14 8l4 4-4 4M18 12H7"
     "warn" -> "M12 3 2 21h20ZM12 10v5M12 18h.01"
+    "eyeoff" -> "M3 3l18 18M10.6 5.1A10 10 0 0 1 12 5c6 0 10 7 10 7a17 17 0 0 1-3.1 3.9M6.6 6.6C3.9 8.4 2 12 2 12s4 7 10 7c1.7 0 3.2-.5 4.5-1.2M9.9 9.9a3 3 0 0 0 4.2 4.2"
+    "block" -> "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM5.6 5.6l12.8 12.8"
+    "userx" -> "M15 19a6 6 0 0 0-12 0M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M17 8l5 5M22 8l-5 5"
     _ -> "M12 12h.01"
 
 data AvatarSize = AvatarRegular | AvatarSmall | AvatarTiny | AvatarLarge

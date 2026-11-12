@@ -6,6 +6,7 @@ import Data.Newtype as Data.Newtype
 import Data.Void as Data.Void
 import Generated.Directives.Gql (Directives)
 import Generated.Schema.Gql.Enum.ApiMode (ApiMode)
+import Generated.Schema.Gql.Enum.ContentRestriction (ContentRestriction)
 import Generated.Schema.Gql.Enum.DomainInputError (DomainInputError)
 import Generated.Schema.Gql.Enum.EmojiKind (EmojiKind)
 import Generated.Schema.Gql.Enum.EmojiUnavailableReason (EmojiUnavailableReason)
@@ -39,26 +40,35 @@ newtype Query = Query
       ->
       -- | PROVISIONAL. The server's custom emoji (available or not).
       Array (AsGql "Emoji" Emoji)
-  , post ::
-      { id :: NotNull (AsGql "ID" GraphQL.Client.ID.ID) }
-      ->
-      -- | PROVISIONAL. Null when the post does not exist.
-      AsGql "Post" (Data.Maybe.Maybe (AsGql "Post" Post))
   , checkDomainInput ::
       { input :: NotNull (AsGql "String" String) }
       ->
       -- | Normalizes a typed domain (URL, @user@host, path, port, case, trailing dot, IDN).
       AsGql "DomainInputCheck" DomainInputCheck
-  , timeline ::
-      { kind :: NotNull (AsGql "TimelineKind" TimelineKind) }
+  , userPage ::
+      { handle :: NotNull (AsGql "String" String), profile :: AsGql "ID" GraphQL.Client.ID.ID }
       ->
-      -- | PROVISIONAL. Newest first.
+      -- | PROVISIONAL. A person's page; null when unknown.
+      AsGql "UserPage" (Data.Maybe.Maybe (AsGql "UserPage" UserPage))
+  , postView ::
+      { id :: NotNull (AsGql "ID" GraphQL.Client.ID.ID), profile :: AsGql "ID" GraphQL.Client.ID.ID }
+      ->
+      -- | S8 GET .../notes/{noteId} (initially hidden for a controlled domain). Null when the post does not exist.
+      AsGql "PostView" (Data.Maybe.Maybe (AsGql "PostView" PostView))
+  , timeline ::
+      { kind :: NotNull (AsGql "TimelineKind" TimelineKind)
+      , profile :: AsGql "ID" GraphQL.Client.ID.ID
+      }
+      ->
+      -- | PROVISIONAL. Newest first; items the Profile's controls suppress are left out without trace (S8).
       Array (AsGql "Post" Post)
   , replies ::
-      { postId :: NotNull (AsGql "ID" GraphQL.Client.ID.ID) }
+      { postId :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
+      , profile :: AsGql "ID" GraphQL.Client.ID.ID
+      }
       ->
-      -- | PROVISIONAL. Direct replies, oldest first.
-      Array (AsGql "Post" Post)
+      -- | PROVISIONAL. Direct replies, oldest first, each as its S8 direct view.
+      Array (AsGql "PostView" PostView)
   , domainControls ::
       { profile :: NotNull (AsGql "ID" GraphQL.Client.ID.ID) }
       ->
@@ -69,6 +79,13 @@ newtype Query = Query
       ->
       -- | Individual mutes/blocks of the selected Profile, newest first.
       Array (AsGql "ActorPolicy" ActorPolicy)
+  , actorBlockImpact ::
+      { actorUrl :: NotNull (AsGql "String" String)
+      , profile :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
+      }
+      ->
+      -- | Follows with exactly this actor that an individual block would detach (domain = the actor's host).
+      AsGql "DomainBlockImpact" DomainBlockImpact
   , domainBlockImpact ::
       { domain :: NotNull (AsGql "String" String)
       , profile :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
@@ -102,6 +119,16 @@ newtype Mutation = Mutation
       ->
       -- | PROVISIONAL. Always NOT_IMPLEMENTED (both modes) until the backend publishes a contract.
       AsGql "Post" Post
+  , revealUserPage ::
+      { handle :: NotNull (AsGql "String" String), profile :: AsGql "ID" GraphQL.Client.ID.ID }
+      ->
+      -- | A person's page with each of their posts revealed on its own (S8 single-note reveal).
+      AsGql "UserPage" (Data.Maybe.Maybe (AsGql "UserPage" UserPage))
+  , revealPost ::
+      { id :: NotNull (AsGql "ID" GraphQL.Client.ID.ID), profile :: AsGql "ID" GraphQL.Client.ID.ID }
+      ->
+      -- | S8 POST .../notes/{noteId}/reveal: this one post for the current page only. Null when it does not exist.
+      AsGql "PostView" (Data.Maybe.Maybe (AsGql "PostView" PostView))
   , addActorPolicy ::
       { actorUrl :: NotNull (AsGql "String" String)
       , mode :: NotNull (AsGql "PolicyMode" PolicyMode)
@@ -157,6 +184,14 @@ newtype Mutation = Mutation
   }
 
 derive instance Data.Newtype.Newtype Mutation _
+-- | A Profile's domain control as S8 reports it on content: mode, the exact domain and the E8 revision. Nothing else about the item.
+newtype ContentControl = ContentControl
+  { domain :: {} -> AsGql "String" String
+  , mode :: {} -> AsGql "PolicyMode" PolicyMode
+  , revision :: {} -> AsGql "Int" Int
+  }
+
+derive instance Data.Newtype.Newtype ContentControl _
 -- | A removed setting: the domain or the actor policy id.
 newtype PolicyRemoval = PolicyRemoval { key :: {} -> AsGql "String" String }
 
@@ -242,6 +277,40 @@ newtype NoteReaction = NoteReaction
   }
 
 derive instance Data.Newtype.Newtype NoteReaction _
+-- | One post seen directly (S8 DirectNoteResponse), by its provisional id. Exactly one of post /
+-- | hidden / restriction is set. hidden carries only the control (no text, author or quote).
+-- | operations accompany a visible or restricted post; a reveal never clears a block.
+newtype PostView = PostView
+  { hidden ::
+      {} -> AsGql "ContentControl" (Data.Maybe.Maybe (AsGql "ContentControl" ContentControl))
+  , id :: {} -> AsGql "ID" GraphQL.Client.ID.ID
+  , operations ::
+      {} -> AsGql "PostOperations" (Data.Maybe.Maybe (AsGql "PostOperations" PostOperations))
+  , post :: {} -> AsGql "Post" (Data.Maybe.Maybe (AsGql "Post" Post))
+  , restriction ::
+      {}
+      -> AsGql "ContentRestriction" (Data.Maybe.Maybe (AsGql "ContentRestriction" ContentRestriction))
+  }
+
+derive instance Data.Newtype.Newtype PostView _
+-- | PROVISIONAL. A person's page (ui-spec 3-6): the person is always shown, their posts are hidden while control is set.
+newtype UserPage = UserPage
+  { author :: {} -> AsGql "PostAuthor" PostAuthor
+  , bio :: {} -> AsGql "String" String
+  , posts :: {} -> Array (AsGql "PostView" PostView)
+  , hidden ::
+      {}
+      ->
+      -- | Set while the posts are hidden (posts is then empty).
+      AsGql "ContentControl" (Data.Maybe.Maybe (AsGql "ContentControl" ContentControl))
+  , control ::
+      {}
+      ->
+      -- | The Profile's control on the person's domain (the badge).
+      AsGql "ContentControl" (Data.Maybe.Maybe (AsGql "ContentControl" ContentControl))
+  }
+
+derive instance Data.Newtype.Newtype UserPage _
 -- | PROVISIONAL. A post as shown on a timeline or the post detail screen.
 newtype Post = Post
   { author :: {} -> AsGql "PostAuthor" PostAuthor
@@ -255,6 +324,11 @@ newtype Post = Post
       ->
       -- | ISO 8601 instant.
       AsGql "String" String
+  , quoted ::
+      {}
+      ->
+      -- | Set for a quote: its target (S8 EmbeddedNotePresentation).
+      AsGql "QuotedPost" (Data.Maybe.Maybe (AsGql "QuotedPost" QuotedPost))
   , repostedBy ::
       {}
       ->
@@ -289,6 +363,21 @@ newtype PostAuthor = PostAuthor
   { displayName :: {} -> AsGql "String" String
   , handle :: {} -> AsGql "String" String
   , id :: {} -> AsGql "ID" GraphQL.Client.ID.ID
+  , actorUrl ::
+      {}
+      ->
+      -- | Canonical actor URL: what an individual mute/block of this person names.
+      AsGql "String" String
+  , domain ::
+      {}
+      ->
+      -- | Host of actorUrl: the only domain whose mute/block applies to this person (S8 exact match).
+      AsGql "String" String
+  , local ::
+      {}
+      ->
+      -- | On this server: its domain cannot be muted or blocked.
+      AsGql "Boolean" Boolean
   }
 
 derive instance Data.Newtype.Newtype PostAuthor _
@@ -309,6 +398,29 @@ newtype DomainInputCheck = DomainInputCheck
   }
 
 derive instance Data.Newtype.Newtype DomainInputCheck _
+-- | S8 EmbeddedNotePresentation of a quote's target: exactly one of post / hidden / restriction.
+newtype QuotedPost = QuotedPost
+  { hidden ::
+      {} -> AsGql "ContentControl" (Data.Maybe.Maybe (AsGql "ContentControl" ContentControl))
+  , post :: {} -> AsGql "Post" (Data.Maybe.Maybe (AsGql "Post" Post))
+  , restriction ::
+      {}
+      -> AsGql "ContentRestriction" (Data.Maybe.Maybe (AsGql "ContentRestriction" ContentRestriction))
+  }
+
+derive instance Data.Newtype.Newtype QuotedPost _
+-- | S8 PostOperationAvailability (domain part only): null = not refused by a domain block; set = the block that refuses it.
+newtype PostOperations = PostOperations
+  { emojiReaction ::
+      {} -> AsGql "ContentControl" (Data.Maybe.Maybe (AsGql "ContentControl" ContentControl))
+  , like :: {} -> AsGql "ContentControl" (Data.Maybe.Maybe (AsGql "ContentControl" ContentControl))
+  , quote :: {} -> AsGql "ContentControl" (Data.Maybe.Maybe (AsGql "ContentControl" ContentControl))
+  , reply :: {} -> AsGql "ContentControl" (Data.Maybe.Maybe (AsGql "ContentControl" ContentControl))
+  , repost ::
+      {} -> AsGql "ContentControl" (Data.Maybe.Maybe (AsGql "ContentControl" ContentControl))
+  }
+
+derive instance Data.Newtype.Newtype PostOperations _
 -- | The Profile the viewer is currently acting as. Null when there is none.
 newtype ProfileContext = ProfileContext
   { activeProfile :: {} -> AsGql "Profile" (Data.Maybe.Maybe (AsGql "Profile" Profile)) }

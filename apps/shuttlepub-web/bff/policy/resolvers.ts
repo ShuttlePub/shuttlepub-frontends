@@ -109,6 +109,16 @@ export const policyResolvers = {
           followers: [...new Set(relations.followers.filter(matches))],
         };
       }),
+    actorBlockImpact: (_root: unknown, args: { profile: string; actorUrl: string }, context: PolicyContext) =>
+      guarded(async () => {
+        const relations = await context.policy.followRelations(await activeProfileId(context, args.profile));
+        const matches = (url: string) => url === args.actorUrl;
+        return {
+          domain: actorDomain(args.actorUrl) ?? "",
+          following: [...new Set(relations.following.filter(matches))],
+          followers: [...new Set(relations.followers.filter(matches))],
+        };
+      }),
     checkDomainInput: (_root: unknown, args: { input: string }, context: PolicyContext) => {
       const result = checkDomainInput(args.input, ownDomains(context));
       return "error" in result ? { domain: null, error: result.error } : { domain: result.domain, error: null };

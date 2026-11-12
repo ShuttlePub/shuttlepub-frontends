@@ -5,6 +5,9 @@ module App.Api.GraphQL
   , fetchAvailableProfiles
   , fetchTimeline
   , fetchPostDetail
+  , revealPost
+  , fetchUserPage
+  , revealUserPage
   , selectProfile
   , createPost
   , fetchQuickSettings
@@ -20,7 +23,7 @@ import Prelude
 import App.Api.Error (ApiError(..), fromGqlCode, withReason)
 import App.Emoji (Emoji, EmojiKind(..), UnavailableReason(..))
 import App.Model (ApiStatus, PostDetailData)
-import App.Post (Author, Post, TimelineTab(..), Visibility(..))
+import App.Post (Author, Control, Operations, Post, PostView, Quoted(..), TimelineTab(..), UserPage, Visibility(..))
 import App.Profile (Profile, ProfileContext)
 import App.Reaction (PostReactions, QuickSettings)
 import Data.Argonaut.Decode (class DecodeJson, decodeJson, printJsonDecodeError)
@@ -32,6 +35,7 @@ import Effect.Aff (Aff, message, try)
 import Foreign.Object as FO
 import Generated.Schema.Gql (Mutation, Query)
 import Generated.Schema.Gql.Enum.ApiMode (ApiMode)
+import Generated.Schema.Gql.Enum.ContentRestriction (ContentRestriction)
 import Generated.Schema.Gql.Enum.EmojiKind as GqlEmojiKind
 import Generated.Schema.Gql.Enum.EmojiUnavailableReason as GqlReason
 import Generated.Schema.Gql.Enum.PostVisibility as GqlVisibility
@@ -117,21 +121,34 @@ selectProfile profileId =
     $ fullRes <$> mutationJson identity mutationClient "SelectProfile"
         { selectProfile: { id: ID profileId } `Args` { activeProfile: profileSelection } }
 
-authorSelection :: { id :: Unit, handle :: Unit, displayName :: Unit }
-authorSelection = { id: unit, handle: unit, displayName: unit }
+-- Posts. profile is the Profile context id the page shows (Nothing when there is none,
+-- e.g. signed out: real mode answers NOT_IMPLEMENTED before it matters). What the BFF
+-- returns follows the S8 contract: a hidden post carries only its control.
 
-postSelection
-  :: { id :: Unit
-     , noteId :: Unit
-     , author :: { id :: Unit, handle :: Unit, displayName :: Unit }
-     , text :: Unit
-     , createdAt :: Unit
-     , replyCount :: Unit
-     , repostCount :: Unit
-     , repostedBy :: { id :: Unit, handle :: Unit, displayName :: Unit }
-     , inReplyToId :: Unit
-     }
-postSelection =
+type AuthorSelection = { id :: Unit, handle :: Unit, displayName :: Unit, actorUrl :: Unit, domain :: Unit, local :: Unit }
+
+authorSelection :: AuthorSelection
+authorSelection = { id: unit, handle: unit, displayName: unit, actorUrl: unit, domain: unit, local: unit }
+
+type ControlSelection = { mode :: Unit, domain :: Unit, revision :: Unit }
+
+controlSelection :: ControlSelection
+controlSelection = { mode: unit, domain: unit, revision: unit }
+
+type InnerPostSelection =
+  { id :: Unit
+  , noteId :: Unit
+  , author :: AuthorSelection
+  , text :: Unit
+  , createdAt :: Unit
+  , replyCount :: Unit
+  , repostCount :: Unit
+  , repostedBy :: AuthorSelection
+  , inReplyToId :: Unit
+  }
+
+innerPostSelection :: InnerPostSelection
+innerPostSelection =
   { id: unit
   , noteId: unit
   , author: authorSelection
@@ -143,9 +160,66 @@ postSelection =
   , inReplyToId: unit
   }
 
-type RawAuthor = { id :: ID, handle :: String, displayName :: String }
+type PostSelection =
+  { id :: Unit
+  , noteId :: Unit
+  , author :: AuthorSelection
+  , text :: Unit
+  , createdAt :: Unit
+  , replyCount :: Unit
+  , repostCount :: Unit
+  , repostedBy :: AuthorSelection
+  , inReplyToId :: Unit
+  , quoted :: { post :: InnerPostSelection, hidden :: ControlSelection, restriction :: Unit }
+  }
 
-type RawPost =
+-- | One level of quote: the quoted post's own quote is not asked for.
+postSelection :: PostSelection
+postSelection =
+  { id: unit
+  , noteId: unit
+  , author: authorSelection
+  , text: unit
+  , createdAt: unit
+  , replyCount: unit
+  , repostCount: unit
+  , repostedBy: authorSelection
+  , inReplyToId: unit
+  , quoted: { post: innerPostSelection, hidden: controlSelection, restriction: unit }
+  }
+
+type ViewSelection =
+  { id :: Unit
+  , post :: PostSelection
+  , hidden :: ControlSelection
+  , restriction :: Unit
+  , operations ::
+      { reply :: ControlSelection
+      , quote :: ControlSelection
+      , repost :: ControlSelection
+      , like :: ControlSelection
+      , emojiReaction :: ControlSelection
+      }
+  }
+
+viewSelection :: ViewSelection
+viewSelection =
+  { id: unit
+  , post: postSelection
+  , hidden: controlSelection
+  , restriction: unit
+  , operations: { reply: controlSelection, quote: controlSelection, repost: controlSelection, like: controlSelection, emojiReaction: controlSelection }
+  }
+
+type UserPageSelection =
+  { author :: AuthorSelection, bio :: Unit, control :: ControlSelection, hidden :: ControlSelection, posts :: ViewSelection }
+
+userPageSelection :: UserPageSelection
+userPageSelection = { author: authorSelection, bio: unit, control: controlSelection, hidden: controlSelection, posts: viewSelection }
+
+type RawAuthor = { id :: ID, handle :: String, displayName :: String, actorUrl :: String, domain :: String, local :: Boolean }
+
+type RawInnerPost =
   { id :: ID
   , noteId :: ID
   , author :: RawAuthor
@@ -157,8 +231,45 @@ type RawPost =
   , inReplyToId :: Maybe ID
   }
 
+type RawPost =
+  { id :: ID
+  , noteId :: ID
+  , author :: RawAuthor
+  , text :: String
+  , createdAt :: String
+  , replyCount :: Int
+  , repostCount :: Int
+  , repostedBy :: Maybe RawAuthor
+  , inReplyToId :: Maybe ID
+  , quoted :: Maybe { post :: Maybe RawInnerPost, hidden :: Maybe Control, restriction :: Maybe ContentRestriction }
+  }
+
+type RawView =
+  { id :: ID
+  , post :: Maybe RawPost
+  , hidden :: Maybe Control
+  , restriction :: Maybe ContentRestriction
+  , operations :: Maybe Operations
+  }
+
+type RawUserPage = { author :: RawAuthor, bio :: String, control :: Maybe Control, hidden :: Maybe Control, posts :: Array RawView }
+
 toAuthor :: RawAuthor -> Author
-toAuthor a = { id: unwrap a.id, handle: a.handle, displayName: a.displayName }
+toAuthor a = { id: unwrap a.id, handle: a.handle, displayName: a.displayName, actorUrl: a.actorUrl, domain: a.domain, local: a.local }
+
+toInnerPost :: RawInnerPost -> Post
+toInnerPost p =
+  { id: unwrap p.id
+  , noteId: unwrap p.noteId
+  , author: toAuthor p.author
+  , text: p.text
+  , createdAt: p.createdAt
+  , replyCount: p.replyCount
+  , repostCount: p.repostCount
+  , repostedBy: map toAuthor p.repostedBy
+  , inReplyToId: map unwrap p.inReplyToId
+  , quoted: Nothing
+  }
 
 toPost :: RawPost -> Post
 toPost p =
@@ -171,7 +282,14 @@ toPost p =
   , repostCount: p.repostCount
   , repostedBy: map toAuthor p.repostedBy
   , inReplyToId: map unwrap p.inReplyToId
+  , quoted: p.quoted <#> \q -> Quoted { post: map toInnerPost q.post, hidden: q.hidden, restriction: q.restriction }
   }
+
+toView :: RawView -> PostView
+toView v = { id: unwrap v.id, post: map toPost v.post, hidden: v.hidden, restriction: v.restriction, operations: v.operations }
+
+toUserPage :: RawUserPage -> UserPage
+toUserPage p = { author: toAuthor p.author, bio: p.bio, control: p.control, hidden: p.hidden, posts: map toView p.posts }
 
 timelineKind :: TimelineTab -> GqlTimeline.TimelineKind
 timelineKind = case _ of
@@ -179,20 +297,49 @@ timelineKind = case _ of
   LocalTimeline -> GqlTimeline.LOCAL
   FederatedTimeline -> GqlTimeline.FEDERATED
 
-fetchTimeline :: TimelineTab -> Aff (Either ApiError (Array Post))
-fetchTimeline tab =
-  run (\(raw :: { timeline :: Array RawPost }) -> map toPost raw.timeline)
-    $ queryFullRes decodeJson identity queryClient "Timeline"
-        { timeline: { kind: timelineKind tab } `Args` postSelection }
+fetchTimeline :: Maybe String -> TimelineTab -> Aff (Either ApiError (Array Post))
+fetchTimeline profile tab = run (\(raw :: { timeline :: Array RawPost }) -> map toPost raw.timeline) case profile of
+  Just id -> queryFullRes decodeJson identity queryClient "Timeline"
+    { timeline: { profile: ID id, kind: timelineKind tab } `Args` postSelection }
+  Nothing -> queryFullRes decodeJson identity queryClient "TimelineWithoutProfile"
+    { timeline: { kind: timelineKind tab } `Args` postSelection }
 
--- | The post and its direct replies in one request; either both or an error.
-fetchPostDetail :: String -> Aff (Either ApiError PostDetailData)
-fetchPostDetail postId =
-  run (\(raw :: { post :: Maybe RawPost, replies :: Array RawPost }) -> { post: map toPost raw.post, replies: map toPost raw.replies })
-    $ queryFullRes decodeJson identity queryClient "PostDetail"
-        { post: { id: ID postId } `Args` postSelection
-        , replies: { postId: ID postId } `Args` postSelection
-        }
+-- | The post (S8 direct view, not revealed) and its direct replies, each as a direct
+-- | view; either both or an error.
+fetchPostDetail :: Maybe String -> String -> Aff (Either ApiError PostDetailData)
+fetchPostDetail profile postId = run convert case profile of
+  Just id -> queryFullRes decodeJson identity queryClient "PostDetail"
+    { postView: { profile: ID id, id: ID postId } `Args` viewSelection
+    , replies: { profile: ID id, postId: ID postId } `Args` viewSelection
+    }
+  Nothing -> queryFullRes decodeJson identity queryClient "PostDetailWithoutProfile"
+    { postView: { id: ID postId } `Args` viewSelection
+    , replies: { postId: ID postId } `Args` viewSelection
+    }
+  where
+  convert :: { postView :: Maybe RawView, replies :: Array RawView } -> PostDetailData
+  convert raw = { view: map toView raw.postView, replies: map toView raw.replies }
+
+-- | S8 single-note reveal: this post, for the current page only (Nothing: it is gone).
+revealPost :: String -> String -> Aff (Either ApiError (Maybe PostView))
+revealPost profile postId =
+  run (\(raw :: { revealPost :: Maybe RawView }) -> map toView raw.revealPost)
+    $ fullRes <$> mutationJson identity mutationClient "RevealPost"
+        { revealPost: { profile: ID profile, id: ID postId } `Args` viewSelection }
+
+fetchUserPage :: Maybe String -> String -> Aff (Either ApiError (Maybe UserPage))
+fetchUserPage profile handle = run (\(raw :: { userPage :: Maybe RawUserPage }) -> map toUserPage raw.userPage) case profile of
+  Just id -> queryFullRes decodeJson identity queryClient "UserPage"
+    { userPage: { profile: ID id, handle } `Args` userPageSelection }
+  Nothing -> queryFullRes decodeJson identity queryClient "UserPageWithoutProfile"
+    { userPage: { handle } `Args` userPageSelection }
+
+-- | The page with each of the person's posts revealed on its own (S8 single-note reveal).
+revealUserPage :: String -> String -> Aff (Either ApiError (Maybe UserPage))
+revealUserPage profile handle =
+  run (\(raw :: { revealUserPage :: Maybe RawUserPage }) -> map toUserPage raw.revealUserPage)
+    $ fullRes <$> mutationJson identity mutationClient "RevealUserPage"
+        { revealUserPage: { profile: ID profile, handle } `Args` userPageSelection }
 
 postVisibility :: Visibility -> GqlVisibility.PostVisibility
 postVisibility = case _ of
@@ -203,9 +350,9 @@ postVisibility = case _ of
 
 createPost :: { text :: String, visibility :: Visibility } -> Aff (Either ApiError Post)
 createPost input =
-  run (\(raw :: { createPost :: RawPost }) -> toPost raw.createPost)
+  run (\(raw :: { createPost :: RawInnerPost }) -> toInnerPost raw.createPost)
     $ fullRes <$> mutationJson identity mutationClient "CreatePost"
-        { createPost: { input: { text: input.text, visibility: postVisibility input.visibility } } `Args` postSelection }
+        { createPost: { input: { text: input.text, visibility: postVisibility input.visibility } } `Args` innerPostSelection }
 
 -- Quick reaction (D03). profileId is always the acting Profile the client holds, so
 -- a response is applied only if that Profile is still the acting one.
