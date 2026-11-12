@@ -9,12 +9,12 @@ import Prelude
 
 import App.Admin.Text as Text
 import App.Admin.Time (focusById)
-import App.Admin.Types (AdminModal(..), AdminModel, AdminMsg(..), Gate, GateCommand(..), GateError(..), Loadable(..), acceptGate, emptyAdminModel)
+import App.Admin.Types (AdminModal(..), AdminModel, AdminMsg(..), Failure, Gate, GateCommand(..), GateError(..), Loadable(..), acceptGate, allCategories, categoriesChanged, emptyAdminModel, emptyWebhookForm, webhookFormSavable)
 import App.Api.RegistrationGate as Api
 import App.Message (Message(..))
 import App.Model (Model)
 import App.Route (Route, isAdminRoute)
-import Data.Array (cons, delete, elem, filter)
+import Data.Array (cons, delete, elem, filter, find)
 import Data.Either (Either(..))
 import Data.Maybe (Maybe(..), maybe)
 import Data.Time.Duration (Milliseconds(..))
@@ -58,11 +58,21 @@ fetchProtectionsAff = deliver Api.fetchProtections ProtectionsLoaded Protections
 fetchWebhookAff :: Aff (Maybe Message)
 fetchWebhookAff = deliver Api.fetchWebhook WebhookLoaded WebhookLoadFailed
 
+fetchFailuresAff :: Aff (Maybe Message)
+fetchFailuresAff = deliver (Api.fetchFailures Nothing) FailuresLoaded FailuresFailed
+
+failureKey :: Failure -> { endpointId :: String, eventId :: String }
+failureKey f = { endpointId: f.endpointId, eventId: f.eventId }
+
+-- | 送信先のモーダルを閉じる。入力 (シークレットを含む) はモデルに残さない
+closedWebhookModal :: AdminModel -> AdminModel
+closedWebhookModal admin = admin { modal = Nothing, modalOrigin = Nothing, webhookForm = emptyWebhookForm }
+
 fetchNotificationsAff :: Aff (Maybe Message)
 fetchNotificationsAff = deliver (Api.fetchNotifications Nothing) NotificationsLoaded NotificationsFailed
 
 refreshEffects :: Effects
-refreshEffects = [ fetchGateAff, fetchProtectionsAff, fetchWebhookAff, fetchNotificationsAff ]
+refreshEffects = [ fetchGateAff, fetchProtectionsAff, fetchWebhookAff, fetchFailuresAff, fetchNotificationsAff ]
 
 -- | 管理画面の Route に入ったとき (管理者と分かっている場合だけ取得する)
 enterRoute :: Maybe Route -> Model -> Effects
@@ -300,37 +310,143 @@ updateAdmin model msg =
       VerifyFailed protection err ->
         noFx $ setAdmin model (admin { verifying = delete protection admin.verifying, error = Just err })
 
-      TestWebhook ->
-        if admin.testing then noFx model
-        else
-          Tuple (setAdmin model (admin { testing = true, error = Nothing }))
-            [ deliver Api.testWebhook WebhookTested WebhookTestFailed ]
+      FailuresLoaded page ->
+        noFx $ setAdmin model (admin { failures = page.items, failuresCursor = page.nextCursor })
 
-      WebhookTested delivered ->
+      LoadMoreFailures ->
+        case admin.failuresCursor of
+          Just cursor | not admin.loadingMoreFailures ->
+            Tuple (setAdmin model (admin { loadingMoreFailures = true }))
+              [ deliver (Api.fetchFailures (Just cursor)) MoreFailuresLoaded FailuresFailed ]
+          _ -> noFx model
+
+      MoreFailuresLoaded page ->
         let
-          Tuple next fx = showToast (if delivered then Text.toastTestSent else Text.toastTestFailed) (admin { testing = false })
+          fresh = filter (\f -> not (elem (failureKey f) (map failureKey admin.failures))) page.items
+        in
+          noFx $ setAdmin model
+            (admin { failures = admin.failures <> fresh, failuresCursor = page.nextCursor, loadingMoreFailures = false })
+
+      FailuresFailed err ->
+        noFx $ setAdmin model (admin { error = Just err, loadingMoreFailures = false })
+
+      OpenWebhookModal target origin ->
+        let
+          form = case target, admin.webhook of
+            Just id, Loaded webhook -> case find (\e -> e.id == id && e.editable) webhook.endpoints of
+              Just e -> Just
+                ( emptyWebhookForm
+                    { endpointId = Just e.id
+                    , revision = e.revision
+                    , maskedUrl = e.maskedUrl
+                    , secretConfigured = e.secretConfigured
+                    , categories = e.categories
+                    , original = e.categories
+                    }
+                )
+              Nothing -> Nothing
+            Just _, _ -> Nothing
+            -- 登録は送る通知をすべて選んだ状態で開く
+            Nothing, _ -> Just (emptyWebhookForm { categories = allCategories })
+        in
+          case form of
+            Just f -> Tuple (setAdmin model (admin { modal = Just WebhookModal, modalOrigin = Just origin, webhookForm = f })) [ focusLater "webhook-url" ]
+            Nothing -> noFx model
+
+      SetWebhookUrl url ->
+        noFx $ setAdmin model (admin { webhookForm = admin.webhookForm { url = url, error = Nothing } })
+
+      SetWebhookSecret secret ->
+        noFx $ setAdmin model (admin { webhookForm = admin.webhookForm { secret = secret, error = Nothing } })
+
+      SetWebhookCategory category checked ->
+        let
+          chosen = filter (\c -> if c == category then checked else elem c admin.webhookForm.categories) allCategories
+        in
+          noFx $ setAdmin model (admin { webhookForm = admin.webhookForm { categories = chosen, error = Nothing } })
+
+      SaveWebhook ->
+        let
+          form = admin.webhookForm
+          given text = if text == "" then Nothing else Just text
+          call = case form.endpointId, form.revision of
+            Just id, Just revision ->
+              Just $ Api.updateEndpoint id
+                { revision
+                , url: given form.url
+                , secret: given form.secret
+                , categories: if categoriesChanged form then Just form.categories else Nothing
+                }
+            Nothing, _ -> Just $ Api.createEndpoint { url: form.url, secret: form.secret, categories: form.categories }
+            _, _ -> Nothing
+        in
+          case call of
+            Just c | not admin.pending && webhookFormSavable form ->
+              Tuple (setAdmin model (admin { pending = true, webhookForm = form { error = Nothing } }))
+                [ deliver c (const (WebhookSaved Text.toastSaved)) WebhookSaveFailed ]
+            _ -> noFx model
+
+      DeleteWebhook ->
+        case admin.webhookForm.endpointId, admin.webhookForm.revision of
+          Just id, Just revision | not admin.pending ->
+            Tuple (setAdmin model (admin { pending = true, webhookForm = admin.webhookForm { error = Nothing } }))
+              [ deliver (Api.deleteEndpoint id revision) (const (WebhookSaved Text.toastDeleted)) WebhookSaveFailed ]
+          _, _ -> noFx model
+
+      WebhookSaved text ->
+        let
+          -- 削除した送信先の［編集］は無くなるので、そのときは「＋」へフォーカスを戻す
+          origin = if text == Text.toastDeleted then "webhook-add" else maybe "webhook-add" identity admin.modalOrigin
+          Tuple next fx = showToast text (closedWebhookModal admin { pending = false, error = Nothing })
+        in
+          Tuple (setAdmin model next) (fx <> [ fetchWebhookAff, fetchFailuresAff, focusLater origin ])
+
+      WebhookSaveFailed err ->
+        if err == RevisionConflict || err == NotFound then
+          -- 送信先が他の管理者に変えられた・消された: モーダルを閉じて最新を取り直す (入力は捨てる)
+          Tuple (setAdmin model (closedWebhookModal admin { pending = false, error = Just err }))
+            [ fetchWebhookAff, fetchFailuresAff ]
+        else
+          -- 入力を直せば保存し直せる失敗は、モーダルを開いたまま中に 1 行で出す
+          noFx $ setAdmin model (admin { pending = false, webhookForm = admin.webhookForm { error = Just err } })
+
+      TestWebhook endpointId ->
+        if elem endpointId admin.testing then noFx model
+        else
+          Tuple (setAdmin model (admin { testing = cons endpointId admin.testing, error = Nothing }))
+            [ deliver (Api.testWebhook endpointId) (WebhookTested endpointId) (WebhookTestFailed endpointId) ]
+
+      WebhookTested endpointId delivered ->
+        let
+          Tuple next fx = showToast (if delivered then Text.toastTestSent else Text.toastTestFailed) (admin { testing = delete endpointId admin.testing })
         in
           Tuple (setAdmin model next) fx
 
-      WebhookTestFailed err ->
-        Tuple (setAdmin model (admin { testing = false, error = Just err }))
+      WebhookTestFailed endpointId err ->
+        Tuple (setAdmin model (admin { testing = delete endpointId admin.testing, error = Just err }))
           (if refetchOnError err then [ fetchWebhookAff ] else [])
 
-      RetryDelivery eventId ->
-        if elem eventId admin.retrying then noFx model
-        else
-          Tuple (setAdmin model (admin { retrying = cons eventId admin.retrying, error = Nothing }))
-            [ deliver (Api.retryDelivery eventId) (const (DeliveryRetried eventId)) (DeliveryRetryFailed eventId) ]
-
-      DeliveryRetried eventId ->
+      RetryDelivery endpointId eventId ->
         let
-          Tuple next fx = showToast Text.toastRetried (admin { retrying = filter (_ /= eventId) admin.retrying })
+          key = { endpointId, eventId }
+        in
+          if elem key admin.retrying then noFx model
+          else
+            Tuple (setAdmin model (admin { retrying = cons key admin.retrying, error = Nothing }))
+              [ deliver (Api.retryDelivery endpointId eventId) (const (DeliveryRetried endpointId eventId)) (DeliveryRetryFailed endpointId eventId) ]
+
+      DeliveryRetried endpointId eventId ->
+        let
+          key = { endpointId, eventId }
+          -- 再キューした配送は配送失敗ではなくなる。読み込んだ古いページを保つため、一覧は取り直さずその行だけ外す
+          Tuple next fx = showToast Text.toastRetried
+            (admin { retrying = delete key admin.retrying, failures = filter (\f -> failureKey f /= key) admin.failures })
         in
           Tuple (setAdmin model next) (fx <> [ fetchWebhookAff ])
 
-      DeliveryRetryFailed eventId err ->
-        Tuple (setAdmin model (admin { retrying = filter (_ /= eventId) admin.retrying, error = Just err }))
-          [ fetchWebhookAff ]
+      DeliveryRetryFailed endpointId eventId err ->
+        Tuple (setAdmin model (admin { retrying = delete { endpointId, eventId } admin.retrying, error = Just err }))
+          [ fetchWebhookAff, fetchFailuresAff ]
 
       DismissToast id ->
         case admin.toast of
@@ -346,5 +462,5 @@ updateAdmin model msg =
   enterRouteEffects m = enterRoute m.route m
   -- 閉じたらモーダルを開いたボタンへフォーカスを戻す
   closeModal =
-    Tuple (model { admin = model.admin { modal = Nothing, modalOrigin = Nothing, overrideAck = false } })
+    Tuple (model { admin = (closedWebhookModal model.admin) { overrideAck = false } })
       (maybe [] (\origin -> [ focusLater origin ]) model.admin.modalOrigin)

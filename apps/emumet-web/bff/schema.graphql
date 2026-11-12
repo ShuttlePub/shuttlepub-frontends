@@ -102,7 +102,8 @@ type Mutation {
 # 認可の正本は Emumet API (instance:administrate)。BFF は権限を判断せず、
 # 未認証 UNAUTHENTICATED / 権限なし FORBIDDEN / revision 競合 REVISION_CONFLICT /
 # 前提条件違反 PRECONDITION_FAILED / 不正リクエスト BAD_REQUEST /
-# 対象なし NOT_FOUND (再試行する failed 配送が無い等) / Webhook 未設定・設定不備 WEBHOOK_NOT_CONFIGURED /
+# 対象なし NOT_FOUND (再試行する failed 配送・送信先が無い等) / Webhook 未設定・設定不備 WEBHOOK_NOT_CONFIGURED /
+# 送信先の登録・更新・削除の拒否 WEBHOOK_ENDPOINT_REJECTED (extensions.reason に固定コード。revision 競合とは別) /
 # 一時障害 TEMPORARILY_UNAVAILABLE (extensions.retryable = true) /
 # 契約違反の応答 INVALID_UPSTREAM_RESPONSE / その他の上流エラー UPSTREAM_ERROR を
 # extensions.code で区別して返す。状態 (RegistrationGate) とエラーは別の型であり混同しない。
@@ -295,35 +296,25 @@ type RegistrationProtectionVerification {
   readiness: RegistrationProtectionReadiness!
 }
 
-"NOT_CONFIGURED (Webhook 無効。エラーではない) / MISCONFIGURED (設定不備。issue を参照) / CONFIGURED"
-enum RegistrationWebhookConfiguration {
-  NOT_CONFIGURED
-  MISCONFIGURED
-  CONFIGURED
+"送る通知のカテゴリ。OUTAGE 障害 / RECOVERY 復旧 / AUTO_STOP 自動停止 / OVERRIDE 強制開放"
+enum RegistrationWebhookCategory {
+  OUTAGE
+  RECOVERY
+  AUTO_STOP
+  OVERRIDE
 }
 
-enum RegistrationWebhookDeliveryStatus {
-  PENDING
-  IN_FLIGHT
-  RETRYING
-  DELIVERED
-  FAILED
+"状態チップ。HEALTHY 正常 / FAILING 配送失敗 (未解決の failed 配送、または復号不可・設定不備)"
+enum RegistrationWebhookEndpointStatus {
+  HEALTHY
+  FAILING
 }
 
-"Webhook の配送記録 (本文・宛先 URL・secret は含まない)"
-type RegistrationWebhookDelivery {
-  "通知イベント ID (再試行・再送で不変)"
-  eventId: ID!
-  eventType: RegistrationGateEventKind!
-  status: RegistrationWebhookDeliveryStatus!
-  attemptCount: Int!
-  createdAt: String!
-  lastAttemptAt: String
-  deliveredAt: String
-  "固定語彙の結果分類 (timeout / http_server_error など)"
-  lastResult: String
-  "failed のときの理由 (permanent_error / retries_exhausted)"
-  failureReason: String
+"API 管理者が登録 / ENVIRONMENT_IMPORT 環境変数の 1 件を取り込んだ / ENVIRONMENT 環境変数のまま (編集・削除できない)"
+enum RegistrationWebhookEndpointSource {
+  API
+  ENVIRONMENT_IMPORT
+  ENVIRONMENT
 }
 
 type RegistrationWebhookCounts {
@@ -334,27 +325,89 @@ type RegistrationWebhookCounts {
   failed: Int!
 }
 
-"Webhook の配送状態 (E15w)。endpoint と secret はサーバー設定のみで、宛先は host だけを返す"
-type RegistrationWebhookStatus {
-  configuration: RegistrationWebhookConfiguration!
-  "MISCONFIGURED のときの不備の分類 (固定語彙)"
-  issue: String
-  "宛先の host 部分のみ (userinfo・port・path・query・secret は出さない)"
-  destinationHost: String
+"Webhook の送信先 (E15x)。URL は部分マスク形だけで、全 URL・secret は含まない"
+type RegistrationWebhookEndpoint {
+  "10 進文字列。環境変数の送信先は environment"
+  id: ID!
+  source: RegistrationWebhookEndpointSource!
+  "一覧用の部分マスク URL (例 hooks.example.net/••••/a8f2)"
+  maskedUrl: String!
+  categories: [RegistrationWebhookCategory!]!
+  status: RegistrationWebhookEndpointStatus!
+  "FAILING の理由 (failed_deliveries / secret_undecryptable / config_invalid)"
+  failingReasons: [String!]!
+  "環境変数の送信先の設定不備の分類 (固定語彙)"
+  configIssue: String
+  "未解決の failed 配送の件数"
+  failedCount: Int!
   counts: RegistrationWebhookCounts!
+  "secret が設定済みか (値は返さない)"
+  secretConfigured: Boolean!
+  "false = 編集・削除できない (環境変数の送信先)"
+  editable: Boolean!
+  "楽観ロック用。環境変数の送信先は null"
+  revision: Int
   lastSuccessAt: String
   lastFailureAt: String
-  "新しい順の直近の配送記録"
-  recentDeliveries: [RegistrationWebhookDelivery!]!
+  createdAt: String
+}
+
+type RegistrationWebhookEndpoints {
+  endpoints: [RegistrationWebhookEndpoint!]!
+  "どこかの送信先に未解決の failed 配送がある (タブの印)"
+  hasFailedDeliveries: Boolean!
+  "false なら作成・secret 更新は WEBHOOK_ENDPOINT_REJECTED (reason encryption_key_not_configured)"
+  encryptionKeyConfigured: Boolean!
+  maxEndpoints: Int!
+}
+
+"failed になった配送 (成功した配送は含まない)"
+type RegistrationWebhookFailedDelivery {
+  endpointId: ID!
+  "通知イベント ID (再試行・再送で不変)"
+  eventId: ID!
+  eventType: RegistrationGateEventKind!
+  category: RegistrationWebhookCategory!
+  failedAt: String!
+  attemptCount: Int!
+  "permanent_error / retries_exhausted"
+  failureReason: String
+  httpStatus: Int
+  "最後の試行結果の分類 (固定語彙)"
+  result: String
+}
+
+type RegistrationWebhookFailedDeliveryPage {
+  "failed になった時刻の新しい順"
+  items: [RegistrationWebhookFailedDelivery!]!
+  "次ページがあるときだけ (before に渡す)"
+  nextCursor: String
 }
 
 type RegistrationWebhookTestResult {
   "受信側が 2xx を返したら true"
   delivered: Boolean!
-  "結果の分類 (配送記録の lastResult と同じ語彙)"
+  "結果の分類 (delivered / timeout / connect_failed / ...)"
   result: String!
   httpStatus: Int
   attemptedAt: String!
+}
+
+input CreateRegistrationWebhookEndpointInput {
+  "HTTPS のみ。応答には返らない"
+  url: String!
+  "書き込み専用 (16〜256 バイト)。応答・ログに出さない"
+  secret: String!
+  "1 つ以上"
+  categories: [RegistrationWebhookCategory!]!
+}
+
+"省略した項目は変更しない (URL・secret は応答に返らないので、入力したときだけ送る)"
+input UpdateRegistrationWebhookEndpointInput {
+  revision: Int!
+  url: String
+  secret: String
+  categories: [RegistrationWebhookCategory!]
 }
 
 enum InstanceRole {
@@ -373,16 +426,24 @@ type Viewer {
 extend type Query {
   viewer: Viewer!
   registrationProtections: [RegistrationProtectionReadiness!]!
-  registrationWebhook: RegistrationWebhookStatus!
+  registrationWebhookEndpoints: RegistrationWebhookEndpoints!
+  "failed 配送の 1 ページ (新しい順。limit 1〜100、既定 50)。before は前のページの nextCursor"
+  registrationWebhookFailures(endpointId: ID, limit: Int, before: String): RegistrationWebhookFailedDeliveryPage!
 }
 
 extend type Mutation {
   "入力なしの検証 (bot は secret の負の probe、email は canary mailbox への送信)。未知の保護は NOT_FOUND"
   verifyRegistrationProtection(protection: RegistrationProtection!): RegistrationProtectionVerification!
-  "テスト送信 (1 回のみ・記録しない)。未設定・設定不備なら WEBHOOK_NOT_CONFIGURED"
-  sendRegistrationWebhookTest: RegistrationWebhookTestResult!
-  "eventId の failed 配送を再キューする (省略で failed 全件)。戻り値は再キュー件数。対象が無ければ NOT_FOUND"
-  retryRegistrationWebhook(eventId: ID): Int!
+  "拒否は WEBHOOK_ENDPOINT_REJECTED (extensions.reason)"
+  createRegistrationWebhookEndpoint(input: CreateRegistrationWebhookEndpointInput!): RegistrationWebhookEndpoint!
+  "revision 不一致は REVISION_CONFLICT、拒否は WEBHOOK_ENDPOINT_REJECTED、無い送信先は NOT_FOUND"
+  updateRegistrationWebhookEndpoint(endpointId: ID!, input: UpdateRegistrationWebhookEndpointInput!): RegistrationWebhookEndpoint!
+  "revision 不一致は REVISION_CONFLICT、環境変数の送信先は WEBHOOK_ENDPOINT_REJECTED"
+  deleteRegistrationWebhookEndpoint(endpointId: ID!, revision: Int!): Boolean!
+  "テスト送信 (1 回のみ・記録しない)。環境変数の送信先が未設定・設定不備なら WEBHOOK_NOT_CONFIGURED"
+  sendRegistrationWebhookTest(endpointId: ID!): RegistrationWebhookTestResult!
+  "endpointId + eventId でその 1 件、endpointId だけでその送信先の failed すべて、両方省略で全件を再キューする。戻り値は再キュー件数。対象が無ければ NOT_FOUND"
+  retryRegistrationWebhook(endpointId: ID, eventId: ID): Int!
 }
 
 # ----------------------------------------------------------------

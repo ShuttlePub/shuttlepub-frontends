@@ -4,7 +4,7 @@
 // 値は bff/emumet/generated/emumet-api.ts の型で縛り、registration-gate-fixtures.test.ts が
 // vendored OpenAPI (openapi/emumet.json、producer pin 済み) の応答スキーマに照合する。
 // mock (registration-gate-mock.ts) の初期状態もここから作るため、mock と契約が乖離しない。
-// 保護の readiness (E15c) と Webhook 配送状態 (E15w) の fixture も同じ方法で OpenAPI に照合する。
+// 保護の readiness (E15c) と Webhook 送信先・配送失敗 (E15x) の fixture も同じ方法で OpenAPI に照合する。
 // ============================================================
 
 import type {
@@ -16,9 +16,10 @@ import type {
   WireRegistrationGateNotificationList,
   WireRegistrationObservation,
   WireVerifyProtection,
-  WireWebhookDelivery,
+  WireWebhookEndpoint,
+  WireWebhookEndpointList,
+  WireWebhookFailedDelivery,
   WireWebhookRetry,
-  WireWebhookStatus,
   WireWebhookTest,
 } from "./registration-gate-real.ts";
 
@@ -487,97 +488,169 @@ export const VERIFY_PROTECTION_FIXTURES = {
 } as const satisfies Record<string, WireVerifyProtection>;
 
 // ------------------------------------------------------------
-// Webhook 配送状態 (E15w)。宛先は host のみ、secret・URL 全体は含まない
+// Webhook 送信先 (E15x)。URL は部分マスク形だけ、secret は含まない (書き込み専用)
 // ------------------------------------------------------------
 
-export function webhookDeliveryFixture(
+type WebhookCategoryWire = WireWebhookFailedDelivery["category"];
+type WebhookEventTypeWire = WireWebhookFailedDelivery["event_type"];
+
+/** 通知イベントの種別 → 送る通知のカテゴリ (Emumet の対応表と同じ) */
+export const WEBHOOK_CATEGORY_OF_EVENT: Readonly<Record<string, WebhookCategoryWire>> = {
+  outage_started: "outage",
+  protection_degraded: "outage",
+  outage_recovered: "recovery",
+  enforcement_restored: "recovery",
+  protection_lost_stopped: "auto_stop",
+  enforcement_lost_stopped: "auto_stop",
+  override_started: "override",
+  override_revoked: "override",
+};
+
+const ALL_CATEGORIES: WebhookCategoryWire[] = ["outage", "recovery", "auto_stop", "override"];
+const NO_DELIVERIES = { pending: 0, in_flight: 0, retrying: 0, delivered: 0, failed: 0 };
+
+export function webhookFailureFixture(
+  endpointId: string,
   eventId: string,
-  eventType: WireWebhookDelivery["event_type"],
-  status: "pending" | "in_flight" | "retrying" | "delivered" | "failed",
-  minute: number,
-): WireWebhookDelivery {
-  const at = `2026-11-10T03:${String(minute).padStart(2, "0")}:00Z`;
+  eventType: WebhookEventTypeWire,
+  failedAt: string,
+): WireWebhookFailedDelivery {
   return {
+    endpoint_id: endpointId,
     event_id: eventId,
     event_type: eventType,
-    status,
-    attempt_count: status === "pending" ? 0 : status === "failed" ? 5 : status === "retrying" ? 2 : 1,
-    created_at: at,
-    last_attempt_at: status === "pending" ? null : at,
-    delivered_at: status === "delivered" ? at : null,
-    last_result: status === "delivered" ? "delivered" : status === "pending" ? null : "http_server_error",
-    last_http_status: status === "delivered" ? 204 : status === "pending" ? null : 503,
-    failure_reason: status === "failed" ? "retries_exhausted" : null,
-    next_attempt_at: status === "retrying" ? "2026-11-10T04:10:00Z" : null,
+    category: WEBHOOK_CATEGORY_OF_EVENT[eventType] ?? "outage",
+    failed_at: failedAt,
+    attempt_count: 5,
+    failure_reason: "retries_exhausted",
+    http_status: 503,
+    result: "http_server_error",
   };
 }
 
-const NO_DELIVERIES = { pending: 0, in_flight: 0, retrying: 0, delivered: 0, failed: 0 };
-
-export const WEBHOOK_STATUS_FIXTURES = {
-  /** 未設定 (Webhook 無効。エラーではない) */
-  not_configured: {
-    configuration: "not_configured",
-    issue: null,
-    destination_host: null,
-    counts: NO_DELIVERIES,
-    last_success_at: null,
-    last_failure_at: null,
-    recent_deliveries: [],
-  },
-  /** 設定不備 (secret が無い) */
-  misconfigured: {
-    configuration: "misconfigured",
-    issue: "missing_secret",
-    destination_host: "hooks.example.net",
-    counts: NO_DELIVERIES,
-    last_success_at: null,
-    last_failure_at: null,
-    recent_deliveries: [],
-  },
-  /** 正常 (直近の配送はすべて成功) */
-  healthy: {
-    configuration: "configured",
-    issue: null,
-    destination_host: "hooks.example.net",
+/**
+ * 送信先 1 件。状態チップ (status) と failed 件数は、mock では配送失敗の一覧から導出し直す
+ * (ここでは配送失敗が無い前提の値を置く)
+ */
+export function webhookEndpointFixture(
+  id: string,
+  maskedUrl: string,
+  overrides: Partial<WireWebhookEndpoint> = {},
+): WireWebhookEndpoint {
+  return {
+    id,
+    source: "api",
+    masked_url: maskedUrl,
+    categories: ALL_CATEGORIES,
+    status: "healthy",
+    failing_reasons: [],
+    config_issue: null,
+    failed_count: 0,
     counts: { ...NO_DELIVERIES, delivered: 2 },
-    last_success_at: "2026-11-10T03:32:00Z",
+    secret_configured: true,
+    editable: true,
+    revision: 1,
+    last_success_at: "2026-11-10T03:20:00Z",
     last_failure_at: null,
-    recent_deliveries: [
-      webhookDeliveryFixture("12", "protection_degraded", "delivered", 32),
-      webhookDeliveryFixture("11", "outage_recovered", "delivered", 20),
-    ],
-  },
-  /** 再試行中 (自動再試行の途中。失敗ではない) */
-  retrying: {
-    configuration: "configured",
-    issue: null,
-    destination_host: "hooks.example.net",
-    counts: { ...NO_DELIVERIES, retrying: 1, delivered: 1 },
-    last_success_at: "2026-11-10T03:20:00Z",
-    last_failure_at: "2026-11-10T03:32:00Z",
-    recent_deliveries: [
-      webhookDeliveryFixture("12", "protection_degraded", "retrying", 32),
-      webhookDeliveryFixture("11", "outage_recovered", "delivered", 20),
-    ],
-  },
-  /** 配送失敗あり (failed は自動では再試行されない。管理者が再試行する) */
-  failed: {
-    configuration: "configured",
-    issue: null,
-    destination_host: "hooks.example.net",
-    counts: { ...NO_DELIVERIES, delivered: 1, failed: 2 },
-    last_success_at: "2026-11-10T03:20:00Z",
-    last_failure_at: "2026-11-10T03:40:00Z",
-    recent_deliveries: [
-      webhookDeliveryFixture("13", "outage_started", "failed", 40),
-      webhookDeliveryFixture("12", "protection_degraded", "failed", 32),
-      webhookDeliveryFixture("11", "outage_recovered", "delivered", 20),
-    ],
-  },
-} as const satisfies Record<string, WireWebhookStatus>;
+    created_at: "2026-11-09T12:00:00Z",
+    ...overrides,
+  };
+}
 
-export type WebhookStatusFixtureName = keyof typeof WEBHOOK_STATUS_FIXTURES;
+const PRIMARY = webhookEndpointFixture("1", "hooks.example.net/••••/a8f2");
+
+/** 1 ページ (50 件) に収まらない失敗 (古い失敗へは［さらに読み込む］で到達する) */
+function manyFailures(endpointId: string, count: number): WireWebhookFailedDelivery[] {
+  const kinds: WebhookEventTypeWire[] = ["outage_started", "protection_degraded", "outage_recovered", "override_started"];
+  return Array.from({ length: count }, (_, index) => {
+    const at = new Date(Date.UTC(2026, 10, 10, 3, 40) - index * 7 * 60_000).toISOString().replace(".000", "");
+    return webhookFailureFixture(endpointId, String(2000 - index), kinds[index % kinds.length]!, at);
+  });
+}
+
+/** 送信先の一覧と、その時点の配送失敗 (failed 配送) の組 */
+export type WebhookFixture = {
+  readonly list: WireWebhookEndpointList;
+  readonly failures: readonly WireWebhookFailedDelivery[];
+};
+
+function webhookFixture(
+  endpoints: WireWebhookEndpoint[],
+  failures: WireWebhookFailedDelivery[] = [],
+  extra: Partial<WireWebhookEndpointList> = {},
+): WebhookFixture {
+  return {
+    list: {
+      endpoints,
+      has_failed_deliveries: failures.length > 0,
+      encryption_key_configured: true,
+      max_endpoints: 10,
+      ...extra,
+    },
+    failures,
+  };
+}
+
+export const WEBHOOK_FIXTURES = {
+  /** 送信先なし */
+  none: webhookFixture([]),
+  /** 送信先なし・暗号鍵が未設定 (作成は encryption_key_not_configured で拒否される) */
+  no_key: webhookFixture([], [], { encryption_key_configured: false }),
+  /** 正常 */
+  healthy: webhookFixture([PRIMARY]),
+  /** 配送失敗あり (failed は自動では再試行されない。管理者が 1 件ずつ再試行する) */
+  failed: webhookFixture(
+    [webhookEndpointFixture("1", "hooks.example.net/••••/a8f2", { status: "failing", failing_reasons: ["failed_deliveries"], failed_count: 2, counts: { ...NO_DELIVERIES, delivered: 1, failed: 2 }, last_failure_at: "2026-11-10T03:40:00Z" })],
+    [
+      webhookFailureFixture("1", "13", "outage_started", "2026-11-10T03:40:00Z"),
+      webhookFailureFixture("1", "12", "protection_degraded", "2026-11-10T03:32:00Z"),
+    ],
+  ),
+  /** 複数の送信先 (片方だけ配送失敗、通知カテゴリの一部だけを送る) */
+  multiple: webhookFixture(
+    [
+      PRIMARY,
+      webhookEndpointFixture("2", "ops.example.org/••••/9c1e", { categories: ["outage", "auto_stop"], status: "failing", failing_reasons: ["failed_deliveries"], failed_count: 1, counts: { ...NO_DELIVERIES, failed: 1 }, revision: 3, last_failure_at: "2026-11-10T03:40:00Z" }),
+    ],
+    [webhookFailureFixture("2", "13", "outage_started", "2026-11-10T03:40:00Z")],
+  ),
+  /** secret を復号できない (secret の再入力で復旧する) */
+  secret_undecryptable: webhookFixture([
+    webhookEndpointFixture("1", "hooks.example.net/••••/a8f2", { status: "failing", failing_reasons: ["secret_undecryptable"] }),
+  ]),
+  /** 環境変数の送信先 (暗号鍵なしで環境変数のまま配送。編集・削除できない) */
+  environment: webhookFixture(
+    [webhookEndpointFixture("environment", "hooks.example.net/••••/a8f2", { source: "environment", editable: false, revision: null, created_at: null })],
+    [],
+    { encryption_key_configured: false },
+  ),
+  /** 環境変数の送信先の設定不備 (secret が無い) */
+  environment_misconfigured: webhookFixture(
+    [
+      webhookEndpointFixture("environment", "hooks.example.net", {
+        source: "environment",
+        editable: false,
+        revision: null,
+        created_at: null,
+        status: "failing",
+        failing_reasons: ["config_invalid"],
+        config_issue: "missing_secret",
+        secret_configured: false,
+        counts: NO_DELIVERIES,
+        last_success_at: null,
+      }),
+    ],
+    [],
+    { encryption_key_configured: false },
+  ),
+  /** 配送失敗が 1 ページ (50 件) を超える */
+  many_failures: webhookFixture(
+    [webhookEndpointFixture("1", "hooks.example.net/••••/a8f2", { status: "failing", failing_reasons: ["failed_deliveries"], failed_count: 60, counts: { ...NO_DELIVERIES, failed: 60 } })],
+    manyFailures("1", 60),
+  ),
+} as const satisfies Record<string, WebhookFixture>;
+
+export type WebhookFixtureName = keyof typeof WEBHOOK_FIXTURES;
 
 export const WEBHOOK_TEST_FIXTURES = {
   success: { event_id: "test_01", delivered: true, result: "delivered", http_status: 204, attempted_at: "2026-11-10T03:50:00Z" },

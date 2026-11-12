@@ -131,26 +131,14 @@ export type RegistrationProtectionVerification = {
   readonly readiness: RegistrationProtectionReadiness;
 };
 
-// ---- Webhook 配送状態 (E15w: GET /webhook・POST /webhook/test・POST /webhook/retry) ----
-// endpoint と secret はサーバー設定のみ。BFF は宛先 host 以外 (URL 全体・secret・署名) を一切扱わない。
+// ---- Webhook 送信先 (E15x: /webhook/endpoints*・/webhook/failures・/webhook/retry) ----
+// URL は API が部分マスク形 (masked_url) でしか返さない。secret は書き込み専用で、BFF も応答に含めない。
 
-export type RegistrationWebhookConfiguration = "NOT_CONFIGURED" | "MISCONFIGURED" | "CONFIGURED";
-export type RegistrationWebhookDeliveryStatus = "PENDING" | "IN_FLIGHT" | "RETRYING" | "DELIVERED" | "FAILED";
-
-export type RegistrationWebhookDelivery = {
-  /** 通知イベント ID (再試行・再送で不変) */
-  readonly eventId: string;
-  readonly eventType: RegistrationGateEventKind;
-  readonly status: RegistrationWebhookDeliveryStatus;
-  readonly attemptCount: number;
-  readonly createdAt: string;
-  readonly lastAttemptAt: string | null;
-  readonly deliveredAt: string | null;
-  /** 固定語彙の結果分類 (timeout / http_server_error など)。宛先 URL・応答本文は含まない */
-  readonly lastResult: string | null;
-  /** failed のときの理由 (permanent_error / retries_exhausted) */
-  readonly failureReason: string | null;
-};
+/** 送る通知のカテゴリ (API の識別子 outage / recovery / auto_stop / override) */
+export type RegistrationWebhookCategory = "OUTAGE" | "RECOVERY" | "AUTO_STOP" | "OVERRIDE";
+export type RegistrationWebhookEndpointStatus = "HEALTHY" | "FAILING";
+/** API = 管理者が登録 / ENVIRONMENT_IMPORT = 環境変数の 1 件を取り込んだ / ENVIRONMENT = 環境変数のまま (read-only) */
+export type RegistrationWebhookEndpointSource = "API" | "ENVIRONMENT_IMPORT" | "ENVIRONMENT";
 
 export type RegistrationWebhookCounts = {
   readonly pending: number;
@@ -160,17 +148,81 @@ export type RegistrationWebhookCounts = {
   readonly failed: number;
 };
 
-export type RegistrationWebhookStatus = {
-  readonly configuration: RegistrationWebhookConfiguration;
-  /** MISCONFIGURED のときの不備の分類 (固定語彙) */
-  readonly issue: string | null;
-  /** 宛先の host 部分のみ */
-  readonly destinationHost: string | null;
+export type RegistrationWebhookEndpoint = {
+  /** 10 進文字列。環境変数の送信先は "environment" */
+  readonly id: string;
+  readonly source: RegistrationWebhookEndpointSource;
+  /** 一覧用の部分マスク URL (例 hooks.example.net/••••/a8f2)。全 URL は扱わない */
+  readonly maskedUrl: string;
+  readonly categories: readonly RegistrationWebhookCategory[];
+  readonly status: RegistrationWebhookEndpointStatus;
+  /** failed_deliveries / secret_undecryptable / config_invalid (固定語彙) */
+  readonly failingReasons: readonly string[];
+  /** 環境変数の送信先の設定不備の分類 (固定語彙) */
+  readonly configIssue: string | null;
+  readonly failedCount: number;
   readonly counts: RegistrationWebhookCounts;
+  readonly secretConfigured: boolean;
+  /** false = 編集・削除できない (環境変数の送信先) */
+  readonly editable: boolean;
+  /** 楽観ロック用。環境変数の送信先は null */
+  readonly revision: number | null;
   readonly lastSuccessAt: string | null;
   readonly lastFailureAt: string | null;
-  /** 新しい順の直近の配送記録 */
-  readonly recentDeliveries: readonly RegistrationWebhookDelivery[];
+  readonly createdAt: string | null;
+};
+
+export type RegistrationWebhookEndpoints = {
+  readonly endpoints: readonly RegistrationWebhookEndpoint[];
+  /** どこかの送信先に未解決の failed 配送がある (タブの印) */
+  readonly hasFailedDeliveries: boolean;
+  /** false なら作成・secret 更新は拒否される (ENCRYPTION_KEY_NOT_CONFIGURED) */
+  readonly encryptionKeyConfigured: boolean;
+  readonly maxEndpoints: number;
+};
+
+export type RegistrationWebhookFailedDelivery = {
+  readonly endpointId: string;
+  /** 通知イベント ID (再試行・再送で不変) */
+  readonly eventId: string;
+  readonly eventType: RegistrationGateEventKind;
+  readonly category: RegistrationWebhookCategory;
+  readonly failedAt: string;
+  readonly attemptCount: number;
+  /** permanent_error / retries_exhausted */
+  readonly failureReason: string | null;
+  readonly httpStatus: number | null;
+  /** 最後の試行結果の分類 (固定語彙。宛先 URL・応答本文は含まない) */
+  readonly result: string | null;
+};
+
+export type RegistrationWebhookFailedDeliveryPage = {
+  /** failed になった時刻の新しい順。成功した配送は含まない */
+  readonly items: readonly RegistrationWebhookFailedDelivery[];
+  /** 次ページがあるときだけ (before に渡す) */
+  readonly nextCursor: string | null;
+};
+
+export type RegistrationWebhookFailureQuery = {
+  readonly endpointId?: string;
+  /** 1〜100 (既定 50) */
+  readonly limit?: number;
+  readonly before?: string;
+};
+
+export type CreateRegistrationWebhookEndpoint = {
+  readonly url: string;
+  /** 書き込み専用 (16〜256 バイト)。応答・ログに出さない */
+  readonly secret: string;
+  readonly categories: readonly RegistrationWebhookCategory[];
+};
+
+/** 省略した項目は変更しない (URL・secret は応答に返らないので、入力したときだけ送る) */
+export type UpdateRegistrationWebhookEndpoint = {
+  readonly revision: number;
+  readonly url?: string;
+  readonly secret?: string;
+  readonly categories?: readonly RegistrationWebhookCategory[];
 };
 
 export type RegistrationWebhookTestResult = {
@@ -179,6 +231,33 @@ export type RegistrationWebhookTestResult = {
   readonly httpStatus: number | null;
   readonly attemptedAt: string;
 };
+
+/** 送信先の登録・更新・削除の拒否理由 (API の固定コード。revision 競合は含まない) */
+export const WEBHOOK_ENDPOINT_REJECTIONS = [
+  "invalid_url",
+  "unsupported_scheme",
+  "credentials_in_url",
+  "fragment_in_url",
+  "missing_host",
+  "url_too_long",
+  "forbidden_destination",
+  "host_unresolvable",
+  "secret_too_short",
+  "secret_too_long",
+  "secret_required",
+  "no_categories",
+  "duplicate_url",
+  "endpoint_limit_reached",
+  "encryption_key_not_configured",
+  "environment_endpoint_read_only",
+  "nothing_to_update",
+] as const;
+
+export type WebhookEndpointRejection = (typeof WEBHOOK_ENDPOINT_REJECTIONS)[number];
+
+export function isWebhookEndpointRejection(value: string): value is WebhookEndpointRejection {
+  return (WEBHOOK_ENDPOINT_REJECTIONS as readonly string[]).includes(value);
+}
 
 // ---- 呼び出し者 (GET /api/v1/me) ----
 
@@ -191,17 +270,31 @@ export type Viewer = {
 };
 
 /**
- * Webhook が未設定・設定不備でテスト送信できない (POST /webhook/test の 409)。
+ * 送信先がテスト送信できない (環境変数の送信先が未設定・設定不備。POST .../test の 409)。
  * revision 競合 (REVISION_CONFLICT) とは別のエラーとして扱う。
  */
 export class EmumetWebhookUnavailableError extends Error {
   constructor() {
-    super("registration gate webhook is not configured or misconfigured");
+    super("registration gate webhook destination is not configured or misconfigured");
     this.name = "EmumetWebhookUnavailableError";
   }
 }
 
-/** 再試行対象の failed 配送が無い (POST /webhook/retry の 404)・未知の保護 (verify の 404) */
+/**
+ * 送信先の登録・更新・削除を API が固定コードで拒否した (400 / 409)。revision 競合 (409 の空本文) とは別。
+ * reason が null = 語彙外のコード (分類できないが、競合として扱わない)。
+ */
+export class EmumetWebhookEndpointRejectedError extends Error {
+  constructor(
+    readonly status: number,
+    readonly reason: WebhookEndpointRejection | null,
+  ) {
+    super(`registration gate webhook destination rejected (${status} ${reason ?? "unknown"})`);
+    this.name = "EmumetWebhookEndpointRejectedError";
+  }
+}
+
+/** 再試行対象の failed 配送・送信先が無い (404)・未知の保護 (verify の 404) */
 export class EmumetRegistrationTargetNotFoundError extends Error {
   constructor(message: string) {
     super(message);
@@ -216,10 +309,17 @@ export interface RegistrationGateClient {
   listRegistrationProtections(): Promise<readonly RegistrationProtectionReadiness[]>;
   /** 入力なしの検証 (bot は secret の負の probe、email は canary mailbox への送信) */
   verifyRegistrationProtection(protection: RegistrationProtection): Promise<RegistrationProtectionVerification>;
-  getRegistrationWebhookStatus(): Promise<RegistrationWebhookStatus>;
-  sendRegistrationWebhookTest(): Promise<RegistrationWebhookTestResult>;
-  /** eventId 指定でその failed 配送だけ、省略で failed 全件を再キューする。戻り値は再キュー件数 */
-  retryRegistrationWebhook(eventId?: string): Promise<number>;
+  listRegistrationWebhookEndpoints(): Promise<RegistrationWebhookEndpoints>;
+  createRegistrationWebhookEndpoint(input: CreateRegistrationWebhookEndpoint): Promise<RegistrationWebhookEndpoint>;
+  updateRegistrationWebhookEndpoint(endpointId: string, input: UpdateRegistrationWebhookEndpoint): Promise<RegistrationWebhookEndpoint>;
+  deleteRegistrationWebhookEndpoint(endpointId: string, revision: number): Promise<void>;
+  sendRegistrationWebhookTest(endpointId: string): Promise<RegistrationWebhookTestResult>;
+  listRegistrationWebhookFailures(query?: RegistrationWebhookFailureQuery): Promise<RegistrationWebhookFailedDeliveryPage>;
+  /**
+   * endpointId + eventId でその 1 件、endpointId だけでその送信先の failed すべて、両方省略で全送信先の failed すべてを
+   * 再キューする (eventId だけは 400)。戻り値は再キュー件数
+   */
+  retryRegistrationWebhook(target?: { readonly endpointId: string; readonly eventId?: string }): Promise<number>;
   getRegistrationGate(): Promise<RegistrationGate>;
   /** 開放。設定喪失で停止中の手動再開も同じ操作 (最低条件を満たさなければ 422) */
   openRegistrationGate(revision: number): Promise<RegistrationGate>;

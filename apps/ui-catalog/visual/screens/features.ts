@@ -25,6 +25,13 @@ export function featuresInEmumetHtml(html: string): Set<ScreenFeature> {
   return features;
 }
 
+/** The Emumet mock knows the E15x Webhook destination scenarios (probe: POST /__mock/registration-gate/scenario). */
+export const EMUMET_WEBHOOK_PROBE_SCENARIO = "webhook-multiple";
+
+export function featuresFromEmumetScenarioProbe(status: number): Set<ScreenFeature> {
+  return new Set<ScreenFeature>(status >= 200 && status < 300 ? ["emumet-webhook-endpoints"] : []);
+}
+
 /**
  * Splits cases into those to capture and those the checkout cannot serve yet.
  * Skipping is an explicit baseline-only policy: the skipped images show up as New in

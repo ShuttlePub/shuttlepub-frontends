@@ -4,7 +4,15 @@ import { chromium, expect, type Browser, type Page } from "@playwright/test";
 import { startBooskiffStub } from "./booskiff-stub.ts";
 import { EXPECTED_GRAPHQL_CODES, FIXED_TIME, MOCK_IDENTIFIER, MOCK_PASSWORD, MUTATES_SERVER, SCREEN_CASES, type ScreenApp, type ScreenCase, type ScreenViewer } from "./cases.ts";
 import { localImage } from "./fixtures.ts";
-import { captureSide, featuresInEmumetHtml, featuresInShuttlePubHtml, selectCases, type CaptureSide } from "./features.ts";
+import {
+  captureSide,
+  EMUMET_WEBHOOK_PROBE_SCENARIO,
+  featuresFromEmumetScenarioProbe,
+  featuresInEmumetHtml,
+  featuresInShuttlePubHtml,
+  selectCases,
+  type CaptureSide,
+} from "./features.ts";
 import { startApp, type AppServer } from "./servers.ts";
 import { SHUTTLEPUB_LOOPBACK_SESSION_COOKIE, startShuttlePubStub } from "./shuttlepub-stub.ts";
 
@@ -206,6 +214,9 @@ const ADMIN_OVERRIDE_CASES = new Set([
   "admin-webhook-failed",
 ]);
 
+/** Webhook cases with failed deliveries (the "配送失敗" list and the tab mark). */
+const ADMIN_WEBHOOK_FAILED_CASES = new Set(["admin-webhook-failed", "admin-webhook-multiple", "admin-webhook-many-failures"]);
+
 /**
  * Registration gate admin screens. main (the baseline) has no admin routes and renders its 404 page for these
  * paths, so the admin assertions only run when the branch build serves the admin page. The checks also prove
@@ -235,7 +246,12 @@ async function prepareAdminScreen(page: Page, item: ScreenCase): Promise<string>
   };
   const webhookReady = async () => {
     await expect(content.getByTestId("webhook-destinations")).toHaveCount(1);
-    await expect(content.getByTestId("webhook-failed")).toHaveCount(item.id === "admin-webhook-failed" ? 1 : 0);
+    await expect(content.getByTestId("webhook-failed")).toHaveCount(ADMIN_WEBHOOK_FAILED_CASES.has(item.id) ? 1 : 0);
+    // Failure rows name the destination host only when there are two or more destinations.
+    await expect(content.getByTestId("webhook-failed-host")).toHaveCount(item.id === "admin-webhook-multiple" ? 1 : 0);
+    if (item.id === "admin-webhook-multiple") await expect(content.getByTestId("webhook-failed-host")).toHaveText("ops.example.org");
+    // The full URL and the secret never reach the page; destinations show the masked form only.
+    expect(await page.content()).not.toMatch(/https:\/\/hooks\.|0123456789abcdef/);
   };
   await expect(page.locator("main#app")).toHaveCount(1);
   await expect(page.locator("main#app > nav")).toHaveCount(1);
@@ -268,6 +284,29 @@ async function prepareAdminScreen(page: Page, item: ScreenCase): Promise<string>
     await content.locator('a[href="/admin/webhook"]').click();
     await webhookReady();
     await expectStrip();
+  } else if (item.id === "admin-webhook-many-failures") {
+    // Failed deliveries beyond the first page (50) are reachable; the load-more control disappears on the last page.
+    const failed = content.getByTestId("webhook-failed");
+    await expect(failed.getByRole("button", { name: "再試行" })).toHaveCount(50);
+    await failed.getByTestId("webhook-failures-more").click();
+    await expect(failed.getByRole("button", { name: "再試行" })).toHaveCount(60);
+    await expect(failed.getByTestId("webhook-failures-more")).toHaveCount(0);
+  } else if (item.id === "admin-webhook-add") {
+    await content.getByTestId("webhook-add").click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.locator("#webhook-url")).toHaveValue("");
+    await expect(page.locator("#webhook-secret")).toHaveValue("");
+    await expect(page.getByRole("dialog").getByRole("checkbox")).toHaveCount(4);
+    await expect(page.getByTestId("webhook-save")).toBeDisabled();
+    await expect(page.getByTestId("webhook-delete")).toHaveCount(0);
+  } else if (item.id === "admin-webhook-edit") {
+    // The edit modal opens with empty URL / secret fields (neither is ever returned) and offers 削除.
+    await content.getByTestId("webhook-edit-1").click();
+    await expect(page.getByRole("dialog")).toBeVisible();
+    await expect(page.locator("#webhook-url")).toHaveValue("");
+    await expect(page.locator("#webhook-secret")).toHaveValue("");
+    await expect(page.getByTestId("webhook-save")).toBeDisabled();
+    await expect(page.getByTestId("webhook-delete")).toBeEnabled();
   } else if (item.id === "admin-override-confirm") {
     await content.getByTestId("gate-override").click();
     await expect(page.getByRole("dialog")).toBeVisible();
@@ -562,6 +601,16 @@ export async function captureScreens(frontendRoot: string, output: string, side:
     const features = new Set([
       ...featuresInShuttlePubHtml(shuttlePubHtml.join("\n")),
       ...featuresInEmumetHtml(await (await fetch(`${emumet.url}/accounts/new`)).text()),
+      // Every Emumet case selects its own scenario before loading, so the probe leaves nothing behind.
+      ...featuresFromEmumetScenarioProbe(
+        (
+          await fetch(`${emumet.url}/__mock/registration-gate/scenario`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ name: EMUMET_WEBHOOK_PROBE_SCENARIO }),
+          })
+        ).status,
+      ),
     ]);
     const { capture: cases, skipped } = selectCases(SCREEN_CASES.filter((item) => capturedApps.has(item.app)), features, side);
     for (const item of skipped) {

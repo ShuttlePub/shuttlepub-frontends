@@ -20,7 +20,7 @@ export type DataState = "populated" | "empty";
  *  - sns-login: the ShuttlePub login screen (FA), detected by the /login SSR marker
  *    data-testid="login-page".
  */
-export type ScreenFeature = "sns-shell" | "quick-reaction" | "emumet-username-ui" | "sns-login";
+export type ScreenFeature = "sns-shell" | "quick-reaction" | "emumet-username-ui" | "sns-login" | "emumet-webhook-endpoints";
 
 /**
  * ShuttlePub only. A case with a viewer is captured against the real-mode BFF (stub
@@ -86,6 +86,16 @@ const routes = [
     ["admin-webhook-unset", "webhook-unset"],
     ["admin-webhook-misconfigured", "webhook-misconfigured"],
   ] as const).map(([id, scenario]) => ({ app: "Emumet", id, path: "/admin/webhook", authenticated: true, data: "populated", scenario }) as const),
+  // E15x Webhook destinations (register / edit / delete, per-destination state, paged failures). A baseline whose
+  // mock does not know these scenarios skips them (reported as New).
+  ...([
+    ["admin-webhook-multiple", "webhook-multiple"],
+    ["admin-webhook-environment", "webhook-environment"],
+    ["admin-webhook-secret-undecryptable", "webhook-secret-undecryptable"],
+    ["admin-webhook-many-failures", "webhook-many-failures"],
+    ["admin-webhook-add", "webhook-unset"],
+    ["admin-webhook-edit", "open"],
+  ] as const).map(([id, scenario]) => ({ app: "Emumet", id, path: "/admin/webhook", authenticated: true, data: "populated", scenario, requires: "emumet-webhook-endpoints" }) as const),
   // ShuttlePub SNS shell (host intents/shuttlepub/features/quick-reaction-ui/ui-spec.md v6):
   // home timeline, post detail, compose modal, visibility menu, Profile switcher, settings.
   // home / not-found existed as F0 placeholders on main, so they compare as changed.
