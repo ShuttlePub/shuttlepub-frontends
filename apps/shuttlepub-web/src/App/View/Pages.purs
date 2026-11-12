@@ -26,6 +26,7 @@ import App.View.PostCard (PostCardMode(..), controlLabel, postCard, postMenu)
 import App.View.Shell (isSignedIn)
 import Data.Array (any, elem, filter, find, length, null)
 import Data.Maybe (Maybe(..), fromMaybe, isJust, isNothing)
+import Generated.Schema.Gql.Enum.ApiMode (ApiMode(..))
 import Generated.Schema.Gql.Enum.PolicyMode (PolicyMode(..))
 import Flame (Html)
 import Flame.Html.Attribute as HA
@@ -50,6 +51,7 @@ home model = HE.div [ HA.class' "sp-page sp-page-home" ]
       , attr "data-tablist" "timeline"
       ]
       (map tabButton allTimelineTabs)
+  , previewNote model
   , HE.div
       [ HA.id "sp-tl-panel"
       , HA.class' "sp-tl-panel"
@@ -99,6 +101,7 @@ postDetail model = HE.div [ HA.class' "sp-page sp-page-detail" ]
       [ routeLink Home [ HA.class' "sp-icon-btn", attr "aria-label" "戻る", HA.title "戻る" ] [ icon "back" ]
       , HE.h1 [ HA.id contentHeadingId, HA.tabindex (-1) ] [ HE.text "投稿" ]
       ]
+  , previewNote model
   , case model.detail of
       Loaded { view: Just base, replies } ->
         let
@@ -166,6 +169,37 @@ shownView model base = fromMaybe base (find (\view -> view.id == base.id) model.
 revealed :: Model -> String -> Boolean
 revealed model id = any (\view -> view.id == id) model.content.reveals
 
+pendingReveal :: Model -> String -> Boolean
+pendingReveal model id = any (\pending -> pending.id == id) model.content.revealing
+
+-- | One post in a list (a person's page): a hidden one (its own domain, or the domain
+-- | of the post it quotes) is a hidden card of its own with this-page-only reveal.
+listedView :: Model -> PostView -> Html Message
+listedView model view = case view.hidden of
+  Just control
+    | revealed model view.id -> HE.section [ HA.class' "sp-revealed sp-revealed-item", attr "aria-label" "投稿", testId "revealed-item" ]
+        [ revealedBar { key: view.id, control, hide: HidePost view.id }
+        , viewBody model InTimeline (shownView model view)
+        ]
+    | otherwise -> hiddenCard model
+        { key: view.id
+        , title: controlLabel control.mode <> "中のドメインの投稿です"
+        , label: "この投稿だけ表示"
+        , control
+        , reveal: RevealPost view.id
+        , pending: pendingReveal model view.id
+        , error: revealErrorOf model view.id
+        }
+  Nothing -> viewBody model InTimeline view
+
+-- | Mock mode shows what S8 describes, not what ShuttlePub does yet: say so, once and
+-- | briefly, where posts are shown (real mode has no posts to show today).
+previewNote :: Model -> Html Message
+previewNote model = case model.apiMode of
+  Loaded REAL -> emptySlot
+  _ -> HE.p [ HA.class' "sp-preview-note", testId "content-preview-note" ]
+    [ HE.text "投稿の非表示・操作の制限はプレビューです（サーバー未接続）" ]
+
 revealErrorOf :: Model -> String -> Maybe ApiError
 revealErrorOf model id = case model.content.revealError of
   Just failure | failure.id == id -> Just failure.error
@@ -185,7 +219,7 @@ directPost model base = case base.hidden of
         , label: "この投稿だけ表示"
         , control
         , reveal: RevealPost base.id
-        , pending: elem base.id model.content.revealing
+        , pending: pendingReveal model base.id
         , error: revealErrorOf model base.id
         }
   Nothing -> HE.div [ HA.class' "sp-tl sp-tl-focused" ] [ viewBody model Focused base ]
@@ -230,7 +264,7 @@ repliesPanel model replies
                   [ HA.type' "button"
                   , HA.id (revealButtonId reply.id)
                   , HA.class' "sp-text-btn"
-                  , HA.disabled (elem reply.id model.content.revealing)
+                  , HA.disabled (pendingReveal model reply.id)
                   , HA.onClick (RevealPost reply.id)
                   ]
                   [ HE.text "表示" ]
@@ -254,6 +288,7 @@ userPage model handle = HE.div [ HA.class' "sp-page sp-page-user" ]
               _ -> "ユーザー"
           ]
       ]
+  , previewNote model
   , case model.content.user of
       Loaded (Just page) -> HE.div [ testId "user-page", attr "data-state" "loaded" ]
         [ HE.div [ HA.class' "sp-user-head" ]
@@ -285,7 +320,7 @@ userPage model handle = HE.div [ HA.class' "sp-page sp-page-user" ]
               , label: "投稿を表示"
               , control
               , reveal: RevealUserPosts
-              , pending: model.content.userRevealing
+              , pending: isJust model.content.userRevealing
               , error: model.content.userRevealError
               }
             _, Nothing -> postsList page.posts
@@ -297,7 +332,7 @@ userPage model handle = HE.div [ HA.class' "sp-page sp-page-user" ]
   where
   postsList posts
     | null posts = HE.p [ HA.class' "sp-dempty" ] [ HE.text "まだ投稿はありません" ]
-    | otherwise = HE.div [ HA.class' "sp-tl" ] (map (viewBody model InTimeline) posts)
+    | otherwise = HE.div [ HA.class' "sp-tl" ] (map (listedView model) posts)
   -- Following has no screen yet; while the domain is blocked it is locked (4-1).
   followButton page = case page.control of
     Just control | control.mode == BLOCK -> HE.button

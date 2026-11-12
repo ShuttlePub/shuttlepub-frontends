@@ -25,7 +25,7 @@ import Data.Argonaut.Encode (class EncodeJson, encodeJson)
 import Data.Either (Either(..), hush)
 import Data.Array (length)
 import Data.Foldable (for_)
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe(..), isJust)
 import Data.String (Pattern(..), contains, split)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
@@ -563,14 +563,63 @@ testPostDisplay = do
     asked = run shown (App.RevealPost "post-hidden")
   assertEqual "reveal asks once" asked.effects 1
   assertEqual "a second press while pending does nothing" (run asked.next (App.RevealPost "post-hidden")).effects 0
-  assertEqual "a stale reveal is dropped" (run asked.next (App.PostRevealed "post-hidden" 3 (Right (Just revealedView)))).next.content.reveals []
-  let got = run asked.next (App.PostRevealed "post-hidden" 4 (Right (Just revealedView)))
+  let request = asked.next.content.revealSeq
+  assertEqual "an answer to another request is dropped" (run asked.next (App.PostRevealed "post-hidden" (request - 1) (Right (Just revealedView)))).next.content.reveals []
+  let got = run asked.next (App.PostRevealed "post-hidden" request (Right (Just revealedView)))
   assertEqual "the reveal is kept for this page" (map _.id got.next.content.reveals) [ "post-hidden" ]
   assertEqual "[隠す] drops it" (run got.next (App.HidePost "post-hidden")).next.content.reveals []
+  -- Review: [隠す] before a late answer (e.g. the reveal asked again after a setting
+  -- changed) wins; the late answer does not show the post again.
+  let hiddenWhileAsking = run asked.next (App.HidePost "post-hidden")
+  assertEqual "a reveal answered after [隠す] stays hidden"
+    (run hiddenWhileAsking.next (App.PostRevealed "post-hidden" request (Right (Just revealedView)))).next.content.reveals
+    []
+  let
+    refreshed = run (got.next { muteBlock = ready, content = got.next.content { controlsSeen = Just [ { domain: "other.example", mode: MUTE, revision: 1, createdAt: "" } ] } })
+      (App.MuteBlockMsg (DomainsLoaded { profile: "p1", epoch: 0 } (Right [ muted, blocked ])))
+    reRequest = refreshed.next.content.revealSeq
+  assertEqual "a changed setting asks for the page's reveal again" (map _.id refreshed.next.content.revealing) [ "post-hidden" ]
+  let hiddenDuringRefresh = run refreshed.next (App.HidePost "post-hidden")
+  assertEqual "[隠す] during that re-reveal wins over its late answer"
+    (run hiddenDuringRefresh.next (App.PostRevealed "post-hidden" reRequest (Right (Just revealedView)))).next.content.reveals
+    []
+  -- The same for a person's posts (3-6).
+  let
+    page = { author: samplePost.author, bio: "bio", control: Just { mode: BLOCK, domain: "bot-farm.example", revision: 2 }, hidden: Just { mode: BLOCK, domain: "bot-farm.example", revision: 2 }, posts: [] }
+    onUser = (signedIn (initialModel (Just (UserProfile "mika@misskey.example")))) { isHydrated = true }
+    userShown = onUser { content = onUser.content { profile = Just "p1", user = Loaded (Just page) } }
+    userAsked = run userShown App.RevealUserPosts
+    userRequest = userAsked.next.content.revealSeq
+    userHidden = run userAsked.next App.HideUserPosts
+  assertEqual "posts revealed after [隠す] stay hidden"
+    (run userHidden.next (App.UserPostsRevealed "mika@misskey.example" userRequest (Right (Just page { hidden = Nothing })))).next.content.userRevealed
+    Nothing
+  assertTrue "the person's own reveal is applied"
+    (isJust (run userAsked.next (App.UserPostsRevealed "mika@misskey.example" userRequest (Right (Just page { hidden = Nothing })))).next.content.userRevealed)
   let switched = run got.next (App.ProfileContextLoaded (Right { activeProfile: Just profile { id = "p2" } }))
   assertEqual "another Profile starts from hidden again" switched.next.content.reveals []
   assertTrue "and asks for its own content" (switched.next.content.epoch > 4 && switched.next.content.profile == Just "p2")
   let
-    onHome = (signedIn (initialModel (Just Home))) { isHydrated = true, timeline = Loaded [ samplePost ], muteBlock = ready, content = (initialModel Nothing).content { profile = Just "p1", epoch = 2 } }
+    onHome = (signedIn (initialModel (Just Home))) { isHydrated = true, timeline = Loaded [ samplePost ], muteBlock = ready, content = (initialModel Nothing).content { profile = Just "p1", epoch = 2, controlsSeen = Just [ muted, blocked ] } }
     wrote = run (onHome { muteBlock = ready { writing = true } }) (App.MuteBlockMsg (Written row QuickMuteDomain "misskey.example" (Right (DomainUpserted { domain: "misskey.example", mode: MUTE, revision: 1, createdAt: "" }))))
   assertEqual "a written domain control asks for the timeline again" wrote.next.content.epoch 3
+  -- Review: a reload of the settings after a 409 (Loading -> Ready, changed in another tab)
+  -- also asks the content again; the first list of a Profile only becomes the reference.
+  let
+    seen = onHome { content = onHome.content { controlsSeen = Just [ muted, blocked ] }, muteBlock = ready { domains = MuteBlock.Loading } }
+    otherTab = { domain: "misskey.example", mode: MUTE, revision: 1, createdAt: "" }
+    recovered = run seen (App.MuteBlockMsg (DomainsLoaded { profile: "p1", epoch: 0 } (Right [ muted, blocked, otherTab ])))
+  assertEqual "a recovered, changed list asks for the timeline again" recovered.next.content.epoch 3
+  let unchanged = run seen (App.MuteBlockMsg (DomainsLoaded { profile: "p1", epoch: 0 } (Right [ muted, blocked ])))
+  assertEqual "an unchanged list does not" unchanged.next.content.epoch 2
+  let first = run (onHome { muteBlock = ready { domains = MuteBlock.Loading }, content = onHome.content { controlsSeen = Nothing } }) (App.MuteBlockMsg (DomainsLoaded { profile: "p1", epoch: 0 } (Right [ muted ])))
+  assertEqual "the first list is only the reference" (Tuple first.next.content.epoch first.next.content.controlsSeen) (Tuple 2 (Just [ muted ]))
+  -- Mock mode says the hiding is a preview, where posts are shown; real mode has none.
+  mockHome <- renderAfter (Just Home) (\m -> (signedIn m) { apiMode = Loaded MOCK, timeline = Loaded [ samplePost ] })
+  assertContains "preview note on the timeline" mockHome "data-testid=\"content-preview-note\""
+  realHome <- renderAfter (Just Home) (\m -> (signedIn m) { timeline = Failed (NotImplemented "no endpoint") })
+  assertNotContains "no preview note in real mode" realHome "content-preview-note"
+  -- 3-6: a hidden post in a person's list is a hidden card of its own (not an empty slot).
+  listed <- renderAfter (Just (UserProfile "ken@other.example")) (\m -> (signedIn m) { content = m.content { user = Loaded (Just page { control = Nothing, hidden = Nothing, posts = [ hiddenView, visibleView ] }) } })
+  assertContains "a hidden post in the list" listed "data-testid=\"hidden-post\" data-mode=\"block\" data-domain=\"bot-farm.example\""
+  assertContains "with its own reveal" listed "id=\"sp-reveal-post-hidden\""

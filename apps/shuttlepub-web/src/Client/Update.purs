@@ -8,22 +8,20 @@ import App.Api.GraphQL (createPost, fetchApiMode, fetchApiStatus, fetchAvailable
 import App.Dom (focusById, focusFirstIn, focusIfLost, logoutAndReload, scrollToTop, setScrollLock)
 import App.Message (Message(..))
 import App.Model (DetailTab(..), Model, PostDetailData, RemoteData(..), activeProfile, emptyCompose, fromEither)
-import App.Post (Post, PostView, UserPage)
+import App.Post (Post, PostView, TimelineTab, timelineTabFromValue)
 import App.View.Hidden (hideButtonId, revealButtonId)
-import App.View.Pages (contentHeadingId)
+import App.View.Pages (contentHeadingId, detailTabId, timelineTabId)
 import App.MuteBlock.Types as MuteBlock
 import App.MuteBlock.Update as MuteBlockUpdate
-import App.Post (TimelineTab, timelineTabFromValue)
 import App.Reaction (ReactionMsg(..))
 import App.Route (Route(..), routeCodec)
 import App.View.Auth (authActionId, authActionShown)
 import App.View.Compose (composeTextId, visibilityButtonId)
-import App.View.Pages (detailTabId, timelineTabId)
 import App.View.Shell (composeButtonDesktopId, composeButtonMobileId, profileButtonDesktopId, profileButtonMobileId, profileMenuId)
 import Client.Reaction as QR
-import Data.Array (cons, elem, filter, find, mapMaybe, snoc)
+import Data.Array (any, filter, foldl, mapMaybe, snoc)
 import Data.Either (Either(..), either)
-import Data.Maybe (Maybe(..), fromMaybe, isJust, isNothing, maybe)
+import Data.Maybe (Maybe(..), isJust, isNothing, maybe)
 import Data.String.Common (trim)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
@@ -77,7 +75,10 @@ mkUpdate nav model = case _ of
       -- back): the focused item is replaced, so move focus into the new menu.
       refocus =
         if isMobile == model.isMobile then []
-        else (if isJust model.profileMenu then [ effect (focusFirstIn ("#" <> profileMenuId)) ] else []) <> QR.refocusPicker next
+        else (if isJust model.profileMenu then [ effect (focusFirstIn ("#" <> profileMenuId)) ] else [])
+          -- The post menu swaps popover <-> bottom sheet the same way.
+          <> (if isJust model.content.menu then [ effect (focusFirstIn "#sp-post-menu") ] else [])
+          <> QR.refocusPicker next
     in
       Tuple next ([ syncScrollLock next ] <> refocus)
   ApiModeLoaded result ->
@@ -119,15 +120,18 @@ mkUpdate nav model = case _ of
 
   -- ui-spec 3-1 / 3-2 / 3-5 (S8 single-note reveal, page-local).
   RevealPost id -> case model.content.profile of
-    Just profile | not (elem id model.content.revealing) ->
-      Tuple (model { content = model.content { revealing = snoc model.content.revealing id, revealError = Nothing } })
-        [ Just <<< PostRevealed id model.content.epoch <$> revealPost profile id ]
+    Just profile | not (any (\pending -> pending.id == id) model.content.revealing) ->
+      let
+        Tuple next request = askReveal id model
+      in
+        Tuple (next { content = next.content { revealError = Nothing } }) [ Just <<< PostRevealed id request <$> revealPost profile id ]
     _ -> noMessages model
-  PostRevealed id epoch result
-    | epoch /= model.content.epoch -> noMessages model
+  PostRevealed id request result
+    -- Not the request this post waits for: superseded, or [隠す] / leaving forgot it.
+    | not (any (\pending -> pending.id == id && pending.request == request) model.content.revealing) -> noMessages model
     | otherwise ->
         let
-          settled = model { content = model.content { revealing = filter (_ /= id) model.content.revealing } }
+          settled = model { content = model.content { revealing = filter (\pending -> pending.id /= id) model.content.revealing } }
         in
           case result of
             Right (Just view) ->
@@ -138,20 +142,31 @@ mkUpdate nav model = case _ of
                 Tuple next (effects <> [ effect (focusById (hideButtonId id)) ])
             Right Nothing -> noMessages settled { content = settled.content { revealError = Just { id, error: Unexpected "The post is gone" } } }
             Left error -> noMessages settled { content = settled.content { revealError = Just { id, error } } }
+  -- [隠す] drops the page's reveal and any reveal still on its way (S8: hide discards).
   HidePost id ->
-    Tuple (model { content = model.content { reveals = filter (\view -> view.id /= id) model.content.reveals } })
+    Tuple
+      ( model
+          { content = model.content
+              { reveals = filter (\view -> view.id /= id) model.content.reveals
+              , revealing = filter (\pending -> pending.id /= id) model.content.revealing
+              }
+          }
+      )
       [ effect (focusById (revealButtonId id)) ]
   ToggleHiddenReplies -> noMessages model { content = model.content { repliesOpen = not model.content.repliesOpen } }
   RevealUserPosts -> case model.content.profile, model.route of
-    Just profile, Just (UserProfile handle) | not model.content.userRevealing ->
-      Tuple (model { content = model.content { userRevealing = true, userRevealError = Nothing } })
-        [ Just <<< UserPostsRevealed handle model.content.epoch <$> revealUserPage profile handle ]
+    Just profile, Just (UserProfile handle) | isNothing model.content.userRevealing ->
+      let
+        request = model.content.revealSeq + 1
+      in
+        Tuple (model { content = model.content { revealSeq = request, userRevealing = Just request, userRevealError = Nothing } })
+          [ Just <<< UserPostsRevealed handle request <$> revealUserPage profile handle ]
     _, _ -> noMessages model
-  UserPostsRevealed handle epoch result
-    | epoch /= model.content.epoch || model.route /= Just (UserProfile handle) -> noMessages model
+  UserPostsRevealed handle request result
+    | model.content.userRevealing /= Just request || model.route /= Just (UserProfile handle) -> noMessages model
     | otherwise ->
         let
-          settled = model { content = model.content { userRevealing = false } }
+          settled = model { content = model.content { userRevealing = Nothing } }
         in
           case result of
             Right (Just page) ->
@@ -162,7 +177,7 @@ mkUpdate nav model = case _ of
             Right Nothing -> noMessages settled { content = settled.content { userRevealError = Just (Unexpected "The person is gone") } }
             Left error -> noMessages settled { content = settled.content { userRevealError = Just error } }
   HideUserPosts ->
-    Tuple (model { content = model.content { userRevealed = Nothing } }) [ effect (focusById (revealButtonId "user")) ]
+    Tuple (model { content = model.content { userRevealed = Nothing, userRevealing = Nothing } }) [ effect (focusById (revealButtonId "user")) ]
 
   -- The "…" menu (ui-spec 1-1 主導線). Desktop: popover under the button; mobile:
   -- bottom sheet. Esc / click-away close it and return focus to the button.
@@ -287,7 +302,7 @@ enterRoute model = case _ of
         , revealError = Nothing
         , repliesOpen = false
         , userRevealed = Nothing
-        , userRevealing = false
+        , userRevealing = Nothing
         , userRevealError = Nothing
         , menu = Nothing
         , refocus = Nothing
@@ -306,31 +321,55 @@ requestContent model = case model.profileContext of
   where
   profile = map _.id (activeProfile model)
   epoch = model.content.epoch + 1
-  reveals = map _.id model.content.reveals
-  request =
-    { model: model
-        { content = model.content
-            { epoch = epoch
-            , profile = profile
-            , waiting = false
-            , revealing = reveals
-            , userRevealing = isJust model.content.userRevealed
-            }
+  -- Reveals of this page are asked for again, each as a new request.
+  base = model
+    { content = model.content
+        { epoch = epoch
+        , profile = profile
+        , waiting = false
+        , revealing = []
+        , userRevealing = Nothing
+        , controlsSeen = case model.muteBlock.domains of
+            MuteBlock.Ready list -> Just list
+            -- Still loading: the list that arrives is the one this content was asked with.
+            _ -> Nothing
         }
+    }
+  rerevealed = case profile of
+    Just id | contentRoute model.route -> foldl
+      ( \acc view -> case askReveal view.id acc.model of
+          Tuple next asked -> { model: next, effects: snoc acc.effects (Just <<< PostRevealed view.id asked <$> revealPost id view.id) }
+      )
+      { model: base, effects: [] }
+      model.content.reveals
+    _ -> { model: base, effects: [] }
+  userReveal = case profile, model.route, model.content.userRevealed of
+    Just id, Just (UserProfile handle), Just _ ->
+      let
+        req = rerevealed.model.content.revealSeq + 1
+      in
+        { model: rerevealed.model { content = rerevealed.model.content { revealSeq = req, userRevealing = Just req } }
+        , effects: [ Just <<< UserPostsRevealed handle req <$> revealUserPage id handle ]
+        }
+    _, _, _ -> { model: rerevealed.model, effects: [] }
+  request =
+    { model: userReveal.model
     , effects: case model.route of
         Just Home -> [ Just <<< TimelineLoaded model.timelineTab epoch <$> fetchTimeline profile model.timelineTab ]
-        Just (PostDetail postId) ->
-          [ Just <<< PostDetailLoaded postId epoch <$> fetchPostDetail profile postId ]
-            <> case profile of
-              Just id -> map (\post -> Just <<< PostRevealed post epoch <$> revealPost id post) reveals
-              Nothing -> []
-        Just (UserProfile handle) ->
-          [ Just <<< UserPageLoaded handle epoch <$> fetchUserPage profile handle ]
-            <> case profile, model.content.userRevealed of
-              Just id, Just _ -> [ Just <<< UserPostsRevealed handle epoch <$> revealUserPage id handle ]
-              _, _ -> []
+        Just (PostDetail postId) -> [ Just <<< PostDetailLoaded postId epoch <$> fetchPostDetail profile postId ] <> rerevealed.effects
+        Just (UserProfile handle) -> [ Just <<< UserPageLoaded handle epoch <$> fetchUserPage profile handle ] <> rerevealed.effects <> userReveal.effects
         _ -> []
     }
+
+-- | A new reveal request for one post: its id is what the answer must carry.
+askReveal :: String -> Model -> Tuple Model Int
+askReveal id model =
+  let
+    request = model.content.revealSeq + 1
+  in
+    Tuple
+      (model { content = model.content { revealSeq = request, revealing = snoc (filter (\pending -> pending.id /= id) model.content.revealing) { id, request } } })
+      request
 
 contentRoute :: Maybe Route -> Boolean
 contentRoute = case _ of
@@ -480,9 +519,13 @@ delegate model message =
     Tuple sub effects = MuteBlockUpdate.update model.muteBlock message
     next = model { muteBlock = sub }
     lock = if scrollLocked next /= scrollLocked model then [ syncScrollLock next ] else []
-    -- A written domain control changes what the content screens show (S8): ask again.
-    refreshed = case model.muteBlock.domains, sub.domains of
-      MuteBlock.Ready before, MuteBlock.Ready after | before /= after && contentRoute next.route -> requestContent next
+    -- The content follows the Profile's domain controls (S8): whenever the list differs
+    -- from the one the shown content was asked with, by a write here or by a reload
+    -- (e.g. after a 409 from a change in another tab), ask again. The first list of a
+    -- Profile only becomes the reference.
+    refreshed = case sub.domains, next.content.controlsSeen of
+      MuteBlock.Ready after, Just seen | after /= seen && contentRoute next.route -> requestContent next
+      MuteBlock.Ready after, Nothing -> { model: next { content = next.content { controlsSeen = Just after } }, effects: [] }
       _, _ -> { model: next, effects: [] }
   in
     Tuple refreshed.model (map (map (map MuteBlockMsg)) effects <> lock <> refreshed.effects)

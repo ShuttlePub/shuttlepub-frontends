@@ -141,6 +141,7 @@ const routes = [
     ["domain-replies", "/posts/post-sora-zine"],
     ["domain-user-hidden", "/users/deals%40bot-farm.example"],
     ["domain-user-revealed", "/users/deals%40bot-farm.example"],
+    ["domain-user-list-hidden", "/users/ken%40other.example"],
   ] as const).map(([id, path]) => ({ app: "ShuttlePub", id, path, authenticated: false, data: "populated", requires: "domain-content" }) as const),
 ] as const satisfies readonly {
   app: ScreenApp; id: string; path: string; authenticated: boolean; data: DataState; scenario?: string; requires?: ScreenFeature; viewer?: ScreenViewer;

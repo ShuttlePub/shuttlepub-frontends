@@ -94,19 +94,26 @@ type PostMenuState = { postId :: String, opener :: String }
 -- | content waits until the Profile context is known and is requested again when it
 -- | changes, so one Profile's controls never decide what another Profile is shown.
 -- | Reveals (S8 single-note reveal) are page-local: kept only while the page is shown,
--- | never stored or synced; leaving, reloading or [隠す] hides again.
+-- | never stored or synced; leaving, reloading or [隠す] hides again. Every reveal
+-- | request has its own id (revealSeq); only the request a target is waiting for is
+-- | applied, so [隠す] (which forgets it) wins over an answer still on its way.
+-- | controlsSeen is the Profile's domain-control list the shown content follows: when
+-- | the list changes by any path (a write here, or a reload after a conflict), the
+-- | content is asked for again.
 type ContentState =
   { epoch :: Int
   , profile :: Maybe String
   , waiting :: Boolean
   , reveals :: Array PostView
-  , revealing :: Array String
+  , revealSeq :: Int
+  , revealing :: Array { id :: String, request :: Int }
   , revealError :: Maybe { id :: String, error :: ApiError }
   , repliesOpen :: Boolean
   , user :: RemoteData (Maybe UserPage)
   , userRevealed :: Maybe UserPage
-  , userRevealing :: Boolean
+  , userRevealing :: Maybe Int
   , userRevealError :: Maybe ApiError
+  , controlsSeen :: Maybe (Array MuteBlock.DomainControl)
   , menu :: Maybe PostMenuState
   -- | Where focus returns if a menu action took its post away (opener id).
   , refocus :: Maybe String
@@ -118,13 +125,15 @@ initialContent =
   , profile: Nothing
   , waiting: false
   , reveals: []
+  , revealSeq: 0
   , revealing: []
   , revealError: Nothing
   , repliesOpen: false
   , user: NotAsked
   , userRevealed: Nothing
-  , userRevealing: false
+  , userRevealing: Nothing
   , userRevealError: Nothing
+  , controlsSeen: Nothing
   , menu: Nothing
   , refocus: Nothing
   }

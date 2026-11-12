@@ -445,6 +445,10 @@ async function prepareDomainContent(page: Page, item: ScreenCase) {
   } else if (item.id === "domain-user-hidden") {
     await expect(page.getByTestId("user-page")).toHaveAttribute("data-state", "loaded");
     await expect(page.getByTestId("hidden-post")).toBeVisible();
+  } else if (item.id === "domain-user-list-hidden") {
+    // A person no control matches, whose quote of a muted post is hidden on its own.
+    await expect(page.getByTestId("user-page")).toHaveAttribute("data-state", "loaded");
+    await expect(page.getByTestId("hidden-post")).toHaveAttribute("data-domain", "noisy.social");
   } else if (item.id === "domain-user-revealed") {
     await expect(page.getByTestId("user-page")).toHaveAttribute("data-state", "loaded");
     await reveal();

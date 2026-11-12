@@ -155,7 +155,7 @@ shownPosts model = timeline <> detail <> user
     Loaded found -> mapMaybe _.post (maybe [] pure found.view <> found.replies <> model.content.reveals)
     _ -> []
   user = case model.content.user of
-    Loaded (Just page) -> mapMaybe _.post (page.posts <> maybe [] _.posts model.content.userRevealed)
+    Loaded (Just page) -> mapMaybe _.post (page.posts <> maybe [] _.posts model.content.userRevealed <> model.content.reveals)
     _ -> []
 
 shownNoteIds :: Model -> Array String

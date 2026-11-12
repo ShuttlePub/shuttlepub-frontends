@@ -468,12 +468,21 @@ a.sp-quote:hover { background: color-mix(in srgb, currentColor 4%, transparent);
 }
 .sp-follow .sp-icon { width: 14px; height: 14px; }
 .sp-page-user .sp-tl { margin-top: 12px; }
+.sp-tl > .sp-hidden-card, .sp-tl > .sp-revealed {
+  margin: 0; border: 0; border-bottom: 1px solid var(--sp-line); border-radius: 0;
+}
+.sp-tl > .sp-hidden-card { padding: 20px 16px; }
+.sp-tl > .sp-hidden-card:last-child, .sp-tl > .sp-revealed:last-child { border-bottom: 0; }
+
+/* Mock mode: one short line where posts are shown (the hiding is S8's, not ShuttlePub's yet). */
+.sp-preview-note { margin: 8px 0 0; font-size: 11px; color: var(--color-text-muted); }
 
 @media (max-width: 767px) {
   .sp-user-head { flex-wrap: wrap; }
   .sp-user-actions { width: 100%; justify-content: flex-end; }
   .sp-follow { height: 36px; }
   .sp-page-detail .sp-hidden-card { margin: 12px; }
+  .sp-page-home .sp-preview-note, .sp-page-detail .sp-preview-note { margin: 8px 12px 0; }
   .sp-revealed { margin: 12px 0 0; border-left: 0; border-right: 0; border-radius: 0; }
   .sp-page-detail .sp-dtabs + .sp-dpanel .sp-tl { border-bottom: 1px solid var(--sp-line); }
 }

@@ -33,12 +33,14 @@ data Message
   | UserPageLoaded String Int (Either ApiError (Maybe UserPage))
   -- | ui-spec 3-1 / 3-2 / 3-5: [この投稿だけ表示] / [表示] and [隠す] (page-local, S8 reveal).
   | RevealPost String
+  -- | Post id and the reveal request it answers (App.Model ContentState.revealing).
   | PostRevealed String Int (Either ApiError (Maybe PostView))
   | HidePost String
   -- | ui-spec 3-5: "非表示の返信 n 件".
   | ToggleHiddenReplies
   -- | ui-spec 3-6: [投稿を表示] / [隠す] on a person's page.
   | RevealUserPosts
+  -- | Handle and the reveal request it answers (ContentState.userRevealing).
   | UserPostsRevealed String Int (Either ApiError (Maybe UserPage))
   | HideUserPosts
   -- | The "…" menu of a post card or a person's page: key and opener element id.
