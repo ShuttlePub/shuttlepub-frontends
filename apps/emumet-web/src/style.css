@@ -4,3 +4,25 @@
 @source "../../../packages/auth-core/src/**/*.ts";
 @source "../../../packages/auth-bun/src/**/*.ts";
 @source "../../../packages/auth-bun/*.test.ts";
+
+/* 登録ゲート管理画面 (ui-spec「モック A v5」) の状態色。共有トークンに無いので emumet-web 内に限定して追加する */
+:root, [data-color="catppuccin-mocha"] {
+  --emumet-success: #a6e3a1;
+  --emumet-warning: #f9e2af;
+  --emumet-info: #89b4fa;
+  --emumet-muted-strong: #9399b2;
+}
+
+[data-color="tokyo-night"] {
+  --emumet-success: #9ece6a;
+  --emumet-warning: #e0af68;
+  --emumet-info: #7dcfff;
+  --emumet-muted-strong: #9aa5ce;
+}
+
+@theme {
+  --color-success: var(--emumet-success);
+  --color-warning: var(--emumet-warning);
+  --color-info: var(--emumet-info);
+  --color-muted-strong: var(--emumet-muted-strong);
+}

@@ -1,8 +1,28 @@
 # FA: 認証ルートと Emumet BFF
 
-画面構成は未実装です。ログイン/選択画面はユーザーとのモック合意後の別変更とし、
-この変更はルート・JSON/GraphQL API・既存 Profile context のデータ接続だけを提供します。
+資格情報の入力画面は IdP（Emumet の Kratos/Hydra）側で、このアプリには作りません。
+このアプリはルート・JSON/GraphQL API・既存 Profile context のデータ接続と、
+シェル内のログイン導線・状態表示（下記「画面」）を提供します。
 独自 IdP、登録 UI、Profile 作成/編集は含みません。
+
+## 画面（ui-spec v6 のシェルに載せる最小構成）
+
+ui-spec（host `intents/shuttlepub/features/quick-reaction-ui/ui-spec.md` v6）にログイン画面の記述は無いため、
+既存シェルの部品（`sp-page`・`sp-btn`・余白）だけで構成しています（`src/App/View/Auth.purs`）。
+状態はすべて BFF の応答から決まり、画面が認証を判断することはありません。
+
+| 状態 | 表示 |
+| ---- | ---- |
+| 未ログイン（`UNAUTHENTICATED`） | ヘッダーの Profile ボタンの位置に「ログイン」、本文上部に通知行＋「ログイン」。投稿は無効 |
+| 期限切れ（`UNAUTHENTICATED` + `extensions.reason = SESSION_EXPIRED`） | 通知行「ログインの有効期限が切れました」＋「ログイン」 |
+| 権限不足（`FORBIDDEN`） | 通知行＋「ログアウト」（別アカウントで入り直せるように） |
+| 選択 Profile の消失（`PROFILE_UNAVAILABLE`） | Profile 切替ボタンは「Profile を選択」として残り、通知行の「Profile を選ぶ」で切替メニューを開く |
+| `/login` | 「Emumet でログイン」（`/auth/login` へ）。ログイン済みなら「ログイン済みです」＋「ホームへ」 |
+| `/login?error=denied` / `failed` | callback の固定理由（同意拒否 / その他の失敗）。それ以外の値は何も表示しない |
+
+ログインリンクは `return_to` に現在の画面（ホーム・`/login`・未知パスは省略）を付け、BFF が
+`safeAppReturnTo` で再検証します。ログアウトは Profile メニュー・設定・権限不足の通知行にあり、
+`POST /auth/logout` の後 `/` を読み直します。
 
 ## real モードの必須設定
 
@@ -47,7 +67,9 @@ Emumet/IdP の設定をこのアプリが書き換えることはありません
 - `GET /auth/callback`: state・期限を照合し、verifier を token endpoint に送信。
   ID token は JWKS/RS256・issuer・client audience・expiry・sub/iat・nonce・必要時 azp を検証。
   access token も RS256・issuer・`account` audience・expiry・ID token と同一 subject を検証。
-  改ざんや拒否時は session を作らず固定の401を返します。
+  改ざんや拒否時は session を作りません。ブラウザ遷移（`Accept` に `text/html`）は固定の 302
+  `/login?error=denied`（pending state と一致した `error=access_denied` のみ）または `/login?error=failed`、
+  それ以外は固定の401 JSON を返します。`error_description` など IdP/URL 由来の値は反映しません。
   pending state と一致した失敗応答だけが pending/session cookie を削除できます。
   未要求の callback で既存 session や別の pending flow を消す logout CSRF は許しません。
 - session は共有 `auth-bun` adapter / `auth-core` の AES-GCM codec を使用。
@@ -63,7 +85,9 @@ Emumet/IdP の設定をこのアプリが書き換えることはありません
 - access token の期限60秒前から lazy refresh。新 token の署名・audience・subject も再検証します。
   refresh 失敗時は、まだ署名/期限が有効な旧 token のみ使用可能（booskiff-web と同方針）。
   期限切れ・不正 token は cookie を消して fail closed。BFF 再起動でも同じ鍵なら session は有効、
-  鍵の変更は既存 session を無効にします。
+  鍵の変更は既存 session を無効にします。届いた session cookie を使えず消した場合（期限切れ・
+  refresh 不能・鍵変更・改ざん・Emumet の401）は GraphQL エラーに `extensions.reason: "SESSION_EXPIRED"`
+  を付けます（code は `UNAUTHENTICATED` のまま。画面の「期限切れ」表示にだけ使う）。
 - `GET /auth/session` は `{ "authenticated": true }` のみ。未認証は401。
 - `POST /auth/logout` は session/pending を削除し、Hydra access/refresh revoke と Kratos logout を
   best effort で行います。IdP 障害でもローカル logout は204。GET logout は405。
@@ -120,10 +144,14 @@ EMUMET_CORE_DIR=/path/to/Emumet bash scripts/e2e-real.sh
 専用 Compose project で PostgreSQL / Kratos 1.3.1 / Hydra 2.3.0 / 既存 booskiff の test-only provider /
 Emumet / BFF を起動します（Docker と Playwright Chromium が必要）。
 ports 3231/3232/4544 が埋まっていれば中止し、他の stack を止めません。
+別の stack と並べて動かす場合だけ、`SHUTTLEPUB_E2E_WEB_PORT` / `SHUTTLEPUB_E2E_PROVIDER_PORT` /
+`SHUTTLEPUB_E2E_HYDRA_PORT` で host ports を移せます（既定値は上記のまま。issuer・redirect URI・
+Kratos/Hydra の URL と Playwright の origin も同じ値に揃います）。
 終了時は今回の project のみ削除します。Emumet clone や `.env` は書き換えず、
 Docker image に `.env` をコピーしません。
 
-実 login→PKCE callback→Emumet 本人一覧読取→logout と、同意拒否・state/不正code を検証します。
+実 login→PKCE callback→Emumet 本人一覧読取→logout と、同意拒否（`/login?error=denied` への 302）・
+state/不正code（API は401、ブラウザ遷移は `/login?error=failed`）を検証します。
 FA の provider だけ `PROVIDER_REMEMBER_LOGIN=true` とし、remembered subject の skip 分岐も
 Emumet と同様に再現します（booskiff の既定値は従来の false）。
 A logout 後に B の Kratos credentials を入れ、`prompt` を外した対照では A、
@@ -133,5 +161,8 @@ A logout 後に B の Kratos credentials を入れ、`prompt` を外した対照
 新しい identity の本人一覧は空です（作成/編集は範囲外）。成功した所有Profile選択・再読取は
 BFF の API 契約テストで検証し、実 E2E では存在しないProfileの選択拒否を検証します。
 本格 UI/SSR hydration は既存 visual CI に任せ、この E2E は BFF-only image を使用します。
+ログイン UI は visual CI が real モードの BFF（stub backend）で撮影・検証します（未ログイン・期限切れ・
+`/login` と各理由、「Emumet でログイン」→実 `/auth/login`→stub provider の拒否→実 callback→`/login?error=denied`）。
+ログイン済みの権限不足・Profile 消失の表示は `spago test` の view テストで検証します。
 CI は既存 e2e 同様、private checkout 用 `EMUMET_READ_TOKEN` 不在なら明示的に skip。
 skip と実スタックでの成功を混同せず、PR に実際のローカル実行結果を記録してください。

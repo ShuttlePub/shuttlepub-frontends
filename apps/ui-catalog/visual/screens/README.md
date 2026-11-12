@@ -29,15 +29,38 @@ Use the same browser, OS and fonts for main and PR captures.
 is captured at 1280×900 and 390×844, at device scale 1, with a full-page screenshot:
 
 - ShuttlePub (SNS shell, host ui-spec v6): home timeline, post detail, compose form (filled), compose
-  visibility menu, Profile switcher menu (desktop dropdown / mobile bottom sheet), settings, 404. No login;
-  mock mode only. Cases wait for the hydration marker and the fixtures served through the BFF, then open
+  visibility menu, Profile switcher menu (desktop dropdown / mobile bottom sheet), settings, 404, in mock
+  mode. Cases wait for the hydration marker and the fixtures served through the BFF, then open
   the overlay they photograph. The `home` case also understands the older F0 placeholder so main still
-  captures. `shuttlepub-verify.ts` additionally checks hydration, keyboard/focus behaviour and real-mode 501/500.
+  captures. The FA login UI (`/login`, its denied / failed reasons, the signed-out and session-expired home)
+  is captured with a `viewer` against a second, real-mode BFF whose backend is `shuttlepub-stub.ts`
+  (no IdP is contacted; only the expected UNAUTHENTICATED / NOT_IMPLEMENTED GraphQL errors are allowed).
+  `shuttlepub-verify.ts` additionally checks hydration, keyboard/focus behaviour, real-mode 501/500 and
+  the login flow up to a stub provider's denial.
   D08 mute/block settings (domains, accounts, block confirmation) come from the BFF's stateful mock and
-  require the `mute-block-settings` feature (probed on /settings/mute-block/domains).
+  require the `mute-block-settings` feature (marker on /settings/mute-block/domains).
 - Booskiff: login, populated Drive, empty Drive, selected folder, file detail, 404.
 - Emumet: login, populated accounts, new account, filled bot account form,
-  account detail, profile edit form, settings, 404.
+  account detail, profile edit form, settings, 404. The username screens
+  (cases with `requires: "emumet-username-ui"` in `cases.ts`: invalid / reserved / too long / taken input,
+  create confirmation, unset profile notice, one-time set dialog with its
+  invalid / taken / confirmation / already-set states, and the help page) exist only on
+  revisions whose SSR page carries the username dialog (`data-username-dialog`, see
+  `features.ts`); the baseline skips them (`CAPTURE_SIDE=baseline`, reported as New) and the
+  branch fails if they are missing or do not render.
+  `emumet-verify.ts` (run from the same CI job) additionally checks behaviour a screenshot cannot prove:
+  every state of `App.Fixtures` is served as the SSR page and must be resumed by the browser without any DOM
+  change or error, and the dialogs are driven with the keyboard (focus in, Tab wrap, Escape, focus restored, (?) link).
+  Cases that write to the mock Emumet (`MUTATES_SERVER`) make the driver restart that app afterwards;
+  GraphQL errors a case is meant to provoke are listed in `EXPECTED_GRAPHQL_CODES`.
+- Emumet registration gate admin (`admin-*`): every gate state of ui-spec "mock A v5" (not opened, open,
+  open with one protection unresponsive, temporarily suspended, auto-stopped with and without recovered
+  protection, admin-stopped, override with and without a ready protection, enforcement lost), the override and
+  revoke confirmations, the notification panel (and loading the page beyond the first 50), the Webhook tab (healthy, delivery failures, not configured,
+  misconfigured) and the 404 a non-admin gets. Each case selects a built-in mock scenario through the mock-only
+  `POST /__mock/registration-gate/scenario` before the page loads; other Emumet cases reset it to `default`.
+  The checks also assert a single intact DOM after resume, that the override warning is already in the SSR HTML,
+  and that it survives reload and admin-tab navigation but never shows on general pages. main renders 404 for these paths.
 
 The fixed app theme is Catppuccin Mocha / Rounded; the component catalog covers
 the theme combinations. These are UI-review fixtures, not a substitute for

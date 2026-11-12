@@ -1,0 +1,69 @@
+{
+  "producer": {
+    "repository": "ShuttlePub/ShuttlePub",
+    "commit": "5945e41a8c02650c1ddd29647a7c8c819740e81c",
+    "path": "server/tests/fixtures/quick_reaction/scenarios"
+  },
+  "files": [
+    {
+      "file": "reaction_delete_unavailable_selected.json",
+      "sha256": "563a91fd71e0b4a6c9d707098ddfca7b04fbf4cfb5d50f85f6defd1ce8ae9b84",
+      "bytes": 2301
+    },
+    {
+      "file": "reaction_lifecycle.json",
+      "sha256": "be5568da7399de4efff377557e627dc488beec2f2f20c8e9d9d5bf332bedfe5e",
+      "bytes": 3988
+    },
+    {
+      "file": "reaction_put_same_emoji_after_it_became_unavailable.json",
+      "sha256": "2b74c82745b308b666b1e111dbfd91be473b781e31a81c6faa94afd72f362a26",
+      "bytes": 2549
+    },
+    {
+      "file": "reaction_put_unavailable_keeps_previous.json",
+      "sha256": "59d47cb102a9940b3b34fd6f79aebf69826ab4415295cf17df96accb6d63be4a",
+      "bytes": 2182
+    },
+    {
+      "file": "settings_clear_favorites.json",
+      "sha256": "256494536489418ceb0f7d5bbffb465dccfc5933a3965be67c53716525fa0c7d",
+      "bytes": 1451
+    },
+    {
+      "file": "settings_duplicate_rejected.json",
+      "sha256": "c9f47f24f24870be08f27ba70b2d0880258452c86e891b0001ecf8fdb8f86b48",
+      "bytes": 3020
+    },
+    {
+      "file": "settings_first_save.json",
+      "sha256": "222611b83424f4916369dc0b2f4ba9f67a2fa9efc75316ac7e9440d0c31ecda9",
+      "bytes": 2603
+    },
+    {
+      "file": "settings_five_accepted_six_rejected.json",
+      "sha256": "616f2099dcc037dbf5260bb3677239375fada7ae5b730b4ebd3d253805c79244",
+      "bytes": 4660
+    },
+    {
+      "file": "settings_invalid_identifier_rejected.json",
+      "sha256": "7d235df1535acdaff503411797edf2adbe2729d20bb1164c593c79feba72cd31",
+      "bytes": 1730
+    },
+    {
+      "file": "settings_retry_is_idempotent.json",
+      "sha256": "71285c955fc9e0f48add98b5c3f4f11640eb4d807381d70a9decd4f0ade9c02a",
+      "bytes": 3356
+    },
+    {
+      "file": "settings_revision_conflict.json",
+      "sha256": "dfe7f5051f4a4f42900fc9fb8a9e373a1ad59306ea0e4098a95ba84eb5bf264b",
+      "bytes": 3756
+    },
+    {
+      "file": "settings_unavailable_favorite_is_kept.json",
+      "sha256": "d5ed26dea68300705b1871cd938320e2fb563d4c29811001a75f03a46a19c6e9",
+      "bytes": 4176
+    }
+  ]
+}

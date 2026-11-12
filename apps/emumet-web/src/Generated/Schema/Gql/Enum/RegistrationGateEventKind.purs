@@ -20,6 +20,8 @@ data RegistrationGateEventKind
   | PROTECTION_LOST_STOPPED
   | OVERRIDE_STARTED
   | OVERRIDE_REVOKED
+  | ENFORCEMENT_LOST_STOPPED
+  | ENFORCEMENT_RESTORED
 
 instance eqRegistrationGateEventKind :: Eq RegistrationGateEventKind where
   eq = eq `on` show
@@ -38,6 +40,8 @@ instance decodeJsonRegistrationGateEventKind :: DecodeJson RegistrationGateEvent
     "PROTECTION_LOST_STOPPED" -> pure PROTECTION_LOST_STOPPED
     "OVERRIDE_STARTED" -> pure OVERRIDE_STARTED
     "OVERRIDE_REVOKED" -> pure OVERRIDE_REVOKED
+    "ENFORCEMENT_LOST_STOPPED" -> pure ENFORCEMENT_LOST_STOPPED
+    "ENFORCEMENT_RESTORED" -> pure ENFORCEMENT_RESTORED
     s -> Left $ TypeMismatch $ "Not a RegistrationGateEventKind: " <> s
 
 instance encodeJsonRegistrationGateEventKind :: EncodeJson RegistrationGateEventKind where
@@ -57,6 +61,8 @@ instance showRegistrationGateEventKind :: Show RegistrationGateEventKind where
     PROTECTION_LOST_STOPPED -> "PROTECTION_LOST_STOPPED"
     OVERRIDE_STARTED -> "OVERRIDE_STARTED"
     OVERRIDE_REVOKED -> "OVERRIDE_REVOKED"
+    ENFORCEMENT_LOST_STOPPED -> "ENFORCEMENT_LOST_STOPPED"
+    ENFORCEMENT_RESTORED -> "ENFORCEMENT_RESTORED"
 
 instance enumRegistrationGateEventKind :: Enum RegistrationGateEventKind where
   succ a = case a of
@@ -65,7 +71,9 @@ instance enumRegistrationGateEventKind :: Enum RegistrationGateEventKind where
     PROTECTION_DEGRADED -> Just PROTECTION_LOST_STOPPED
     PROTECTION_LOST_STOPPED -> Just OVERRIDE_STARTED
     OVERRIDE_STARTED -> Just OVERRIDE_REVOKED
-    OVERRIDE_REVOKED -> Nothing
+    OVERRIDE_REVOKED -> Just ENFORCEMENT_LOST_STOPPED
+    ENFORCEMENT_LOST_STOPPED -> Just ENFORCEMENT_RESTORED
+    ENFORCEMENT_RESTORED -> Nothing
   pred a = case a of
     OUTAGE_STARTED -> Nothing
     OUTAGE_RECOVERED -> Just OUTAGE_STARTED
@@ -73,13 +81,15 @@ instance enumRegistrationGateEventKind :: Enum RegistrationGateEventKind where
     PROTECTION_LOST_STOPPED -> Just PROTECTION_DEGRADED
     OVERRIDE_STARTED -> Just PROTECTION_LOST_STOPPED
     OVERRIDE_REVOKED -> Just OVERRIDE_STARTED
+    ENFORCEMENT_LOST_STOPPED -> Just OVERRIDE_REVOKED
+    ENFORCEMENT_RESTORED -> Just ENFORCEMENT_LOST_STOPPED
 
 instance boundedRegistrationGateEventKind :: Bounded RegistrationGateEventKind where
-  top = OVERRIDE_REVOKED
+  top = ENFORCEMENT_RESTORED
   bottom = OUTAGE_STARTED
 
 instance boundedEnumRegistrationGateEventKind :: BoundedEnum RegistrationGateEventKind where
-  cardinality = Cardinality 6
+  cardinality = Cardinality 8
   toEnum a = case a of
     0 -> Just OUTAGE_STARTED
     1 -> Just OUTAGE_RECOVERED
@@ -87,6 +97,8 @@ instance boundedEnumRegistrationGateEventKind :: BoundedEnum RegistrationGateEve
     3 -> Just PROTECTION_LOST_STOPPED
     4 -> Just OVERRIDE_STARTED
     5 -> Just OVERRIDE_REVOKED
+    6 -> Just ENFORCEMENT_LOST_STOPPED
+    7 -> Just ENFORCEMENT_RESTORED
     _ -> Nothing
   fromEnum a = case a of
     OUTAGE_STARTED -> 0
@@ -95,4 +107,6 @@ instance boundedEnumRegistrationGateEventKind :: BoundedEnum RegistrationGateEve
     PROTECTION_LOST_STOPPED -> 3
     OVERRIDE_STARTED -> 4
     OVERRIDE_REVOKED -> 5
+    ENFORCEMENT_LOST_STOPPED -> 6
+    ENFORCEMENT_RESTORED -> 7
 

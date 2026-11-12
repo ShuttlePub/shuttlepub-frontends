@@ -10,6 +10,7 @@ import App.Model (Model, RemoteData(..))
 import App.MuteBlock.Types (Tab(..))
 import App.MuteBlock.View as MuteBlock
 import App.Route (Route(..))
+import App.View.Auth as Auth
 import App.View.Common (attr, emptySlot, testId)
 import App.View.Compose as Compose
 import App.View.Pages as Pages
@@ -43,6 +44,7 @@ view model = HE.main [ HA.id "app", HA.lang "ja" ]
           [ Shell.sidebar model
           , HE.div [ HA.id "content", HA.class' "sp-content" ]
               [ backendStatus model
+              , Auth.authNotice model
               , page model
               ]
           ]
@@ -68,6 +70,7 @@ page model = case model.route of
   Just Notifications -> Pages.placeholder "通知"
   Just Search -> Pages.placeholder "検索"
   Just Bookmarks -> Pages.placeholder "ブックマーク"
+  Just (Login { error }) -> Auth.loginPage model error
   Nothing -> HE.div [ HA.class' "sp-page sp-page-padded" ] [ NotFound.notFound ]
 
 -- | The backend health check (GET /api/v1/status). A failure is shown as such;

@@ -2,6 +2,8 @@ module App.Dom
   ( KeyAction
   , focusById
   , focusFirstIn
+  , requestFocus
+  , trackFocus
   , keydownAction
   , isPlainClick
   , preventDefault
@@ -15,6 +17,7 @@ module App.Dom
   , initialOf
   , avatarColor
   , scrollToTop
+  , encodeQueryComponent
   ) where
 
 import Prelude
@@ -29,6 +32,8 @@ type KeyAction = { action :: String, list :: String, value :: String }
 
 foreign import focusById :: String -> Effect Unit
 foreign import focusFirstIn :: String -> Effect Unit
+foreign import requestFocus :: { target :: String, firstIn :: Boolean, postId :: String, onlyIfLost :: Boolean } -> Effect Unit
+foreign import trackFocus :: Effect Unit
 foreign import keydownAction :: Event -> Effect KeyAction
 foreign import isPlainClick :: Event -> Effect Boolean
 foreign import preventDefault :: Event -> Effect Unit
@@ -44,3 +49,4 @@ foreign import relativeTime :: Number -> String -> String
 foreign import fullDateTime :: String -> String
 foreign import initialOf :: String -> String
 foreign import avatarColor :: String -> String
+foreign import encodeQueryComponent :: String -> String

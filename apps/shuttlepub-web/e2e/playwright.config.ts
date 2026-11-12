@@ -8,7 +8,8 @@ export default defineConfig({
   reporter: [["list"], ["html", { outputFolder: "e2e/playwright-report", open: "never" }]],
   outputDir: "e2e/test-results",
   use: {
-    baseURL: "http://127.0.0.1:3231",
+    // scripts/e2e-real.sh exports the origin when it moves the stack's ports.
+    baseURL: process.env.SHUTTLEPUB_E2E_ORIGIN ?? "http://127.0.0.1:3231",
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
     launchOptions: process.env.PLAYWRIGHT_CHROMIUM_PATH

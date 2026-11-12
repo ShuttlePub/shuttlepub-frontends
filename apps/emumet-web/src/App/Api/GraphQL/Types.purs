@@ -14,20 +14,26 @@ import Foreign.Object as FO
 
 newtype AccountResponse = AccountResponse
   { createdAt :: String
+  , displayName :: (Maybe String)
   , id :: String
   , isBot :: Boolean
   , moderation :: (Maybe ModerationResponse)
   , name :: String
-  , publicKey :: String
+  , profileId :: (Maybe String)
+  , profileUsername :: (Maybe String)
+  , publicKey :: (Maybe String)
   }
 
 instance EncodeJson AccountResponse where
   encodeJson (AccountResponse r) =
     "created_at" := r.createdAt
+      ~> "display_name" := r.displayName
       ~> "id" := r.id
       ~> "is_bot" := r.isBot
       ~> "moderation" := r.moderation
       ~> "name" := r.name
+      ~> "profile_id" := r.profileId
+      ~> "profile_username" := r.profileUsername
       ~> "public_key" := r.publicKey
       ~> jsonEmptyObject
 
@@ -35,12 +41,15 @@ instance DecodeJson AccountResponse where
   decodeJson json = do
     obj <- decodeJson json
     createdAt <- obj .: "created_at"
+    displayName <- join <$> obj .:? "display_name"
     id <- obj .: "id"
     isBot <- obj .: "is_bot"
     moderation <- join <$> obj .:? "moderation"
     name <- obj .: "name"
-    publicKey <- obj .: "public_key"
-    pure (AccountResponse { createdAt, id, isBot, moderation, name, publicKey })
+    profileId <- join <$> obj .:? "profile_id"
+    profileUsername <- join <$> obj .:? "profile_username"
+    publicKey <- join <$> obj .:? "public_key"
+    pure (AccountResponse { createdAt, displayName, id, isBot, moderation, name, profileId, profileUsername, publicKey })
 
 newtype AccountsResponse = AccountsResponse
   { first :: (Maybe String)
@@ -70,6 +79,7 @@ newtype ProfileResponse = ProfileResponse
   , iconUrl :: (Maybe String)
   , nanoid :: String
   , summary :: (Maybe String)
+  , username :: (Maybe String)
   }
 
 instance EncodeJson ProfileResponse where
@@ -80,6 +90,7 @@ instance EncodeJson ProfileResponse where
       ~> "icon_url" := r.iconUrl
       ~> "nanoid" := r.nanoid
       ~> "summary" := r.summary
+      ~> "username" := r.username
       ~> jsonEmptyObject
 
 instance DecodeJson ProfileResponse where
@@ -91,7 +102,8 @@ instance DecodeJson ProfileResponse where
     iconUrl <- join <$> obj .:? "icon_url"
     nanoid <- obj .: "nanoid"
     summary <- join <$> obj .:? "summary"
-    pure (ProfileResponse { accountId, bannerUrl, displayName, iconUrl, nanoid, summary })
+    username <- join <$> obj .:? "username"
+    pure (ProfileResponse { accountId, bannerUrl, displayName, iconUrl, nanoid, summary, username })
 
 newtype MetadataResponse = MetadataResponse
   { accountId :: String

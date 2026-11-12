@@ -7,7 +7,8 @@
     "codegen": "bun scripts/codegen.ts",
     "codegen:check": "bun scripts/codegen.ts --check",
     "openapi:sync": "bun scripts/sync-openapi.ts",
-    "openapi:verify": "bun scripts/verify-openapi.ts"
+    "openapi:verify": "bun scripts/verify-openapi.ts",
+    "openapi:sync-scenarios": "bun scripts/sync-reaction-scenarios.ts"
   },
   "devDependencies": {
     "@tailwindcss/cli": "^4.2.1",

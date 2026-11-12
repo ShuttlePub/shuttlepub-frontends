@@ -10,21 +10,70 @@ const afterRender = (fn) => {
   else setTimeout(fn, 0);
 };
 
-export const focusById = (id) => () => {
+let focusTracked = false;
+let lastFocus = null;
+let focusVersion = 0;
+let focusIntent = 0;
+
+const postOfElement = (element) => {
+  for (let node = element; node !== null; node = node.parentElement) {
+    const postId = node.getAttribute("data-focus-post") ?? node.getAttribute("data-post-id");
+    if (postId) return postId;
+  }
+  return "";
+};
+
+// Effects run after Flame's patch, so a closing picker may already be detached.
+// Keep its owner while focused, rather than reconstructing ownership after removal.
+export const trackFocus = () => {
+  if (focusTracked || typeof document === "undefined") return;
+  const remember = (element) => {
+    focusVersion++;
+    lastFocus = element instanceof Element && element !== document.body
+      ? { element, postId: postOfElement(element) } : null;
+  };
+  remember(document.activeElement);
+  document.addEventListener("focusin", (event) => remember(event.target));
+  focusTracked = true;
+};
+
+const visibleFocusTarget = (element) =>
+  element !== null && element.isConnected && !element.disabled &&
+  !element.closest("[inert]") && element.getClientRects().length > 0 &&
+  !["hidden", "collapse"].includes(getComputedStyle(element).visibility);
+
+// Every deferred focus (including picker, toast and GET reconciliation) uses this
+// reservation. Resolve the current origin at execution, not at reservation time.
+const reserveFocus = ({ target, firstIn = false, postId = "", onlyIfLost = false }) => {
+  const version = focusVersion;
+  const source = lastFocus;
+  // Background repair must not cancel an explicit return already queued by Esc.
+  const intent = onlyIfLost ? focusIntent : ++focusIntent;
   afterRender(() => {
-    const element = document.getElementById(id);
-    if (element) element.focus({ preventScroll: false });
+    // A newer operation or focus movement owns focus, even before its own frame.
+    if (intent !== focusIntent || version !== focusVersion) return;
+    if (onlyIfLost && (
+      visibleFocusTarget(document.activeElement) && document.activeElement !== document.body ||
+      source === null || source.postId !== postId || visibleFocusTarget(source.element)
+    )) return;
+    const root = firstIn ? document.querySelector(target) : document.getElementById(target);
+    let preferred = firstIn && root
+      ? root.querySelector('[aria-checked="true"]') ?? root.querySelector('[role^="menuitem"], button, a[href], textarea, input')
+      : root;
+    if (!visibleFocusTarget(preferred) && postId) {
+      preferred = [document.getElementById(`react-mine-${postId}`), document.getElementById(`react-${postId}`)]
+        .find(visibleFocusTarget) ?? null;
+    }
+    if (visibleFocusTarget(preferred)) preferred.focus({ preventScroll: false });
   });
 };
 
-export const focusFirstIn = (selector) => () => {
-  afterRender(() => {
-    const root = document.querySelector(selector);
-    if (!root) return;
-    const preferred = root.querySelector('[aria-checked="true"]') ?? root.querySelector('[role^="menuitem"], button, a[href], textarea, input');
-    if (preferred) preferred.focus();
-  });
-};
+export const requestFocus = (request) => () => reserveFocus(request);
+export const focusById = (id) => () => reserveFocus({
+  target: id,
+  postId: postOfElement(document.getElementById(id)) || (lastFocus?.element.id === id ? lastFocus.postId : ""),
+});
+export const focusFirstIn = (selector) => () => reserveFocus({ target: selector, firstIn: true });
 
 // summary: a <details> disclosure is keyboard-focusable (e.g. the accounts a block detaches).
 const FOCUSABLE = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), summary, [tabindex]:not([tabindex="-1"])';
@@ -170,3 +219,5 @@ export const avatarColor = (id) => {
 };
 
 export const scrollToTop = () => { window.scrollTo(0, 0); };
+
+export const encodeQueryComponent = (value) => encodeURIComponent(value);

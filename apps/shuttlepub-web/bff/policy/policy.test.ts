@@ -247,14 +247,16 @@ describe("GraphQL policy API", () => {
   const profileOf = (id: string, profileId: string) => ({ id, handle: id, displayName: id, profileId });
   function app(options: { policy?: ProfilePolicySource; active?: ReturnType<typeof profileOf> | null; selfDomains?: readonly string[] | null } = {}) {
     let active = options.active === undefined ? profileOf("account-a", P) : options.active;
+    // The session-backed (real) selection check: the shown Profile must be the selected one.
     const profiles: ProfileContextSource = {
-      mode: "mock",
+      mode: "real",
       async getProfileContext() { return { activeProfile: active }; },
       async availableProfiles() { return active ? [active] : []; },
       async selectProfile() { return { activeProfile: active }; },
     };
     const policy = options.policy ?? createMockProfilePolicy({ seed: { [P]: { domainControls: [], actorPolicies: [], following: ["https://example.social/users/alice", "https://example.social/users/bob", "https://sub.example.social/users/c"], followers: ["https://example.social/users/alice", "https://example.social/users/hana"] } } });
-    const handler = createGraphqlHandler({ api: createMockApi(), profiles, policy, selfDomains: options.selfDomains === undefined ? ["shuttle.example"] : options.selfDomains });
+    const handler = createGraphqlHandler({ api: createMockApi(), profiles, policy, viewerAuth: async () => ({ accessToken: undefined }),
+      selfDomains: options.selfDomains === undefined ? ["shuttle.example"] : options.selfDomains });
     const run = async (query: string, variables: Record<string, unknown> = {}) => {
       const response = await handler(new Request("http://localhost/graphql", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ query, variables }) }));
       return await response.json() as { data?: Record<string, unknown> | null; errors?: { extensions?: { code?: string } }[] };

@@ -24,50 +24,24 @@ export const availableProfilesFixture: readonly Profile[] = [
   { id: "profile-fixture-2", handle: "fixture_dev", displayName: "Fixture Dev", profileId: "pf-fixture-2" },
   { id: "profile-fixture-3", handle: "fixture_art", displayName: "Fixture Art", profileId: "pf-fixture-3" },
 ];
-/** Cookie that remembers the mock selection of one browser (mock mode only). */
-export const MOCK_PROFILE_COOKIE = "sp_mock_profile";
-
-export type MockSelection = {
-  /** The selection this browser made earlier (cookie value); unknown ids mean the fixture default. */
-  selectedId?: string | null;
-  /** Called with the new selection so the caller can remember it for this browser only. */
-  select?: (id: string) => void;
-};
-
 /**
- * Mock selection lives with the browser, not the process: the caller passes the id
- * remembered in this browser's cookie and stores a new one through `select`. Without a
- * cookie the active Profile is the fixture default, so concurrent browser sessions and
- * visual captures (fresh contexts) never see each other's selection.
+ * Mock selection is stateless: it validates and echoes the selected Profile but the
+ * next profileContext read is the fixture again (no process-wide state shared by
+ * concurrent browser sessions or visual captures). Mock operations that act as a
+ * Profile (quick reaction, mute/block) take the Profile the page shows as an argument
+ * and accept any of these fixtures.
  */
-export function createMockProfileContext(selection: MockSelection = {}): ProfileContextSource {
-  let current = availableProfilesFixture.find(profile => profile.id === selection.selectedId)
-    ?? profileContextFixture.activeProfile!;
+export function createMockProfileContext(): ProfileContextSource {
   return {
     mode: "mock",
-    async getProfileContext() { return { activeProfile: structuredClone(current) }; },
+    async getProfileContext() { return structuredClone(profileContextFixture); },
     async availableProfiles() { return structuredClone([...availableProfilesFixture]); },
     async selectProfile(id) {
       const activeProfile = availableProfilesFixture.find(profile => profile.id === id);
       if (!activeProfile) throw new AuthError("PROFILE_UNAVAILABLE", 403);
-      current = activeProfile;
-      selection.select?.(id);
       return { activeProfile: structuredClone(activeProfile) };
     },
   };
-}
-
-/** The mock selection remembered in a request's cookie, if any. */
-export function mockSelectionFrom(request: Request): string | null {
-  for (const part of (request.headers.get("Cookie") ?? "").split(";")) {
-    const [name, ...value] = part.trim().split("=");
-    if (name === MOCK_PROFILE_COOKIE) return decodeURIComponent(value.join("="));
-  }
-  return null;
-}
-
-export function mockSelectionCookie(id: string): string {
-  return `${MOCK_PROFILE_COOKIE}=${encodeURIComponent(id)}; Path=/; HttpOnly; SameSite=Lax`;
 }
 export type RealProfileDeps = {
   baseUrl: string;
@@ -102,7 +76,7 @@ export function createRealProfileContext(deps?: RealProfileDeps): ProfileContext
       } catch { throw new AuthError("UPSTREAM_UNAVAILABLE", 502); }
       if (response.status === 401) {
         await deps!.invalidated?.();
-        throw new AuthError("UNAUTHENTICATED", 401);
+        throw new AuthError("UNAUTHENTICATED", 401, "SESSION_EXPIRED");
       }
       if (response.status === 403) throw new AuthError("FORBIDDEN", 403);
       if (!response.ok) throw new AuthError("UPSTREAM_UNAVAILABLE", 502);

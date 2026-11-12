@@ -3,6 +3,9 @@ module App.Api.GraphQL
   , fetchAccountDetail
   , createAccount
   , updateProfile
+  , setProfileUsername
+  , checkProfileUsername
+  , fetchInstanceHost
   , createMetadata
   , updateMetadata
   , deleteMetadata
@@ -12,13 +15,13 @@ import Prelude
 
 import App.Api.Client (ApiError(..))
 import App.Api.GraphQL.Types (AccountResponse(..), MetadataResponse(..), ModerationResponse(..), ProfileResponse(..), Tristate(..))
-import Data.Array (any, intercalate, mapMaybe)
+import Data.Array (any, elem, find, head, intercalate, mapMaybe)
 import Data.Argonaut.Core (Json)
 import Data.Argonaut.Decode (decodeJson, printJsonDecodeError)
 import Data.Argonaut.Decode.Error (JsonDecodeError)
 import Data.Argonaut.Decode.Combinators ((.:))
 import Data.Either (Either(..), hush)
-import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Maybe (Maybe(..), fromMaybe, maybe)
 import Data.Newtype (unwrap)
 import Effect.Aff (Aff, message, try)
 import Foreign.Object as FO
@@ -57,6 +60,28 @@ hasExtensionCode target { extensions } = case extensions of
     Nothing -> false
   Nothing -> false
 
+-- | extensions.code values the BFF uses for failures the UI shows by kind.
+userFacingCodes :: Array String
+userFacingCodes =
+  [ "USERNAME_INVALID_FORMAT"
+  , "USERNAME_RESERVED"
+  , "USERNAME_TAKEN"
+  , "USERNAME_ALREADY_SET"
+  , "USERNAME_CONFLICT"
+  , "ACCOUNT_RESTRICTED"
+  , "FORBIDDEN"
+  , "BAD_REQUEST"
+  , "TEMPORARILY_UNAVAILABLE"
+  , "UNSUPPORTED"
+  ]
+
+codeOfGqlError :: GqlError -> Maybe String
+codeOfGqlError { extensions } = case extensions of
+  Just exts -> case FO.lookup "code" exts of
+    Just codeJson -> hush (decodeJson codeJson)
+    Nothing -> Nothing
+  Nothing -> Nothing
+
 -- | Convert GqlRes (typed) to Either ApiError.
 gqlResToEither :: forall a. GqlRes a -> Either ApiError a
 gqlResToEither { data_, errors } = case errors of
@@ -65,8 +90,9 @@ gqlResToEither { data_, errors } = case errors of
       Left (HttpError 401 "Unauthorized")
     else if any (hasExtensionCode "NOT_FOUND") errs then
       Left (HttpError 404 "Not found")
-    else
-      Left (HttpError 500 (intercalate "; " (map _.message errs)))
+    else case find (\e -> maybe false (_ `elem` userFacingCodes) (codeOfGqlError e)) errs of
+      Just e -> Left (CodedError (fromMaybe "" (codeOfGqlError e)) e.message)
+      Nothing -> Left (HttpError 500 (intercalate "; " (map _.message errs)))
   Nothing -> case data_ of
     Left decodeErr -> Left (DecodeError (printJsonDecodeError decodeErr))
     Right a -> Right a
@@ -85,12 +111,24 @@ safeDecodeData json decodeData =
             Left (HttpError 401 "Unauthorized")
           else if anyErrorHasCode "NOT_FOUND" errs then
             Left (HttpError 404 "Not found")
-          else
-            Left (HttpError 500 (intercalate "; " (mapMaybe (\e -> hush (decodeJson e >>= (_ .: "message"))) errs)))
+          else case head (mapMaybe codedErrorOf errs) of
+            Just coded -> Left coded
+            Nothing -> Left (HttpError 500 (intercalate "; " (mapMaybe errorMessageOf errs)))
         Nothing ->
           case obj .: "data" of
             Left e -> Left (DecodeError (printJsonDecodeError e))
             Right dataJson -> decodeData dataJson
+
+errorMessageOf :: Json -> Maybe String
+errorMessageOf e = hush (decodeJson e >>= (_ .: "message"))
+
+-- | A user-facing classified error (extensions.code in userFacingCodes), if the entry is one.
+codedErrorOf :: Json -> Maybe ApiError
+codedErrorOf e = do
+  obj <- hush (decodeJson e)
+  exts <- hush (obj .: "extensions")
+  code <- hush (exts .: "code")
+  if code `elem` userFacingCodes then Just (CodedError code (fromMaybe "" (errorMessageOf e))) else Nothing
 
 -- | Check if a JSON errors array contains an entry with a specific extensions.code.
 anyErrorHasCode :: String -> Array Json -> Boolean
@@ -129,6 +167,7 @@ type GqlProfileData =
   , summary :: Maybe String
   , iconUrl :: Maybe String
   , bannerUrl :: Maybe String
+  , username :: Maybe String
   }
 
 type GqlMetaData =
@@ -142,7 +181,9 @@ type GqlAccountData =
   { id :: ID
   , name :: String
   , isBot :: Boolean
-  , publicKey :: String
+  , publicKey :: Maybe String
+  , profileId :: Maybe ID
+  , profileUsername :: Maybe String
   , createdAt :: String
   , moderation :: Maybe GqlModData
   , profile :: Maybe GqlProfileData
@@ -159,7 +200,9 @@ type GqlMinimalAccount =
   { id :: ID
   , name :: String
   , isBot :: Boolean
-  , publicKey :: String
+  , publicKey :: Maybe String
+  , profileId :: Maybe ID
+  , profileUsername :: Maybe String
   , createdAt :: String
   }
 
@@ -176,7 +219,10 @@ fetchAccounts = do
             , name: unit
             , isBot: unit
             , publicKey: unit
+            , profileId: unit
+            , profileUsername: unit
             , createdAt: unit
+            , profile: { displayName: unit }
             }
         , first: unit
         , last: unit
@@ -196,6 +242,9 @@ fetchAccounts = do
       , publicKey: item.publicKey
       , createdAt: item.createdAt
       , moderation: Nothing
+      , displayName: item.profile >>= _.displayName
+      , profileId: unwrapId <$> item.profileId
+      , profileUsername: item.profileUsername
       }
 
 -- ---------------------------------------------------------------------------
@@ -218,6 +267,8 @@ fetchAccountDetail accountId = do
             , name: unit
             , isBot: unit
             , publicKey: unit
+            , profileId: unit
+            , profileUsername: unit
             , createdAt: unit
             , moderation:
                 { type: unit
@@ -233,6 +284,7 @@ fetchAccountDetail accountId = do
                 , summary: unit
                 , iconUrl: unit
                 , bannerUrl: unit
+                , username: unit
                 }
             , metadata:
                 { nanoid: unit
@@ -263,6 +315,9 @@ fetchAccountDetail accountId = do
         , publicKey: raw.publicKey
         , createdAt: raw.createdAt
         , moderation: moderationFromRaw <$> raw.moderation
+        , displayName: raw.profile >>= _.displayName
+        , profileId: unwrapId <$> raw.profileId
+        , profileUsername: raw.profileUsername
         }
     , profile: map convertProfile raw.profile
     , metadata: map convertMetadata raw.metadata
@@ -275,6 +330,7 @@ fetchAccountDetail accountId = do
       , iconUrl: p.iconUrl
       , nanoid: unwrapId p.nanoid
       , summary: p.summary
+      , username: p.username
       }
   convertMetadata m =
     MetadataResponse
@@ -288,16 +344,18 @@ fetchAccountDetail accountId = do
 -- createAccount
 -- ---------------------------------------------------------------------------
 
-createAccount :: String -> Boolean -> Aff (Either ApiError AccountResponse)
-createAccount name isBot = do
+createAccount :: String -> Boolean -> String -> Aff (Either ApiError AccountResponse)
+createAccount name isBot username = do
   result <- try $ mutationJson identity mutationClient "CreateAccount"
     { createAccount:
-        { input: { name, isBot: isBot } }
+        { input: { name, isBot: isBot, username } }
           `Args`
             { id: unit
             , name: unit
             , isBot: unit
             , publicKey: unit
+            , profileId: unit
+            , profileUsername: unit
             , createdAt: unit
             }
     }
@@ -305,7 +363,7 @@ createAccount name isBot = do
     Left affErr -> Left (NetworkError (message affErr))
     Right (GqlResJson json) -> safeDecodeData json \dataJson ->
       case decodeJson dataJson of
-        Right (raw :: { createAccount :: { id :: ID, name :: String, isBot :: Boolean, publicKey :: String, createdAt :: String } }) ->
+        Right (raw :: { createAccount :: GqlMinimalAccount }) ->
           Right $ AccountResponse
             { id: unwrapId raw.createAccount.id
             , name: raw.createAccount.name
@@ -313,6 +371,9 @@ createAccount name isBot = do
             , publicKey: raw.createAccount.publicKey
             , createdAt: raw.createAccount.createdAt
             , moderation: Nothing
+            , displayName: Nothing
+            , profileId: unwrapId <$> raw.createAccount.profileId
+            , profileUsername: raw.createAccount.profileUsername
             }
         Left e -> Left (DecodeError (printJsonDecodeError e))
 
@@ -341,21 +402,15 @@ updateProfile accountId fields = do
             , summary: unit
             , iconUrl: unit
             , bannerUrl: unit
+            , username: unit
             }
     }
   pure $ case result of
     Left affErr -> Left (NetworkError (message affErr))
     Right (GqlResJson json) -> safeDecodeData json \dataJson ->
       case decodeJson dataJson of
-        Right (raw :: { updateProfile :: { accountId :: ID, nanoid :: ID, displayName :: Maybe String, summary :: Maybe String, iconUrl :: Maybe String, bannerUrl :: Maybe String } }) ->
-          Right $ ProfileResponse
-            { accountId: unwrapId raw.updateProfile.accountId
-            , bannerUrl: raw.updateProfile.bannerUrl
-            , displayName: raw.updateProfile.displayName
-            , iconUrl: raw.updateProfile.iconUrl
-            , nanoid: unwrapId raw.updateProfile.nanoid
-            , summary: raw.updateProfile.summary
-            }
+        Right (raw :: { updateProfile :: GqlProfileData }) ->
+          Right $ convertProfileData raw.updateProfile
         Left e -> Left (DecodeError (printJsonDecodeError e))
   where
   tristateMaybe :: Tristate String -> Maybe String
@@ -441,3 +496,75 @@ deleteMetadata accountId nanoid = do
   pure $ case result of
     Left affErr -> Left (NetworkError (message affErr))
     Right (GqlResJson json) -> safeDecodeData json \_dataJson -> Right unit
+
+convertProfileData :: GqlProfileData -> ProfileResponse
+convertProfileData p =
+  ProfileResponse
+    { accountId: unwrapId p.accountId
+    , bannerUrl: p.bannerUrl
+    , displayName: p.displayName
+    , iconUrl: p.iconUrl
+    , nanoid: unwrapId p.nanoid
+    , summary: p.summary
+    , username: p.username
+    }
+
+-- ---------------------------------------------------------------------------
+-- setProfileUsername (one-time; there is no way to change it afterwards)
+-- ---------------------------------------------------------------------------
+
+setProfileUsername :: String -> String -> Aff (Either ApiError ProfileResponse)
+setProfileUsername profileId username = do
+  result <- try $ mutationJson identity mutationClient "SetProfileUsername"
+    { setProfileUsername:
+        { profileId: ID profileId
+        , username
+        }
+          `Args`
+            { nanoid: unit
+            , accountId: unit
+            , displayName: unit
+            , summary: unit
+            , iconUrl: unit
+            , bannerUrl: unit
+            , username: unit
+            }
+    }
+  pure $ case result of
+    Left affErr -> Left (NetworkError (message affErr))
+    Right (GqlResJson json) -> safeDecodeData json \dataJson ->
+      case decodeJson dataJson of
+        Right (raw :: { setProfileUsername :: GqlProfileData }) ->
+          Right $ convertProfileData raw.setProfileUsername
+        Left e -> Left (DecodeError (printJsonDecodeError e))
+
+-- ---------------------------------------------------------------------------
+-- checkProfileUsername (rules only: the server never reveals duplicates here)
+-- ---------------------------------------------------------------------------
+
+-- | The BFF's verdict on the rules for a value: "VALID" | "FORMAT" | "RESERVED".
+checkProfileUsername :: String -> Aff (Either ApiError String)
+checkProfileUsername username = do
+  result <- try $ queryJson identity queryClient "CheckProfileUsername"
+    { checkProfileUsername: { username } `Args` unit
+    }
+  pure $ case result of
+    Left affErr -> Left (NetworkError (message affErr))
+    Right (GqlResJson json) -> safeDecodeData json \dataJson ->
+      case decodeJson dataJson of
+        Right (raw :: { checkProfileUsername :: String }) -> Right raw.checkProfileUsername
+        Left e -> Left (DecodeError (printJsonDecodeError e))
+
+-- ---------------------------------------------------------------------------
+-- instanceHost (the @host part of an acct)
+-- ---------------------------------------------------------------------------
+
+fetchInstanceHost :: Aff (Either ApiError String)
+fetchInstanceHost = do
+  result <- try $ queryJson identity queryClient "FetchInstanceHost" { instanceHost: unit }
+  pure $ case result of
+    Left affErr -> Left (NetworkError (message affErr))
+    Right (GqlResJson json) -> safeDecodeData json \dataJson ->
+      case decodeJson dataJson of
+        Right (raw :: { instanceHost :: String }) -> Right raw.instanceHost
+        Left e -> Left (DecodeError (printJsonDecodeError e))

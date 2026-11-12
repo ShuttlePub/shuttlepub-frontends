@@ -46,6 +46,14 @@ async function guarded<T>(work: () => Promise<T>): Promise<T> {
 }
 
 async function activeProfileId(context: PolicyContext, shown: string): Promise<string> {
+  if (context.profiles.mode === "mock") {
+    // Mock selection is stateless (bff/profile.ts): the Profile the page shows acts, as
+    // long as it is one of the mock Profiles (like the quick reaction mock). Real mode
+    // below always checks it against the session's selection.
+    const owned = (await context.profiles.availableProfiles()).find((profile) => profile.id === shown);
+    if (!owned) throw new GraphQLError("Not one of the viewer's Profiles", { extensions: { code: "PROFILE_UNAVAILABLE" } });
+    return owned.profileId;
+  }
   const { activeProfile } = await context.profiles.getProfileContext();
   if (!activeProfile) throw new GraphQLError("No active profile is selected", { extensions: { code: "PROFILE_REQUIRED" } });
   if (activeProfile.id !== shown) throw new GraphQLError("The selected profile changed", { extensions: { code: "PROFILE_CHANGED" } });

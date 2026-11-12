@@ -49,13 +49,15 @@ bff/
   loaders.ts               -- DataLoader: profile + metadata, request-scoped, memoized per request
   resolvers.ts             -- Query/Mutation resolvers
   registration-gate-resolvers.ts -- Registration gate (D15) resolvers + error classification (extensions.code)
-  profile-identity-resolvers.ts -- Profile username resolvers (setProfileUsername / checkProfileUsername / Profile.usernameState) + extensions.code classification (USERNAME_* etc.)
+  registration-gate-status.ts -- Admin screen status chip (NOT_OPENED / OPEN / ... / OVERRIDE) and minimum-condition derivation (the only place that decides them)
+  admin-ssr.ts             -- Admin page SSR initial state (viewer + gate) so the override warning is in the SSR HTML (index.ts passes it to renderPage)
+  profile-identity-resolvers.ts -- Profile username resolvers (setProfileUsername / checkProfileUsername (形式・予約語は BFF、重複は Emumet の空き確認 API。確認できなければ UNKNOWN で VALID にしない) / Profile.usernameState) + extensions.code classification (USERNAME_* etc.)
   openapi/                 -- Pinned Emumet OpenAPI (lock verification, contract validation); see README
   emumet/
     client.ts              -- EmumetClient interface + DTOs (camelCase)
     real.ts                -- REST-backed EmumetClient (snake_case ↔ camelCase mapping)
     mock.ts                -- In-memory stateful MockEmumetClient
-    registration-gate*.ts  -- Registration gate client contract / real / stateful mock / all-state fixtures (BFF only, no UI)
+    registration-gate*.ts  -- Registration gate client contract / real / stateful mock / all-state fixtures / admin screen scenarios (mock only; POST /__mock/registration-gate/scenario in mock mode)
     profile-username.ts    -- Profile username rules (format / 17 reserved words; mirrors Emumet, checked against the pinned OpenAPI in tests)
     generated/             -- openapi-typescript output (never hand-edit; `bun run codegen`)
   *.test.ts                -- BFF test files (bun test)
@@ -63,23 +65,33 @@ src/
   style.css               -- Tailwind CSS entry point (@import "tailwindcss" + @source)
   Generated/               -- Auto-generated PureScript GraphQL types (from bff/schema.graphql via sync-graphql.ts; never hand-edit)
   App/
-    Route.purs            -- Route ADT (Home, Settings, AccountNew, AccountDetail, Login) + routing-duplex codec
+    Route.purs            -- Route ADT (Home, Settings, AccountNew, AccountDetail, Login, AdminRegistration, AdminWebhook) + routing-duplex codec
     Model.purs            -- Model type (Maybe Route, PageModel, SessionInfo, isHydrated) + JSON instances
+    Username.purs         -- Profile username rules (mirror of Emumet), verdicts and the status line state; tested in test/Test/Main.purs
+    Fixtures.purs         -- Every SSR state the username screens can be in (served by the hydration check in ui-catalog visual/screens/emumet-verify.ts via Server.renderFixture)
     Message.purs          -- Message ADT (Navigate, UrlChanged, CheckSession, Login/Logout, etc.)
     View.purs             -- Top-level view dispatcher
     Api/
       Client.purs         -- Generic HTTP client (Affjax-based: get, post, put, delete)
       Auth.purs           -- Auth API calls (login, checkSession, logout) via BFF /auth/* endpoints
       GraphQL.purs        -- GraphQL client (graphql-client): queries + mutations over /graphql
+      RegistrationGate.purs -- Registration gate admin queries/mutations + GateError classification
       GraphQL/
         Types.purs        -- App-owned stable DTOs (AccountResponse, ProfileResponse, etc.)
+    Admin/
+      Types.purs          -- Admin (registration gate) model, messages, DTOs
+      Text.purs           -- All admin screen wording and status colours (single place)
+      Time.purs           -- Event time formatting (HH:MM today, MM/DD otherwise) + focus FFI
     View/
       Layout.purs         -- HTML shell (<html>/<head>/<body>) + auth-aware navigation
       Login.purs          -- Login page view (email + password form)
-      Accounts.purs       -- Account list view
-      AccountNew.purs     -- New account form view
+      Accounts.purs       -- Account list view (@username@host, unset label, "+" opens the create modal)
+      AccountNew.purs     -- Create-account modal (name / username / Bot, then the "cannot be changed" confirmation); /accounts/new = the list with the modal open
+      UsernameUi.purs     -- Shared username input, status line, confirmation and modal frame (native <dialog>)
+      UsernameHelp.purs   -- Help page for the username rules (the (?) in the input links here: /help/username)
       AccountDetail.purs  -- Account detail/edit view
       Settings.purs       -- Settings page view
+      Admin.purs          -- Registration gate admin pages (一般登録 / Webhook tabs), override warning strip, notification bell
       NotFound.purs       -- 404 view
       Link.purs           -- SPA <a> with preventDefault + Navigate message
     Theme.purs            -- Semantic Tailwind class helpers (Catppuccin-mocha theme)
@@ -87,10 +99,12 @@ src/
   Client.purs             -- Client entry: resumeMount + CheckSession + route subscription
   Client/
     Update.purs           -- Client update function (auth, navigation, API calls)
+    Admin.purs            -- Registration gate admin update (viewer hint, gate commands, notifications, webhook)
     Navigation.js         -- FFI: window.location.assign for full-page redirects
     Navigation.purs       -- PureScript binding for navigation FFI
     Fetch.js              -- FFI: alternative fetch implementation (unused)
     Fetch.purs            -- Alternative fetch module with bearer token (unused)
+    Dialog.js / Dialog.purs -- Makes the username <dialog>s real modals (showModal, focus in/out, Tab wrap, Escape)
   Server.purs             -- Server entry: renderPage for SSR HTML generation
 scripts/
   dev.sh                  -- Dev server (build + watch + serve)

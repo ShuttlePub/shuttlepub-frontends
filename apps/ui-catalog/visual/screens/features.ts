@@ -9,19 +9,32 @@ export function captureSide(value: string | undefined): CaptureSide {
   throw new Error(`CAPTURE_SIDE must be "branch" or "baseline", got ${JSON.stringify(value)}`);
 }
 
-/** Where each feature's SSR marker is looked for (see cases.ts ScreenFeature). */
-export const SHUTTLEPUB_FEATURE_PROBES: readonly { feature: ScreenFeature; path: string; marker: string }[] = [
-  { feature: "sns-shell", path: "/", marker: 'data-testid="app-shell"' },
-  { feature: "mute-block-settings", path: "/settings/mute-block/domains", marker: 'data-testid="mute-block"' },
-];
+/** ShuttlePub pages whose SSR HTML carries the feature markers (`/`, `/login`, the mute/block page). */
+export const SHUTTLEPUB_PROBE_PATHS = ["/", "/login", "/settings/mute-block/domains"] as const;
 
-/** SSR markers proving a feature exists in the running app, for the HTML served at `path`. */
-export function featuresInShuttlePubHtml(html: string, path = "/"): Set<ScreenFeature> {
+/** SSR markers proving a feature exists in the running app (see cases.ts ScreenFeature). Pass the HTML of SHUTTLEPUB_PROBE_PATHS. */
+export function featuresInShuttlePubHtml(html: string): Set<ScreenFeature> {
   const features = new Set<ScreenFeature>();
-  for (const probe of SHUTTLEPUB_FEATURE_PROBES) {
-    if (probe.path === path && html.includes(probe.marker)) features.add(probe.feature);
-  }
+  if (html.includes('data-testid="app-shell"')) features.add("sns-shell");
+  if (html.includes('class="sp-reaction-layer"')) features.add("quick-reaction");
+  if (html.includes('data-testid="login-page"')) features.add("sns-login");
+  // Only the mute/block page renders this marker; a baseline without the route serves NotFound there.
+  if (html.includes('data-testid="mute-block"')) features.add("mute-block-settings");
   return features;
+}
+
+/** SSR marker of the Emumet username dialog on /accounts/new (the create modal is part of the SSR page). */
+export function featuresInEmumetHtml(html: string): Set<ScreenFeature> {
+  const features = new Set<ScreenFeature>();
+  if (html.includes("data-username-dialog")) features.add("emumet-username-ui");
+  return features;
+}
+
+/** The Emumet mock knows the E15x Webhook destination scenarios (probe: POST /__mock/registration-gate/scenario). */
+export const EMUMET_WEBHOOK_PROBE_SCENARIO = "webhook-multiple";
+
+export function featuresFromEmumetScenarioProbe(status: number): Set<ScreenFeature> {
+  return new Set<ScreenFeature>(status >= 200 && status < 300 ? ["emumet-webhook-endpoints"] : []);
 }
 
 /**

@@ -8,9 +8,12 @@ test("bff/emumet/generated/emumet-api.ts is exactly what codegen produces from t
   expect(committed).toContain("Do not edit by hand");
 });
 
-test("generated REST types cover the RegistrationGate operations and nothing else", async () => {
+test("generated REST types cover the consumed tags (gate, protections, webhook, me) and nothing else", async () => {
   const committed = await Bun.file(join(import.meta.dir, "..", "..", REST_TYPES_RELATIVE_PATH)).text();
   expect(committed).toContain('"/api/v1/admin/registration-gate"');
   expect(committed).toContain('"/api/v1/admin/registration-gate/override/revoke"');
+  expect(committed).toContain('"/api/v1/admin/registration-gate/protections/{protection}/verify"');
+  expect(committed).toContain('"/api/v1/admin/registration-gate/webhook/retry"');
+  expect(committed).toContain('"/api/v1/me"');
   expect(committed).not.toContain('"/api/v1/accounts"');
 });

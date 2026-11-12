@@ -6,7 +6,7 @@ import { ownActorDomain } from "./policy/domain.ts";
 import { createMockProfilePolicy } from "./policy/mock.ts";
 import { createRealProfilePolicy } from "./policy/real.ts";
 import type { ProfilePolicySource } from "./policy/source.ts";
-import { createMockProfileContext, createRealProfileContext, mockSelectionCookie, mockSelectionFrom, type ProfileContextSource } from "./profile.ts";
+import { createMockProfileContext, createRealProfileContext, type ProfileContextSource } from "./profile.ts";
 import type { ShuttlePubApi } from "./rest/client.ts";
 import { createMockApi } from "./rest/mock.ts";
 import { createRealApi } from "./rest/real.ts";
@@ -18,6 +18,13 @@ export type App = {
   profiles: ProfileContextSource;
   auth?: Auth;
   handleGraphql: (request: Request) => Promise<Response>;
+  /**
+   * Mock mode with `mockReset` only (SHUTTLEPUB_MOCK_RESET=1): POST /__mock/reset
+   * restores the stateful mock (quick reaction favourites / reactions) to its fixtures.
+   * The visual capture and verify turn it on to start every case from the same state;
+   * a plain mock server and real mode have no such route.
+   */
+  handleMockReset?: (request: Request) => Response;
 };
 export type AppDeps = {
   fetch?: (request: Request) => Promise<Response>;
@@ -26,6 +33,8 @@ export type AppDeps = {
   emumetFetch?: FetchLike;
   /** Mock mode only: the Profile mute/block mock (tests inject a seeded one). */
   mockPolicy?: ProfilePolicySource;
+  /** Test-only: expose POST /__mock/reset (mock mode only). */
+  mockReset?: boolean;
 };
 
 /** The mock deployment's actor domain (the agreed D08 mock's own server). */
@@ -39,7 +48,8 @@ function selfDomainsOf(publicHost: string | undefined): string[] | null {
 }
 
 export function createApp(config: AppConfig, deps: AppDeps = {}): App {
-  const api: ShuttlePubApi = config.mode === "mock" ? createMockApi()
+  const mockApi = config.mode === "mock" ? createMockApi() : undefined;
+  const api: ShuttlePubApi = config.mode === "mock" ? mockApi!
     : createRealApi({ baseUrl: config.apiUrl, ...(deps.fetch === undefined ? {} : { fetch: deps.fetch }) });
   const auth = config.mode === "real" && deps.auth ? createAuth(deps.auth, { fetch: deps.authFetch }) : undefined;
   const profiles = config.mode === "mock" ? createMockProfileContext() : createRealProfileContext();
@@ -47,27 +57,28 @@ export function createApp(config: AppConfig, deps: AppDeps = {}): App {
   // session (no auth config) must never reach mock data: every call is UNAUTHENTICATED.
   const mockPolicy = config.mode === "mock" ? deps.mockPolicy ?? createMockProfilePolicy()
     : createRealProfilePolicy({ baseUrl: "http://unconfigured.invalid", session: () => Promise.reject(new AuthError("UNAUTHENTICATED", 401)) });
-  // Real mode without auth config: no session, no selection, nothing to remember.
-  const unauthenticatedHandler = createGraphqlHandler({ api, profiles, policy: mockPolicy, selfDomains: null });
+  // Without a session there is no bearer token: real S3 operations are UNAUTHENTICATED.
+  const viewerAuth = config.mode === "mock"
+    ? async () => ({ accessToken: undefined })
+    : async (): Promise<{ accessToken: string | undefined }> => { throw new AuthError("UNAUTHENTICATED", 401); };
+  const mockHandler = createGraphqlHandler({ api, profiles, viewerAuth, policy: mockPolicy,
+    selfDomains: config.mode === "mock" ? [MOCK_OWN_DOMAIN] : null });
   return { config, api, profiles, ...(auth ? { auth } : {}),
+    ...(mockApi && deps.mockReset ? {
+      handleMockReset(request: Request) {
+        if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
+        mockApi.reset();
+        return new Response(null, { status: 204 });
+      },
+    } : {}),
     async handleGraphql(request) {
-      if (config.mode === "mock") {
-        // The selected Profile is this browser's (cookie), so the policy resolvers see the
-        // same selection the page shows; other browsers keep the fixture default.
-        const cookies: string[] = [];
-        const requestProfiles = createMockProfileContext({
-          selectedId: mockSelectionFrom(request),
-          select: (id) => { cookies.push(mockSelectionCookie(id)); },
-        });
-        const response = await createGraphqlHandler({ api, profiles: requestProfiles, policy: mockPolicy, selfDomains: [MOCK_OWN_DOMAIN] })(request);
-        return cookies.length === 0 ? response : withCookies(response, cookies);
-      }
+      if (config.mode === "mock") return mockHandler(request);
       // All POSTs are protected, including GraphQL queries. GET mutations are rejected by Yoga.
       if (request.method === "POST") {
         const rejected = checkOrigin(request, auth?.config.appOrigin ?? new URL(request.url).origin);
         if (rejected) return privateResponse(rejected);
       }
-      if (!auth) return privateResponse(await unauthenticatedHandler(request));
+      if (!auth) return privateResponse(await mockHandler(request));
       const cookies: string[] = [];
       let resolved: Promise<ViewerSession> | undefined;
       const getSession = () => resolved ??= auth.resolveSession(request, cookies);
@@ -88,7 +99,8 @@ export function createApp(config: AppConfig, deps: AppDeps = {}): App {
       });
       const selfDomains = selfDomainsOf(auth.config.emumetPublicHost);
       try {
-        const response = await createGraphqlHandler({ api, profiles: requestProfiles, policy, selfDomains })(request);
+        const response = await createGraphqlHandler({ api, profiles: requestProfiles, policy, selfDomains,
+          viewerAuth: async () => ({ accessToken: (await getSession()).accessToken }) })(request);
         return privateResponse(withCookies(response, cookies));
       } catch (error) {
         return privateResponse(withCookies(Response.json({ error: error instanceof AuthError ? error.code : "UPSTREAM_UNAVAILABLE" }, { status: 502 }), cookies));

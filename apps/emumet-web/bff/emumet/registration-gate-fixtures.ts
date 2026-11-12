@@ -4,14 +4,23 @@
 // 値は bff/emumet/generated/emumet-api.ts の型で縛り、registration-gate-fixtures.test.ts が
 // vendored OpenAPI (openapi/emumet.json、producer pin 済み) の応答スキーマに照合する。
 // mock (registration-gate-mock.ts) の初期状態もここから作るため、mock と契約が乖離しない。
-// E15w (Webhook 状態・テスト送信・再試行) の契約は未公開のため fixture を持たない。
+// 保護の readiness (E15c) と Webhook 送信先・配送失敗 (E15x) の fixture も同じ方法で OpenAPI に照合する。
 // ============================================================
 
 import type {
+  WireMe,
+  WireProtectionList,
+  WireProtectionReadiness,
   WireRegistrationGate,
   WireRegistrationGateNotification,
   WireRegistrationGateNotificationList,
   WireRegistrationObservation,
+  WireVerifyProtection,
+  WireWebhookEndpoint,
+  WireWebhookEndpointList,
+  WireWebhookFailedDelivery,
+  WireWebhookRetry,
+  WireWebhookTest,
 } from "./registration-gate-real.ts";
 
 type Probe = "healthy" | "unhealthy" | "unknown";
@@ -126,6 +135,22 @@ export const REGISTRATION_GATE_FIXTURES = {
     observation: UNCONFIGURED,
     updated_at: "2026-11-10T00:00:00Z",
   },
+  /** 準備途中 (初期状態のまま。メール認証は設定済みだが未検証 = 条件未達。通常の開放は 422) */
+  not_ready_unverified: {
+    revision: 0,
+    admin_state: "closed",
+    decision: "admin_closed",
+    accepting: false,
+    requires_manual_resume: false,
+    config_lost_latch: false,
+    enforcement_lost_latch: false,
+    health_episode: "none",
+    enforced_protections: [],
+    degraded_protections: [],
+    override: NO_OVERRIDE,
+    observation: observation([true, "unknown"], [false, "unknown"]),
+    updated_at: "2026-11-10T00:00:00Z",
+  },
   /** 一時拒否 (設定は残っているが検証 API が応答しない。復旧すれば自動で再開する) */
   temporary_reject: {
     revision: 12,
@@ -238,6 +263,41 @@ export const REGISTRATION_GATE_FIXTURES = {
     observation: UNCONFIGURED,
     updated_at: "2026-11-10T02:15:00Z",
   },
+  /**
+   * E15d: 登録の保護の適用証明が失われた (override 中でも STOPPED。override 値は保持される)。
+   * 証明が戻るまで開放・再開・override は 422
+   */
+  stopped_enforcement_lost: {
+    revision: 18,
+    admin_state: "open",
+    decision: "stopped",
+    accepting: false,
+    requires_manual_resume: true,
+    config_lost_latch: false,
+    enforcement_lost_latch: true,
+    health_episode: "none",
+    enforced_protections: [],
+    degraded_protections: [],
+    override: OVERRIDE_BY_ADMIN,
+    observation: { ...HEALTHY_BOTH, enforcement_verified: false },
+    updated_at: "2026-11-10T02:20:00Z",
+  },
+  /** E15d: 適用証明は復旧したがラッチが残り、管理者の手動再開を待つ */
+  stopped_enforcement_restored: {
+    revision: 19,
+    admin_state: "open",
+    decision: "stopped",
+    accepting: false,
+    requires_manual_resume: true,
+    config_lost_latch: false,
+    enforcement_lost_latch: true,
+    health_episode: "none",
+    enforced_protections: [],
+    degraded_protections: [],
+    override: NO_OVERRIDE,
+    observation: HEALTHY_BOTH,
+    updated_at: "2026-11-10T02:25:00Z",
+  },
 } as const satisfies Record<string, WireRegistrationGate>;
 
 export type RegistrationGateFixtureName = keyof typeof REGISTRATION_GATE_FIXTURES;
@@ -333,3 +393,277 @@ export const UNREAD_COUNT_FIXTURES = {
   none: { unread_count: 0 },
   some: { unread_count: 3 },
 } as const;
+
+/** E15d の通知 (適用証明の喪失・復旧)。ALL_KINDS とは別にして既存 fixture の並びを変えない */
+export const ENFORCEMENT_NOTIFICATION_FIXTURES = page([
+  notificationFixture(402, "enforcement_restored", { read: false }),
+  notificationFixture(401, "enforcement_lost_stopped", {
+    read: false,
+    observation: { ...HEALTHY_BOTH, enforcement_verified: false },
+  }),
+]);
+
+// ------------------------------------------------------------
+// 保護の readiness (E15c)。observation との対応は Emumet の to_observation と同じ
+// (operational → configured・healthy / temporarily_unavailable → configured・unhealthy /
+//  unverified → configured・unknown / configuration_invalid → 未設定扱い)。
+// ------------------------------------------------------------
+
+type ProtectionName = "email" | "bot";
+
+const PROVIDER: Readonly<Record<ProtectionName, string>> = { email: "smtp", bot: "turnstile" };
+
+export function protectionReadinessFixture(
+  protection: ProtectionName,
+  status: "configuration_invalid" | "operational" | "temporarily_unavailable" | "unverified",
+  options: { enabled?: boolean; reason?: string; checkedAt?: string | null } = {},
+): WireProtectionReadiness {
+  const enabled = options.enabled ?? true;
+  const checkedAt = options.checkedAt === undefined ? (status === "unverified" || !enabled ? null : "2026-11-10T03:41:00Z") : options.checkedAt;
+  const defaultReason = {
+    configuration_invalid: enabled ? "invalid_secret" : "not_configured",
+    operational: "business_success",
+    temporarily_unavailable: "timeout",
+    unverified: "never_verified",
+  }[status];
+  return {
+    protection,
+    provider: PROVIDER[protection],
+    enabled,
+    generation: `gen-${protection}-1`,
+    fingerprint: enabled ? `fp-${protection}` : "",
+    status,
+    reason: options.reason ?? defaultReason,
+    checked_at: checkedAt,
+    valid_until: status === "operational" ? "2026-11-10T09:41:00Z" : null,
+    last_check: null,
+  };
+}
+
+/** 未設定の保護 (enabled=false / configuration_invalid / not_configured) */
+export function unsetProtectionFixture(protection: ProtectionName): WireProtectionReadiness {
+  return protectionReadinessFixture(protection, "configuration_invalid", { enabled: false });
+}
+
+export const PROTECTION_LIST_FIXTURES = {
+  both_operational: { protections: [protectionReadinessFixture("email", "operational"), protectionReadinessFixture("bot", "operational")] },
+  unset: { protections: [unsetProtectionFixture("email"), unsetProtectionFixture("bot")] },
+  /** 未確認 (設定済みだが一度も検証していない) と未設定 */
+  email_unverified_bot_unset: { protections: [protectionReadinessFixture("email", "unverified"), unsetProtectionFixture("bot")] },
+  /** 応答なし (一時障害) と準備済み */
+  email_unavailable_bot_operational: {
+    protections: [protectionReadinessFixture("email", "temporarily_unavailable"), protectionReadinessFixture("bot", "operational")],
+  },
+  /** 設定エラー (サイトキー/secret が不正) と未設定 */
+  email_unset_bot_invalid: {
+    protections: [unsetProtectionFixture("email"), protectionReadinessFixture("bot", "configuration_invalid", { reason: "invalid_secret" })],
+  },
+} as const satisfies Record<string, WireProtectionList>;
+
+export const VERIFY_PROTECTION_FIXTURES = {
+  /** bot: token なしの負の probe。secret は受理されたが operational にはならない */
+  bot_negative_probe: {
+    result: { outcome: "accepted", reason: "accepted", transport: "http_2xx" },
+    recorded: true,
+    disposition: "completed",
+    pending_challenge: null,
+    readiness: protectionReadinessFixture("bot", "unverified", { reason: "no_business_success", checkedAt: "2026-11-10T03:50:00Z" }),
+  },
+  /** email: canary mailbox にコードを送った (確認待ち) */
+  email_pending: {
+    result: { outcome: "accepted", reason: "accepted", transport: "smtp_accepted" },
+    recorded: true,
+    disposition: "pending_confirmation",
+    pending_challenge: { challenge_id: "challenge-1", expires_at: "2026-11-10T04:00:00Z" },
+    readiness: protectionReadinessFixture("email", "unverified", { reason: "no_business_success", checkedAt: "2026-11-10T03:50:00Z" }),
+  },
+  /** 一時障害 (タイムアウト) */
+  email_timeout: {
+    result: { outcome: "temporarily_unavailable", reason: "timeout", transport: "timeout" },
+    recorded: true,
+    disposition: "completed",
+    pending_challenge: null,
+    readiness: protectionReadinessFixture("email", "temporarily_unavailable", { checkedAt: "2026-11-10T03:50:00Z" }),
+  },
+} as const satisfies Record<string, WireVerifyProtection>;
+
+// ------------------------------------------------------------
+// Webhook 送信先 (E15x)。URL は部分マスク形だけ、secret は含まない (書き込み専用)
+// ------------------------------------------------------------
+
+type WebhookCategoryWire = WireWebhookFailedDelivery["category"];
+type WebhookEventTypeWire = WireWebhookFailedDelivery["event_type"];
+
+/** 通知イベントの種別 → 送る通知のカテゴリ (Emumet の対応表と同じ) */
+export const WEBHOOK_CATEGORY_OF_EVENT: Readonly<Record<string, WebhookCategoryWire>> = {
+  outage_started: "outage",
+  protection_degraded: "outage",
+  outage_recovered: "recovery",
+  enforcement_restored: "recovery",
+  protection_lost_stopped: "auto_stop",
+  enforcement_lost_stopped: "auto_stop",
+  override_started: "override",
+  override_revoked: "override",
+};
+
+const ALL_CATEGORIES: WebhookCategoryWire[] = ["outage", "recovery", "auto_stop", "override"];
+const NO_DELIVERIES = { pending: 0, in_flight: 0, retrying: 0, delivered: 0, failed: 0 };
+
+export function webhookFailureFixture(
+  endpointId: string,
+  eventId: string,
+  eventType: WebhookEventTypeWire,
+  failedAt: string,
+): WireWebhookFailedDelivery {
+  return {
+    endpoint_id: endpointId,
+    event_id: eventId,
+    event_type: eventType,
+    category: WEBHOOK_CATEGORY_OF_EVENT[eventType] ?? "outage",
+    failed_at: failedAt,
+    attempt_count: 5,
+    failure_reason: "retries_exhausted",
+    http_status: 503,
+    result: "http_server_error",
+  };
+}
+
+/**
+ * 送信先 1 件。状態チップ (status) と failed 件数は、mock では配送失敗の一覧から導出し直す
+ * (ここでは配送失敗が無い前提の値を置く)
+ */
+export function webhookEndpointFixture(
+  id: string,
+  maskedUrl: string,
+  overrides: Partial<WireWebhookEndpoint> = {},
+): WireWebhookEndpoint {
+  return {
+    id,
+    source: "api",
+    masked_url: maskedUrl,
+    categories: ALL_CATEGORIES,
+    status: "healthy",
+    failing_reasons: [],
+    config_issue: null,
+    failed_count: 0,
+    counts: { ...NO_DELIVERIES, delivered: 2 },
+    secret_configured: true,
+    editable: true,
+    revision: 1,
+    last_success_at: "2026-11-10T03:20:00Z",
+    last_failure_at: null,
+    created_at: "2026-11-09T12:00:00Z",
+    ...overrides,
+  };
+}
+
+const PRIMARY = webhookEndpointFixture("1", "hooks.example.net/••••/a8f2");
+
+/** 1 ページ (50 件) に収まらない失敗 (古い失敗へは［さらに読み込む］で到達する) */
+function manyFailures(endpointId: string, count: number): WireWebhookFailedDelivery[] {
+  const kinds: WebhookEventTypeWire[] = ["outage_started", "protection_degraded", "outage_recovered", "override_started"];
+  return Array.from({ length: count }, (_, index) => {
+    const at = new Date(Date.UTC(2026, 10, 10, 3, 40) - index * 7 * 60_000).toISOString().replace(".000", "");
+    return webhookFailureFixture(endpointId, String(2000 - index), kinds[index % kinds.length]!, at);
+  });
+}
+
+/** 送信先の一覧と、その時点の配送失敗 (failed 配送) の組 */
+export type WebhookFixture = {
+  readonly list: WireWebhookEndpointList;
+  readonly failures: readonly WireWebhookFailedDelivery[];
+};
+
+function webhookFixture(
+  endpoints: WireWebhookEndpoint[],
+  failures: WireWebhookFailedDelivery[] = [],
+  extra: Partial<WireWebhookEndpointList> = {},
+): WebhookFixture {
+  return {
+    list: {
+      endpoints,
+      has_failed_deliveries: failures.length > 0,
+      encryption_key_configured: true,
+      max_endpoints: 10,
+      ...extra,
+    },
+    failures,
+  };
+}
+
+export const WEBHOOK_FIXTURES = {
+  /** 送信先なし */
+  none: webhookFixture([]),
+  /** 送信先なし・暗号鍵が未設定 (作成は encryption_key_not_configured で拒否される) */
+  no_key: webhookFixture([], [], { encryption_key_configured: false }),
+  /** 正常 */
+  healthy: webhookFixture([PRIMARY]),
+  /** 配送失敗あり (failed は自動では再試行されない。管理者が 1 件ずつ再試行する) */
+  failed: webhookFixture(
+    [webhookEndpointFixture("1", "hooks.example.net/••••/a8f2", { status: "failing", failing_reasons: ["failed_deliveries"], failed_count: 2, counts: { ...NO_DELIVERIES, delivered: 1, failed: 2 }, last_failure_at: "2026-11-10T03:40:00Z" })],
+    [
+      webhookFailureFixture("1", "13", "outage_started", "2026-11-10T03:40:00Z"),
+      webhookFailureFixture("1", "12", "protection_degraded", "2026-11-10T03:32:00Z"),
+    ],
+  ),
+  /** 複数の送信先 (片方だけ配送失敗、通知カテゴリの一部だけを送る) */
+  multiple: webhookFixture(
+    [
+      PRIMARY,
+      webhookEndpointFixture("2", "ops.example.org/••••/9c1e", { categories: ["outage", "auto_stop"], status: "failing", failing_reasons: ["failed_deliveries"], failed_count: 1, counts: { ...NO_DELIVERIES, failed: 1 }, revision: 3, last_failure_at: "2026-11-10T03:40:00Z" }),
+    ],
+    [webhookFailureFixture("2", "13", "outage_started", "2026-11-10T03:40:00Z")],
+  ),
+  /** secret を復号できない (secret の再入力で復旧する) */
+  secret_undecryptable: webhookFixture([
+    webhookEndpointFixture("1", "hooks.example.net/••••/a8f2", { status: "failing", failing_reasons: ["secret_undecryptable"] }),
+  ]),
+  /** 環境変数の送信先 (暗号鍵なしで環境変数のまま配送。編集・削除できない) */
+  environment: webhookFixture(
+    [webhookEndpointFixture("environment", "hooks.example.net/••••/a8f2", { source: "environment", editable: false, revision: null, created_at: null })],
+    [],
+    { encryption_key_configured: false },
+  ),
+  /** 環境変数の送信先の設定不備 (secret が無い) */
+  environment_misconfigured: webhookFixture(
+    [
+      webhookEndpointFixture("environment", "hooks.example.net", {
+        source: "environment",
+        editable: false,
+        revision: null,
+        created_at: null,
+        status: "failing",
+        failing_reasons: ["config_invalid"],
+        config_issue: "missing_secret",
+        secret_configured: false,
+        counts: NO_DELIVERIES,
+        last_success_at: null,
+      }),
+    ],
+    [],
+    { encryption_key_configured: false },
+  ),
+  /** 配送失敗が 1 ページ (50 件) を超える */
+  many_failures: webhookFixture(
+    [webhookEndpointFixture("1", "hooks.example.net/••••/a8f2", { status: "failing", failing_reasons: ["failed_deliveries"], failed_count: 60, counts: { ...NO_DELIVERIES, failed: 60 } })],
+    manyFailures("1", 60),
+  ),
+} as const satisfies Record<string, WebhookFixture>;
+
+export type WebhookFixtureName = keyof typeof WEBHOOK_FIXTURES;
+
+export const WEBHOOK_TEST_FIXTURES = {
+  success: { event_id: "test_01", delivered: true, result: "delivered", http_status: 204, attempted_at: "2026-11-10T03:50:00Z" },
+  failure: { event_id: "test_02", delivered: false, result: "http_server_error", http_status: 503, attempted_at: "2026-11-10T03:50:00Z" },
+} as const satisfies Record<string, WireWebhookTest>;
+
+export const WEBHOOK_RETRY_FIXTURES = {
+  one: { requeued: 1 },
+  none: { requeued: 0 },
+} as const satisfies Record<string, WireWebhookRetry>;
+
+export const ME_FIXTURES = {
+  admin: { account_id: "1001", instance_roles: ["admin"] },
+  moderator: { account_id: "1002", instance_roles: ["moderator"] },
+  member: { account_id: "1003", instance_roles: [] },
+} as const satisfies Record<string, WireMe>;

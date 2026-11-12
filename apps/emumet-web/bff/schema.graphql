@@ -4,8 +4,8 @@ type Account {
   id: ID!
   name: String!
   isBot: Boolean!
-  "Emumet は Account 単位の鍵を返さない (Profile モデル移行で廃止)。実 Emumet 接続時は値を持たず常に空文字。画面側の非表示・nullable 化は画面 PR"
-  publicKey: String!
+  "Emumet は Account 単位の鍵を返さない (Profile モデル移行で廃止)。値を持たないときは null (画面は非表示にする)"
+  publicKey: String
   createdAt: DateTime!
   moderation: Moderation
   profile: Profile
@@ -59,8 +59,8 @@ type AccountConnection {
 input CreateAccountInput {
   name: String!
   isBot: Boolean
-  "Profile の username (Account 名とは別入力)。新 UI は必ず送る。省略は旧経路との互換のための暂定 (画面実装 PR で String! にする)"
-  username: String
+  "Profile の username (Account 名とは別入力。必須。形式・予約語・重複の違反は extensions.code で区別して返す)"
+  username: String!
 }
 
 input UpdateProfileInput {
@@ -78,6 +78,12 @@ input UpsertMetadataInput {
 type Query {
   accounts: AccountConnection!
   account(id: ID!): Account
+  """
+  acct の @host 部分 (画面の ID 表示用)。BFF の EMUMET_PUBLIC_HOST (Emumet の PUBLIC_BASE_URL の host[:port] と同じ値を明示設定) を返す。
+  mock は設定が無ければ例示ホスト。real で未設定・不正ならエラー (extensions.code = INSTANCE_HOST_NOT_CONFIGURED)。
+  API 接続先 (EMUMET_API_URL) への暗黙のフォールバックはしない
+  """
+  instanceHost: String!
 }
 
 type Mutation {
@@ -96,10 +102,12 @@ type Mutation {
 # 認可の正本は Emumet API (instance:administrate)。BFF は権限を判断せず、
 # 未認証 UNAUTHENTICATED / 権限なし FORBIDDEN / revision 競合 REVISION_CONFLICT /
 # 前提条件違反 PRECONDITION_FAILED / 不正リクエスト BAD_REQUEST /
+# 対象なし NOT_FOUND (再試行する failed 配送・送信先が無い等) / Webhook 未設定・設定不備 WEBHOOK_NOT_CONFIGURED /
+# 送信先の登録・更新・削除の拒否 WEBHOOK_ENDPOINT_REJECTED (extensions.reason に固定コード。revision 競合とは別) /
 # 一時障害 TEMPORARILY_UNAVAILABLE (extensions.retryable = true) /
 # 契約違反の応答 INVALID_UPSTREAM_RESPONSE / その他の上流エラー UPSTREAM_ERROR を
 # extensions.code で区別して返す。状態 (RegistrationGate) とエラーは別の型であり混同しない。
-# E15a は control plane のみで、実 Kratos 登録をまだ遮断も許可もしない (E15d で接続)。
+# 判定は E15d で実 Kratos 登録 (pre-persist hook) に適用される。適用証明の喪失も停止ラッチ (enforcementLostLatch)。
 # secret は一切含まない。
 # ----------------------------------------------------------------
 
@@ -141,6 +149,9 @@ enum RegistrationGateEventKind {
   PROTECTION_LOST_STOPPED
   OVERRIDE_STARTED
   OVERRIDE_REVOKED
+  "E15d: 登録の保護の適用証明が失われて停止 (復旧後も手動再開が必要)"
+  ENFORCEMENT_LOST_STOPPED
+  ENFORCEMENT_RESTORED
 }
 
 type RegistrationProtectionObservation {
@@ -149,6 +160,8 @@ type RegistrationProtectionObservation {
 }
 
 type RegistrationObservation {
+  "E15d: 登録の保護 (Kratos hook) が現在の deployment で適用されている証明。false の間は開放・再開・override が PRECONDITION_FAILED"
+  enforcementVerified: Boolean!
   email: RegistrationProtectionObservation!
   bot: RegistrationProtectionObservation!
 }
@@ -169,6 +182,8 @@ type RegistrationGate {
   "decision が STOPPED のとき true。復旧しても自動再開しない"
   requiresManualResume: Boolean!
   configLostLatch: Boolean!
+  "E15d: 適用証明の喪失による停止ラッチ (override 中でも STOPPED。復旧後も手動再開が必要)"
+  enforcementLostLatch: Boolean!
   healthEpisode: RegistrationHealthEpisode!
   "登録時に課す対策 (検証 API が実際に応答した対策のみ)"
   enforcedProtections: [RegistrationProtection!]!
@@ -177,6 +192,24 @@ type RegistrationGate {
   override: RegistrationOverride!
   observation: RegistrationObservation!
   updatedAt: String!
+  "管理画面の状態チップ (BFF が decision・adminState・revision・override から導出。registration-gate-status.ts)"
+  status: RegistrationGateStatus!
+  "最低条件 (メール認証か BOT 保護の少なくとも一方が設定済みかつ応答あり) を満たすか。false なら開放・再開は PRECONDITION_FAILED"
+  minimumMet: Boolean!
+}
+
+"""
+管理画面の状態 (ui-spec A-2)。decision を優先して決める:
+STOPPED → AUTO_STOPPED / ADMIN_CLOSED → (revision 0 なら NOT_OPENED、それ以外 ADMIN_STOPPED) /
+override 有効 → OVERRIDE / TEMPORARY_REJECT → TEMPORARILY_SUSPENDED / ACCEPTING → OPEN
+"""
+enum RegistrationGateStatus {
+  NOT_OPENED
+  OPEN
+  TEMPORARILY_SUSPENDED
+  AUTO_STOPPED
+  ADMIN_STOPPED
+  OVERRIDE
 }
 
 type RegistrationGateNotification {
@@ -219,6 +252,200 @@ extend type Mutation {
   markAllRegistrationGateNotificationsRead: Int!
 }
 
+"現在時刻での評価。OPERATIONAL は現在の設定に結び付いた実検証の成功が新鮮な間だけ"
+enum RegistrationProtectionStatus {
+  CONFIGURATION_INVALID
+  OPERATIONAL
+  TEMPORARILY_UNAVAILABLE
+  UNVERIFIED
+}
+
+"保護 (メール認証・BOT 保護) の準備状態 (E15c)。secret・fingerprint・設定値は含まない"
+type RegistrationProtectionReadiness {
+  protection: RegistrationProtection!
+  "設定が有効か (未設定・明示無効は false)"
+  enabled: Boolean!
+  status: RegistrationProtectionStatus!
+  "評価の理由 (Emumet の固定語彙。例 invalid_secret / timeout)"
+  reason: String!
+  checkedAt: String
+  validUntil: String
+}
+
+enum RegistrationProtectionVerifyOutcome {
+  BUSINESS_SUCCESS
+  ACCEPTED
+  CONFIGURATION_INVALID
+  ATTEMPT_REJECTED
+  TEMPORARILY_UNAVAILABLE
+}
+
+"COMPLETED / PENDING_CONFIRMATION (canary mailbox にコードを送った) / CANARY_NOT_CONFIGURED"
+enum RegistrationProtectionVerifyDisposition {
+  COMPLETED
+  PENDING_CONFIRMATION
+  CANARY_NOT_CONFIGURED
+}
+
+type RegistrationProtectionVerification {
+  outcome: RegistrationProtectionVerifyOutcome!
+  reason: String!
+  "readiness へ記録したか"
+  recorded: Boolean!
+  disposition: RegistrationProtectionVerifyDisposition!
+  readiness: RegistrationProtectionReadiness!
+}
+
+"送る通知のカテゴリ。OUTAGE 障害 / RECOVERY 復旧 / AUTO_STOP 自動停止 / OVERRIDE 強制開放"
+enum RegistrationWebhookCategory {
+  OUTAGE
+  RECOVERY
+  AUTO_STOP
+  OVERRIDE
+}
+
+"状態チップ。HEALTHY 正常 / FAILING 配送失敗 (未解決の failed 配送、または復号不可・設定不備)"
+enum RegistrationWebhookEndpointStatus {
+  HEALTHY
+  FAILING
+}
+
+"API 管理者が登録 / ENVIRONMENT_IMPORT 環境変数の 1 件を取り込んだ / ENVIRONMENT 環境変数のまま (編集・削除できない)"
+enum RegistrationWebhookEndpointSource {
+  API
+  ENVIRONMENT_IMPORT
+  ENVIRONMENT
+}
+
+type RegistrationWebhookCounts {
+  pending: Int!
+  inFlight: Int!
+  retrying: Int!
+  delivered: Int!
+  failed: Int!
+}
+
+"Webhook の送信先 (E15x)。URL は部分マスク形だけで、全 URL・secret は含まない"
+type RegistrationWebhookEndpoint {
+  "10 進文字列。環境変数の送信先は environment"
+  id: ID!
+  source: RegistrationWebhookEndpointSource!
+  "一覧用の部分マスク URL (例 hooks.example.net/••••/a8f2)"
+  maskedUrl: String!
+  categories: [RegistrationWebhookCategory!]!
+  status: RegistrationWebhookEndpointStatus!
+  "FAILING の理由 (failed_deliveries / secret_undecryptable / config_invalid)"
+  failingReasons: [String!]!
+  "環境変数の送信先の設定不備の分類 (固定語彙)"
+  configIssue: String
+  "未解決の failed 配送の件数"
+  failedCount: Int!
+  counts: RegistrationWebhookCounts!
+  "secret が設定済みか (値は返さない)"
+  secretConfigured: Boolean!
+  "false = 編集・削除できない (環境変数の送信先)"
+  editable: Boolean!
+  "楽観ロック用。環境変数の送信先は null"
+  revision: Int
+  lastSuccessAt: String
+  lastFailureAt: String
+  createdAt: String
+}
+
+type RegistrationWebhookEndpoints {
+  endpoints: [RegistrationWebhookEndpoint!]!
+  "どこかの送信先に未解決の failed 配送がある (タブの印)"
+  hasFailedDeliveries: Boolean!
+  "false なら作成・secret 更新は WEBHOOK_ENDPOINT_REJECTED (reason encryption_key_not_configured)"
+  encryptionKeyConfigured: Boolean!
+  maxEndpoints: Int!
+}
+
+"failed になった配送 (成功した配送は含まない)"
+type RegistrationWebhookFailedDelivery {
+  endpointId: ID!
+  "通知イベント ID (再試行・再送で不変)"
+  eventId: ID!
+  eventType: RegistrationGateEventKind!
+  category: RegistrationWebhookCategory!
+  failedAt: String!
+  attemptCount: Int!
+  "permanent_error / retries_exhausted"
+  failureReason: String
+  httpStatus: Int
+  "最後の試行結果の分類 (固定語彙)"
+  result: String
+}
+
+type RegistrationWebhookFailedDeliveryPage {
+  "failed になった時刻の新しい順"
+  items: [RegistrationWebhookFailedDelivery!]!
+  "次ページがあるときだけ (before に渡す)"
+  nextCursor: String
+}
+
+type RegistrationWebhookTestResult {
+  "受信側が 2xx を返したら true"
+  delivered: Boolean!
+  "結果の分類 (delivered / timeout / connect_failed / ...)"
+  result: String!
+  httpStatus: Int
+  attemptedAt: String!
+}
+
+input CreateRegistrationWebhookEndpointInput {
+  "HTTPS のみ。応答には返らない"
+  url: String!
+  "書き込み専用 (16〜256 バイト)。応答・ログに出さない"
+  secret: String!
+  "1 つ以上"
+  categories: [RegistrationWebhookCategory!]!
+}
+
+"省略した項目は変更しない (URL・secret は応答に返らないので、入力したときだけ送る)"
+input UpdateRegistrationWebhookEndpointInput {
+  revision: Int!
+  url: String
+  secret: String
+  categories: [RegistrationWebhookCategory!]
+}
+
+enum InstanceRole {
+  ADMIN
+  MODERATOR
+}
+
+"呼び出し者 (GET /api/v1/me)。管理画面の導線を出すかのヒントで、権限判断の正本ではない (各管理 API が FORBIDDEN を返す)"
+type Viewer {
+  accountId: ID!
+  instanceRoles: [InstanceRole!]!
+  "instanceRoles に ADMIN を含む"
+  isAdmin: Boolean!
+}
+
+extend type Query {
+  viewer: Viewer!
+  registrationProtections: [RegistrationProtectionReadiness!]!
+  registrationWebhookEndpoints: RegistrationWebhookEndpoints!
+  "failed 配送の 1 ページ (新しい順。limit 1〜100、既定 50)。before は前のページの nextCursor"
+  registrationWebhookFailures(endpointId: ID, limit: Int, before: String): RegistrationWebhookFailedDeliveryPage!
+}
+
+extend type Mutation {
+  "入力なしの検証 (bot は secret の負の probe、email は canary mailbox への送信)。未知の保護は NOT_FOUND"
+  verifyRegistrationProtection(protection: RegistrationProtection!): RegistrationProtectionVerification!
+  "拒否は WEBHOOK_ENDPOINT_REJECTED (extensions.reason)"
+  createRegistrationWebhookEndpoint(input: CreateRegistrationWebhookEndpointInput!): RegistrationWebhookEndpoint!
+  "revision 不一致は REVISION_CONFLICT、拒否は WEBHOOK_ENDPOINT_REJECTED、無い送信先は NOT_FOUND"
+  updateRegistrationWebhookEndpoint(endpointId: ID!, input: UpdateRegistrationWebhookEndpointInput!): RegistrationWebhookEndpoint!
+  "revision 不一致は REVISION_CONFLICT、環境変数の送信先は WEBHOOK_ENDPOINT_REJECTED"
+  deleteRegistrationWebhookEndpoint(endpointId: ID!, revision: Int!): Boolean!
+  "テスト送信 (1 回のみ・記録しない)。環境変数の送信先が未設定・設定不備なら WEBHOOK_NOT_CONFIGURED"
+  sendRegistrationWebhookTest(endpointId: ID!): RegistrationWebhookTestResult!
+  "endpointId + eventId でその 1 件、endpointId だけでその送信先の failed すべて、両方省略で全件を再キューする。戻り値は再キュー件数。対象が無ければ NOT_FOUND"
+  retryRegistrationWebhook(endpointId: ID, eventId: ID): Int!
+}
+
 # ----------------------------------------------------------------
 # Profile username (profile-identity-web-adaptation / Emumet E8・P1 契約)
 # 形式 ^[a-z0-9][a-z0-9._-]{0,63}$ ・予約語 17 語・暗黙の trim/小文字化なし。
@@ -238,15 +465,22 @@ enum ProfileUsernameState {
   SET
 }
 
-"規則だけの判定結果。重複・設定済みは書き込み時にしか判明しない"
+"""
+入力中の検証結果。VALID = 形式・予約語を満たし、Emumet の空き確認で使用中ではないことを確認できた。
+TAKEN = 使用中 (削除済み Profile の使用を含む。区別しない)。UNKNOWN = 形式・予約語は満たすが空きを確認できなかった
+(接続不可・時間切れ・429・契約違反)。UNKNOWN を「利用できる」として扱ってはいけない。
+結果は参考値で、最終判定は作成 / 設定時の拒否 (USERNAME_TAKEN 等)
+"""
 enum ProfileUsernameCheck {
   VALID
   FORMAT
   RESERVED
+  TAKEN
+  UNKNOWN
 }
 
 extend type Query {
-  "入力中の検証用。Emumet は呼ばず規則 (形式・予約語) だけを判定する"
+  "入力中の検証用。形式・予約語は BFF で判定し、満たすときだけ Emumet の空き確認 API (認証必須・レート制限あり) を呼ぶ"
   checkProfileUsername(username: String!): ProfileUsernameCheck!
 }
 

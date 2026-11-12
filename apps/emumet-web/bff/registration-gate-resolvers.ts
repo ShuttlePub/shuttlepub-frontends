@@ -8,8 +8,20 @@
 
 import { GraphQLError } from "graphql";
 import { EmumetApiError } from "./emumet/client.ts";
-import { EmumetInvalidResponseError, EmumetUnavailableError } from "./emumet/registration-gate.ts";
+import {
+  EmumetInvalidResponseError,
+  EmumetRegistrationTargetNotFoundError,
+  EmumetUnavailableError,
+  EmumetWebhookEndpointRejectedError,
+  EmumetWebhookUnavailableError,
+  type CreateRegistrationWebhookEndpoint,
+  type RegistrationGate,
+  type RegistrationProtection,
+  type UpdateRegistrationWebhookEndpoint,
+  type Viewer,
+} from "./emumet/registration-gate.ts";
 import { requireEmumet, type GraphQLContext } from "./context.ts";
+import { registrationGateStatus, registrationMinimumMet } from "./registration-gate-status.ts";
 
 export type RegistrationGateErrorCode =
   | "UNAUTHENTICATED"
@@ -17,6 +29,9 @@ export type RegistrationGateErrorCode =
   | "BAD_REQUEST"
   | "REVISION_CONFLICT"
   | "PRECONDITION_FAILED"
+  | "NOT_FOUND"
+  | "WEBHOOK_NOT_CONFIGURED"
+  | "WEBHOOK_ENDPOINT_REJECTED"
   | "TEMPORARILY_UNAVAILABLE"
   | "INVALID_UPSTREAM_RESPONSE"
   | "UPSTREAM_ERROR"
@@ -56,6 +71,19 @@ function statusError(error: EmumetApiError): GraphQLError {
 export function toRegistrationGateError(error: unknown): GraphQLError {
   if (error instanceof GraphQLError) return error;
   if (error instanceof EmumetApiError) return statusError(error);
+  if (error instanceof EmumetWebhookUnavailableError) {
+    return gateError("WEBHOOK_NOT_CONFIGURED", "Registration gate webhook is not configured or misconfigured");
+  }
+  if (error instanceof EmumetWebhookEndpointRejectedError) {
+    // reason は API の固定語彙と照合済みの値だけ (語彙外は付けない)。本文そのものは出さない
+    return gateError("WEBHOOK_ENDPOINT_REJECTED", "Webhook destination was rejected", {
+      upstreamStatus: error.status,
+      ...(error.reason === null ? {} : { reason: error.reason }),
+    });
+  }
+  if (error instanceof EmumetRegistrationTargetNotFoundError) {
+    return gateError("NOT_FOUND", "Not found");
+  }
   if (error instanceof EmumetUnavailableError) {
     return gateError("TEMPORARILY_UNAVAILABLE", "Emumet API is temporarily unavailable", { retryable: true });
   }
@@ -79,7 +107,32 @@ async function withGateErrors<T>(call: () => Promise<T>): Promise<T> {
 }
 
 export const registrationGateResolvers = {
+  RegistrationGate: {
+    status: (gate: RegistrationGate) => registrationGateStatus(gate),
+    minimumMet: (gate: RegistrationGate) => registrationMinimumMet(gate.observation),
+  },
+  Viewer: {
+    isAdmin: (viewer: Viewer) => viewer.instanceRoles.includes("ADMIN"),
+  },
   Query: {
+    viewer: (_parent: unknown, _args: unknown, context: GraphQLContext) =>
+      withGateErrors(() => requireEmumet(context).getViewer()),
+    registrationProtections: (_parent: unknown, _args: unknown, context: GraphQLContext) =>
+      withGateErrors(() => requireEmumet(context).listRegistrationProtections()),
+    registrationWebhookEndpoints: (_parent: unknown, _args: unknown, context: GraphQLContext) =>
+      withGateErrors(() => requireEmumet(context).listRegistrationWebhookEndpoints()),
+    registrationWebhookFailures: (
+      _parent: unknown,
+      args: { endpointId?: string | null; limit?: number | null; before?: string | null },
+      context: GraphQLContext,
+    ) =>
+      withGateErrors(() =>
+        requireEmumet(context).listRegistrationWebhookFailures({
+          ...(args.endpointId == null ? {} : { endpointId: args.endpointId }),
+          ...(args.limit == null ? {} : { limit: args.limit }),
+          ...(args.before == null ? {} : { before: args.before }),
+        }),
+      ),
     registrationGate: (_parent: unknown, _args: unknown, context: GraphQLContext) =>
       withGateErrors(() => requireEmumet(context).getRegistrationGate()),
     registrationGateNotifications: (
@@ -118,5 +171,65 @@ export const registrationGateResolvers = {
     ) => withGateErrors(() => requireEmumet(context).markRegistrationGateNotificationsRead(args.eventIds)),
     markAllRegistrationGateNotificationsRead: (_parent: unknown, _args: unknown, context: GraphQLContext) =>
       withGateErrors(() => requireEmumet(context).markAllRegistrationGateNotificationsRead()),
+    verifyRegistrationProtection: (
+      _parent: unknown,
+      args: { protection: RegistrationProtection },
+      context: GraphQLContext,
+    ) => withGateErrors(() => requireEmumet(context).verifyRegistrationProtection(args.protection)),
+    createRegistrationWebhookEndpoint: (
+      _parent: unknown,
+      args: { input: CreateRegistrationWebhookEndpoint },
+      context: GraphQLContext,
+    ) =>
+      withGateErrors(() =>
+        requireEmumet(context).createRegistrationWebhookEndpoint({
+          url: args.input.url,
+          secret: args.input.secret,
+          categories: args.input.categories,
+        }),
+      ),
+    updateRegistrationWebhookEndpoint: (
+      _parent: unknown,
+      args: {
+        endpointId: string;
+        input: { revision: number; url?: string | null; secret?: string | null; categories?: UpdateRegistrationWebhookEndpoint["categories"] | null };
+      },
+      context: GraphQLContext,
+    ) =>
+      withGateErrors(() =>
+        requireEmumet(context).updateRegistrationWebhookEndpoint(args.endpointId, {
+          revision: args.input.revision,
+          ...(args.input.url == null ? {} : { url: args.input.url }),
+          ...(args.input.secret == null ? {} : { secret: args.input.secret }),
+          ...(args.input.categories == null ? {} : { categories: args.input.categories }),
+        }),
+      ),
+    deleteRegistrationWebhookEndpoint: async (
+      _parent: unknown,
+      args: { endpointId: string; revision: number },
+      context: GraphQLContext,
+    ) => {
+      await withGateErrors(() => requireEmumet(context).deleteRegistrationWebhookEndpoint(args.endpointId, args.revision));
+      return true;
+    },
+    sendRegistrationWebhookTest: (_parent: unknown, args: { endpointId: string }, context: GraphQLContext) =>
+      withGateErrors(() => requireEmumet(context).sendRegistrationWebhookTest(args.endpointId)),
+    retryRegistrationWebhook: (
+      _parent: unknown,
+      args: { endpointId?: string | null; eventId?: string | null },
+      context: GraphQLContext,
+    ) => {
+      // eventId だけの指定は API が 400 で拒否する組合せ。全件の再キューに広げず、そのまま BAD_REQUEST にする
+      if (args.endpointId == null && args.eventId != null) {
+        throw gateError("BAD_REQUEST", "eventId requires endpointId");
+      }
+      return withGateErrors(() =>
+        requireEmumet(context).retryRegistrationWebhook(
+          args.endpointId == null
+            ? undefined
+            : { endpointId: args.endpointId, ...(args.eventId == null ? {} : { eventId: args.eventId }) },
+        ),
+      );
+    },
   },
 };

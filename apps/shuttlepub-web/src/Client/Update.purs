@@ -3,6 +3,7 @@ module Client.Update where
 import Prelude
 
 import App.Api.Error (ApiError(..))
+import App.Api.Error as Error
 import App.Api.GraphQL (createPost, fetchApiMode, fetchApiStatus, fetchAvailableProfiles, fetchPostDetail, fetchProfileContext, fetchTimeline, selectProfile)
 import App.Dom (focusById, focusFirstIn, logoutAndReload, scrollToTop, setScrollLock)
 import App.Message (Message(..))
@@ -11,11 +12,14 @@ import App.MuteBlock.Types as MuteBlock
 import App.MuteBlock.Update as MuteBlockUpdate
 import App.Post (TimelineTab, timelineTabFromValue)
 import App.Route (Route(..), routeCodec)
+import App.View.Auth (authActionId, authActionShown)
 import App.View.Compose (composeTextId, visibilityButtonId)
 import App.View.Pages (detailTabId, timelineTabId)
 import App.View.Shell (composeButtonDesktopId, composeButtonMobileId, profileButtonDesktopId, profileButtonMobileId, profileMenuId)
-import Data.Either (Either(..))
-import Data.Maybe (Maybe(..), isJust)
+import Client.Reaction as QR
+import Data.Array (cons)
+import Data.Either (Either(..), either)
+import Data.Maybe (Maybe(..), isJust, maybe)
 import Data.String.Common (trim)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
@@ -36,11 +40,12 @@ mkUpdate nav model = case _ of
       [ liftEffect (nav.pushState (unsafeToForeign {}) (print routeCodec route)) $> Nothing ]
   UrlChanged route ->
     let
-      closed = closeOverlays model
+      Tuple left leaveEffects = QR.leaveScreen model
+      closed = closeOverlays left
       entered = (closed.model { route = route }) `enterRoute` route
       Tuple muteBlock muteBlockEffects = enterMuteBlock entered.model
     in
-      Tuple muteBlock (closed.effects <> [ effect scrollToTop ] <> entered.effects <> muteBlockEffects)
+      Tuple muteBlock (leaveEffects <> closed.effects <> [ effect scrollToTop ] <> entered.effects <> muteBlockEffects <> if scrollLocked model then [ syncScrollLock muteBlock ] else [])
   Hydrated now isMobile ->
     let
       base = model
@@ -66,7 +71,9 @@ mkUpdate nav model = case _ of
       next = model { isMobile = isMobile }
       -- Crossing the breakpoint swaps the Profile dropdown for the bottom sheet (or
       -- back): the focused item is replaced, so move focus into the new menu.
-      refocus = if isJust model.profileMenu && isMobile /= model.isMobile then [ effect (focusFirstIn ("#" <> profileMenuId)) ] else []
+      refocus =
+        if isMobile == model.isMobile then []
+        else (if isJust model.profileMenu then [ effect (focusFirstIn ("#" <> profileMenuId)) ] else []) <> QR.refocusPicker next
     in
       Tuple next ([ syncScrollLock next ] <> refocus)
   ApiModeLoaded result ->
@@ -74,7 +81,7 @@ mkUpdate nav model = case _ of
   ApiStatusLoaded result ->
     noMessages $ model { apiStatus = fromEither result }
   ProfileContextLoaded result ->
-    enterMuteBlock (model { profileContext = fromEither result, muteBlock = model.muteBlock { profileKnown = false } })
+    profileChanged (model { profileContext = fromEither result })
   AvailableProfilesLoaded result ->
     noMessages $ model { availableProfiles = fromEither result }
 
@@ -87,22 +94,25 @@ mkUpdate nav model = case _ of
         "replies" -> selectDetailTab model RepliesTab true
         "reactions" -> selectDetailTab model ReactionsTab true
         _ -> noMessages model
+      "picker" -> QR.selectCategory model action.value true
       _ -> noMessages model
     _ -> noMessages model
   DocumentEscape -> escape model
 
   SelectTimelineTab tab -> selectTimelineTab model tab false
   TimelineLoaded tab result
-    | tab == model.timelineTab -> noMessages $ model { timeline = fromEither result }
+    | tab == model.timelineTab -> QR.postsShown (either (const []) identity result) (model { timeline = fromEither result })
     | otherwise -> noMessages model
   PostDetailLoaded postId result
-    | model.route == Just (PostDetail postId) -> noMessages $ model { detail = fromEither result }
+    | model.route == Just (PostDetail postId) ->
+        QR.postsShown (either (const []) (\found -> maybe [] (\post -> cons post found.replies) found.post) result)
+          (model { detail = fromEither result })
     | otherwise -> noMessages model
   SelectDetailTab tab -> selectDetailTab model tab false
 
   OpenCompose opener ->
     let
-      next = model { compose = Just (emptyCompose opener), profileMenu = Nothing }
+      next = model { compose = Just (emptyCompose opener), profileMenu = Nothing, reaction = model.reaction { picker = Nothing, chipMenu = Nothing } }
     in
       Tuple next [ syncScrollLock next, effect (focusById composeTextId) ]
   CloseCompose -> closeCompose model
@@ -136,7 +146,7 @@ mkUpdate nav model = case _ of
     Just _ -> closeProfileMenu model
     Nothing ->
       let
-        next = model { profileMenu = Just { opener, error: Nothing } }
+        next = model { profileMenu = Just { opener, error: Nothing }, reaction = model.reaction { picker = Nothing, chipMenu = Nothing } }
       in
         Tuple next [ syncScrollLock next, effect (focusFirstIn ("#" <> profileMenuId)) ]
   CloseProfileMenu -> closeProfileMenu model
@@ -145,10 +155,17 @@ mkUpdate nav model = case _ of
   ProfileSelected result -> case result of
     Right context ->
       let
-        Tuple closed closeEffects = closeProfileMenu (model { profileContext = Loaded context, muteBlock = model.muteBlock { profileKnown = false } })
-        Tuple entered enterEffects = enterMuteBlock closed
+        Tuple closed closeEffects = closeProfileMenu (model { profileContext = Loaded context })
+        Tuple synced syncEffects = profileChanged closed
       in
-        Tuple entered (closeEffects <> enterEffects)
+        Tuple synced (closeEffects <> syncEffects)
+    -- Session-loss UI, reaction transport and the mute/block page all follow the changed Profile context.
+    Left error | endsSession error ->
+      let
+        next = model { profileContext = Failed error, availableProfiles = Failed error, profileMenu = Nothing }
+        Tuple synced syncEffects = profileChanged next
+      in
+        Tuple synced (syncEffects <> [ syncScrollLock synced, effect (focusById authActionId) ])
     Left error -> case model.profileMenu of
       Just state -> noMessages $ model { profileMenu = Just state { error = Just error } }
       Nothing -> noMessages model
@@ -157,11 +174,19 @@ mkUpdate nav model = case _ of
     mkUpdate nav model (Navigate (if tab == MuteBlock.AccountsTab then MuteBlockAccounts else MuteBlockDomains))
   MuteBlockMsg MuteBlock.OpenSettings -> mkUpdate nav model (Navigate Settings)
   MuteBlockMsg message -> delegate model message
+  Reaction message ->
+    let
+      Tuple next effects = QR.update model message
+    in
+      Tuple next (effects <> if scrollLocked next /= scrollLocked model then [ syncScrollLock next ] else [])
   NoOp -> noMessages model
   where
   withCompose f = case model.compose of
     Just state -> f state
     Nothing -> noMessages model
+  endsSession error = Error.isSignedOut error || case error of
+    Forbidden _ -> true
+    _ -> false
 
 type Step = { model :: Model, effects :: Array (Aff (Maybe Message)) }
 
@@ -192,7 +217,7 @@ selectTimelineTab model tab moveFocus =
 
 selectDetailTab :: Model -> DetailTab -> Boolean -> Tuple Model (Array (Aff (Maybe Message)))
 selectDetailTab model tab moveFocus =
-  Tuple (model { detailTab = tab })
+  Tuple ((if tab == ReactionsTab && model.detailTab /= ReactionsTab then QR.detailReactionsOpened else identity) model { detailTab = tab })
     (if moveFocus then [ effect (focusById (detailTabId tab)) ] else [])
 
 closeCompose :: Model -> Tuple Model (Array (Aff (Maybe Message)))
@@ -218,16 +243,21 @@ closeProfileMenu model = case model.profileMenu of
 -- | the overlay was open, so focus returns to the twin that is visible now.
 visibleOpener :: Model -> String -> String
 visibleOpener model opener
-  | opener == profileButtonDesktopId || opener == profileButtonMobileId =
-      if model.isMobile then profileButtonMobileId else profileButtonDesktopId
+  | opener == profileButtonDesktopId || opener == profileButtonMobileId = headerSwitcher model
   | opener == composeButtonDesktopId || opener == composeButtonMobileId =
       if model.isMobile then composeButtonMobileId else composeButtonDesktopId
+  -- Opened from the session notice: back to it, unless the menu resolved the notice
+  -- (a Profile was chosen) and it is gone; then to the header switcher (ui-spec 実装上の注意 6).
+  | opener == authActionId = if authActionShown model then authActionId else headerSwitcher model
   | otherwise = opener
+
+headerSwitcher :: Model -> String
+headerSwitcher model = if model.isMobile then profileButtonMobileId else profileButtonDesktopId
 
 -- | The page behind a modal layer does not scroll: the compose form (both widths) and
 -- | the mobile Profile bottom sheet. The desktop Profile dropdown is not modal.
 scrollLocked :: Model -> Boolean
-scrollLocked model = isJust model.compose || (model.isMobile && isJust model.profileMenu) || isJust model.muteBlock.dialog
+scrollLocked model = isJust model.compose || (model.isMobile && isJust model.profileMenu) || QR.pickerLocksScroll model || isJust model.muteBlock.dialog
 
 syncScrollLock :: Model -> Aff (Maybe Message)
 syncScrollLock model = effect (setScrollLock (scrollLocked model))
@@ -242,7 +272,9 @@ escape model = case model.compose of
         Tuple (model { compose = Just state { visibilityMenuOpen = false } })
           [ effect (focusById visibilityButtonId) ]
     | otherwise -> closeCompose model
-  Nothing -> closeProfileMenu model
+  Nothing -> case QR.escape model of
+    Just (Tuple next effects) -> Tuple next (effects <> [ syncScrollLock next ])
+    Nothing -> closeProfileMenu model
 
 -- | Navigation closes any open overlay without moving focus back to its opener.
 closeOverlays :: Model -> Step
@@ -253,6 +285,16 @@ closeOverlays model =
     { model: next
     , effects: if scrollLocked model then [ syncScrollLock next ] else []
     }
+
+-- | The Profile context changed (loaded, switched or lost): quick reaction follows it,
+-- | and the mute/block page reloads for the new Profile (its stale answers are dropped).
+profileChanged :: Model -> Tuple Model (Array (Aff (Maybe Message)))
+profileChanged model =
+  let
+    Tuple synced syncEffects = QR.syncProfile (model { muteBlock = model.muteBlock { profileKnown = false } })
+    Tuple entered enterEffects = enterMuteBlock synced
+  in
+    Tuple entered (syncEffects <> enterEffects)
 
 -- | The mute/block page (D08) loads its lists once it is shown and the selected
 -- | Profile is known; a Profile switch reloads them. A failed Profile context is

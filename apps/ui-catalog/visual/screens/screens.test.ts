@@ -5,16 +5,24 @@ import { resolve } from "node:path";
 import { createBooskiffClient } from "../../../booskiff-web/bff/booskiff/real.ts";
 import { startBooskiffStub } from "./booskiff-stub.ts";
 import { FIXED_TIME, SCREEN_CASES } from "./cases.ts";
-import { captureSide, featuresInShuttlePubHtml, selectCases } from "./features.ts";
+import {
+  captureSide,
+  EMUMET_WEBHOOK_PROBE_SCENARIO,
+  featuresFromEmumetScenarioProbe,
+  featuresInEmumetHtml,
+  featuresInShuttlePubHtml,
+  selectCases,
+} from "./features.ts";
 import { AVATAR_SVG, BANNER_SVG, BILLING, FILES, FOLDERS, localImage } from "./fixtures.ts";
 import { appExists, stopChild } from "./servers.ts";
+import { isRegistrationGateScenario } from "../../../emumet-web/bff/emumet/registration-gate-scenarios.ts";
 
 test("screen inventory covers every app and state at desktop/mobile sizes with safe unique filenames", () => {
   // Given / When
   const names = SCREEN_CASES.map((item) => item.filename);
   // Then
   expect(new Set(names).size).toBe(SCREEN_CASES.length);
-  expect(SCREEN_CASES).toHaveLength(48);
+  expect(SCREEN_CASES).toHaveLength(142);
   for (const item of SCREEN_CASES) {
     expect(item.filename).toMatch(/^(Booskiff|Emumet|ShuttlePub)-[A-Za-z0-9-]+\.png$/);
     expect(item.path).toMatch(/^\/(?!\/)/);
@@ -27,48 +35,109 @@ test("screen inventory covers every app and state at desktop/mobile sizes with s
   }
 });
 
-test("ShuttlePub cases cover the SNS shell screens at both widths and need no login", () => {
-  // Given / When
+test("Emumet registration gate admin cases select an existing mock scenario at both widths", () => {
+  // Given
+  const admin = SCREEN_CASES.filter((item) => item.app === "Emumet" && item.id.startsWith("admin-"));
+  // When / Then
+  expect(admin).toHaveLength(50);
+  for (const item of admin) {
+    expect(item.authenticated).toBe(true);
+    expect(item.path).toMatch(/^\/admin\/(registration|webhook)$/);
+    expect("scenario" in item && isRegistrationGateScenario(item.scenario)).toBe(true);
+  }
+  expect(SCREEN_CASES.filter((item) => item.app === "Emumet" && !item.id.startsWith("admin-")).every((item) => !("scenario" in item))).toBe(true);
+  expect(isRegistrationGateScenario("default")).toBe(true);
+});
+
+test("E15x Webhook destination cases are skipped only on a baseline whose mock lacks their scenarios", () => {
+  // Given
+  const webhook = SCREEN_CASES.filter((item) => "requires" in item && item.requires === "emumet-webhook-endpoints");
+  // When / Then
+  expect(webhook).toHaveLength(12);
+  expect(isRegistrationGateScenario(EMUMET_WEBHOOK_PROBE_SCENARIO)).toBe(true);
+  expect([...featuresFromEmumetScenarioProbe(204)]).toEqual(["emumet-webhook-endpoints"]);
+  expect(featuresFromEmumetScenarioProbe(400).size).toBe(0);
+  expect(selectCases(webhook, featuresFromEmumetScenarioProbe(400), "baseline").skipped).toHaveLength(12);
+  expect(() => selectCases(webhook, featuresFromEmumetScenarioProbe(400), "branch")).toThrow();
+});
+
+test("ShuttlePub cases cover the SNS shell, quick reactions and login at both widths", () => {
   const cases = SCREEN_CASES.filter((item) => item.app === "ShuttlePub");
-  // Then
   expect([...new Set(cases.map((item) => item.id))].sort()).toEqual([
-    "compose", "compose-visibility", "home", "mute-block-accounts", "mute-block-block-dialog", "mute-block-domains",
-    "not-found", "post-detail", "profile-menu", "settings",
+    "compose", "compose-visibility", "home", "home-session-expired", "home-signed-out",
+    "login", "login-denied", "login-failed", "mute-block-accounts", "mute-block-block-dialog", "mute-block-domains",
+    "not-found", "post-detail", "profile-menu",
+    "reaction-detail", "reaction-picker", "reaction-picker-no-favorites", "reaction-settings-menu", "reaction-undo", "settings",
   ]);
   expect(cases.every((item) => !item.authenticated)).toBe(true);
-  // Screens that main already served (as F0 placeholders) need no feature, so they
-  // are always compared; the new screens declare the SNS shell.
   for (const item of cases) {
     const required = "requires" in item ? item.requires : undefined;
-    expect(required).toBe(["home", "not-found"].includes(item.id) ? undefined
+    const viewer = "viewer" in item ? item.viewer : undefined;
+    if (["home", "not-found"].includes(item.id)) expect(required).toBeUndefined();
+    else expect(required).toBe(viewer ? "sns-login" : item.id.startsWith("reaction-") ? "quick-reaction"
       : item.id.startsWith("mute-block-") ? "mute-block-settings" : "sns-shell");
+    // Only login states use the real-mode BFF without a session / with a stale one.
+    expect(viewer === undefined).toBe(!/^(login|home-signed-out|home-session-expired)/.test(item.id));
   }
+  expect(cases.filter((item) => "viewer" in item && item.viewer === "session-expired").map((item) => item.id))
+    .toEqual(["home-session-expired", "home-session-expired"]);
 });
 
 test("only the baseline side may skip cases whose screen feature is missing", () => {
-  // Given
   const shuttlePub = SCREEN_CASES.filter((item) => item.app === "ShuttlePub");
   const placeholderHtml = '<main id="app"><h1>ShuttlePub</h1><template-state></template-state></main>';
   const shellHtml = '<main id="app" lang="ja"><div class="sp-app" data-testid="app-shell"></div></main>';
-  // When / Then
+  const reactionHtml = '<div class="sp-reaction-layer"></div>';
+  const loginHtml = '<div class="sp-page sp-page-login" data-testid="login-page"></div>';
+  const muteBlockHtml = '<div data-testid="mute-block"></div>';
+  const withLogin = featuresInShuttlePubHtml(shellHtml + loginHtml + muteBlockHtml);
+  const withReaction = featuresInShuttlePubHtml(shellHtml + reactionHtml + muteBlockHtml);
+  const allFeatures = featuresInShuttlePubHtml(shellHtml + reactionHtml + loginHtml + muteBlockHtml);
+  const withoutMuteBlock = featuresInShuttlePubHtml(shellHtml + reactionHtml + loginHtml);
   expect(featuresInShuttlePubHtml(placeholderHtml).size).toBe(0);
   expect([...featuresInShuttlePubHtml(shellHtml)]).toEqual(["sns-shell"]);
+  expect([...withLogin].sort()).toEqual(["mute-block-settings", "sns-login", "sns-shell"]);
+  expect([...withReaction].sort()).toEqual(["mute-block-settings", "quick-reaction", "sns-shell"]);
   const baseline = selectCases(shuttlePub, featuresInShuttlePubHtml(placeholderHtml), "baseline");
   expect(baseline.capture.map((item) => item.id).sort()).toEqual(["home", "home", "not-found", "not-found"]);
   expect(baseline.skipped).toHaveLength(shuttlePub.length - 4);
-  expect(() => selectCases(shuttlePub, featuresInShuttlePubHtml(placeholderHtml), "branch")).toThrow(/sns-shell/);
-  const muteBlockHtml = '<main id="app"><div data-testid="mute-block"></div></main>';
-  const everything = new Set([...featuresInShuttlePubHtml(shellHtml), ...featuresInShuttlePubHtml(muteBlockHtml, "/settings/mute-block/domains")]);
-  expect(selectCases(shuttlePub, everything, "branch")).toEqual({ capture: shuttlePub, skipped: [] });
-  // The mute/block marker only counts on its own page, and a shell without it skips just those cases.
-  expect(featuresInShuttlePubHtml(muteBlockHtml).size).toBe(0);
+  // Feature combinations must not silently drop either concurrent UI's cases.
   const shellOnly = selectCases(shuttlePub, featuresInShuttlePubHtml(shellHtml), "baseline");
-  expect(shellOnly.skipped.map((item) => item.id).every((id) => id.startsWith("mute-block-"))).toBe(true);
-  expect(shellOnly.skipped).toHaveLength(6);
-  expect(() => selectCases(shuttlePub, featuresInShuttlePubHtml(shellHtml), "branch")).toThrow(/mute-block-settings/);
+  expect(shellOnly.skipped).toHaveLength(26);
+  expect(selectCases(shuttlePub, withLogin, "baseline").skipped.every((item) => item.id.startsWith("reaction-"))).toBe(true);
+  expect(selectCases(shuttlePub, withLogin, "baseline").skipped).toHaveLength(10);
+  expect(selectCases(shuttlePub, withReaction, "baseline").skipped.every((item) => "requires" in item && item.requires === "sns-login")).toBe(true);
+  expect(selectCases(shuttlePub, withReaction, "baseline").skipped).toHaveLength(10);
+  expect(() => selectCases(shuttlePub, featuresInShuttlePubHtml(placeholderHtml), "branch")).toThrow(/sns-shell/);
+  expect(() => selectCases(shuttlePub, withLogin, "branch")).toThrow(/quick-reaction/);
+  expect(() => selectCases(shuttlePub, withReaction, "branch")).toThrow(/sns-login/);
+  expect(selectCases(shuttlePub, allFeatures, "branch")).toEqual({ capture: shuttlePub, skipped: [] });
+  // A baseline without the mute/block page skips exactly its 6 cases; the branch must have it.
+  const noMuteBlock = selectCases(shuttlePub, withoutMuteBlock, "baseline").skipped;
+  expect(noMuteBlock.map((item) => item.id).every((id) => id.startsWith("mute-block-"))).toBe(true);
+  expect(noMuteBlock).toHaveLength(6);
+  expect(() => selectCases(shuttlePub, withoutMuteBlock, "branch")).toThrow(/mute-block-settings/);
   expect(captureSide(undefined)).toBe("branch");
   expect(captureSide("baseline")).toBe("baseline");
   expect(() => captureSide("main")).toThrow();
+});
+
+test("username screens are Emumet-only added coverage that a baseline without the username UI skips", () => {
+  // Given
+  // (the E15x Webhook cases depend on their own feature, checked in the test above)
+  const emumet = SCREEN_CASES.filter((item) => item.app === "Emumet" && !("requires" in item && item.requires === "emumet-webhook-endpoints"));
+  const oldHtml = '<main id="app"><div class="space-y-8"><h1>New Account</h1></div></main>';
+  const newHtml = '<main id="app"><dialog data-username-dialog="true" data-step="input"></dialog></main>';
+  // When
+  const baseline = selectCases(emumet, featuresInEmumetHtml(oldHtml), "baseline");
+  // Then
+  expect(featuresInEmumetHtml(oldHtml).size).toBe(0);
+  expect([...featuresInEmumetHtml(newHtml)]).toEqual(["emumet-username-ui"]);
+  expect(baseline.skipped.length).toBe(24);
+  expect(baseline.skipped.every((item) => item.authenticated)).toBe(true);
+  expect(baseline.capture.map((item) => item.id)).toContain("account-new");
+  expect(() => selectCases(emumet, featuresInEmumetHtml(oldHtml), "branch")).toThrow(/emumet-username-ui/);
+  expect(selectCases(emumet, featuresInEmumetHtml(newHtml), "branch").skipped).toEqual([]);
 });
 
 test("app availability distinguishes a missing app directory from an existing app", async () => {

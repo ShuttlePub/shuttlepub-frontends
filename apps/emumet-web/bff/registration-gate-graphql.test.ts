@@ -3,11 +3,20 @@
 //  (a) 認可: 未認証・非管理者は fail closed (データを返さず、401/403 を握りつぶさない)
 //  (b) エラー分類: 競合・前提条件・不正・一時障害・契約違反・権限が別の extensions.code になる
 //  (c) 状態とエラーが別の型: 手動再開が必要な状態 (STOPPED) は成功した状態、エラーではない
-//  (d) secret を含まない・Webhook (E15w) は未接続で成功を捏造しない
+//  (d) secret を含まない (書き込み専用)・Webhook の URL は部分マスク形だけ
 // ============================================================
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { graphql, isEnumType, isObjectType, type GraphQLEnumType, type GraphQLObjectType, type GraphQLSchema } from "graphql";
+import {
+  graphql,
+  isEnumType,
+  isInputObjectType,
+  isObjectType,
+  type GraphQLEnumType,
+  type GraphQLInputObjectType,
+  type GraphQLObjectType,
+  type GraphQLSchema,
+} from "graphql";
 import { createMockSessionAdapter, encodeMockCookie, type SessionAdapter } from "@shuttlepub/auth-bun";
 import { buildContext, type GraphQLContext } from "./context.ts";
 import { createYogaHandler } from "./server.ts";
@@ -301,21 +310,37 @@ describe("(c) 状態とエラーは別の型", () => {
   });
 });
 
-describe("(d) secret 非表示・Webhook は未接続", () => {
+describe("(d) secret 非表示・Webhook の URL は部分マスク形だけ", () => {
   const registrationTypes = () =>
     Object.values(schema.getTypeMap()).filter(
       (type): type is GraphQLObjectType | GraphQLEnumType => type.name.startsWith("Registration") && (isObjectType(type) || isEnumType(type)),
     );
 
-  test("登録ゲートの型に secret・URL・署名・トークンに当たるフィールドは無い", () => {
+  test("登録ゲートの出力型に secret・全 URL・署名・トークンに当たるフィールドは無い (secret は設定済みかの真偽、URL は部分マスクだけ)", () => {
     const names = registrationTypes().flatMap((type) => (isObjectType(type) ? Object.keys(type.getFields()) : type.getValues().map((value) => value.name)));
     expect(names.length).toBeGreaterThan(20);
-    expect(names.filter((name) => /secret|signature|token|password|url|endpoint|hmac|credential/i.test(name))).toEqual([]);
+    expect(names.filter((name) => /secret|signature|token|password|url|hmac|credential/i.test(name)).sort()).toEqual(["maskedUrl", "secretConfigured"]);
   });
 
-  test("E15w の契約が公開されるまで Webhook は schema に無い (架空の成功を返さない)", () => {
+  test("secret・URL を受け取るのは送信先の作成・更新の入力だけ (書き込み専用)", () => {
+    const inputs = Object.values(schema.getTypeMap()).filter((type): type is GraphQLInputObjectType => isInputObjectType(type) && /Webhook/.test(type.name));
+    expect(Object.fromEntries(inputs.map((type) => [type.name, Object.keys(type.getFields()).sort()]))).toEqual({
+      CreateRegistrationWebhookEndpointInput: ["categories", "secret", "url"],
+      UpdateRegistrationWebhookEndpointInput: ["categories", "revision", "secret", "url"],
+    });
+  });
+
+  test("Webhook の操作は送信先の一覧・作成・更新・削除・テスト送信と、配送失敗の一覧・再試行", () => {
     const fields = [...Object.keys(schema.getQueryType()?.getFields() ?? {}), ...Object.keys(schema.getMutationType()?.getFields() ?? {})];
-    expect(fields.filter((name) => /webhook/i.test(name))).toEqual([]);
+    expect(fields.filter((name) => /webhook/i.test(name)).sort()).toEqual([
+      "createRegistrationWebhookEndpoint",
+      "deleteRegistrationWebhookEndpoint",
+      "registrationWebhookEndpoints",
+      "registrationWebhookFailures",
+      "retryRegistrationWebhook",
+      "sendRegistrationWebhookTest",
+      "updateRegistrationWebhookEndpoint",
+    ]);
   });
 });
 

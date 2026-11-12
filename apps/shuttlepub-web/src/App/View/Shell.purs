@@ -26,7 +26,7 @@ import App.Message (Message(..))
 import App.Model (Model, ProfileMenuState, RemoteData(..), activeProfile)
 import App.Profile (Profile)
 import App.Route (Route(..))
-import App.View.Common (AvatarSize(..), attr, avatar, emptySlot, icon, routeLink, testId, visuallyHidden)
+import App.View.Common (AvatarSize(..), attr, avatar, emptySlot, icon, loginHref, routeLink, testId, visuallyHidden)
 import Data.Array (null)
 import Data.Maybe (Maybe(..), isJust)
 import Flame (Html)
@@ -54,11 +54,23 @@ profileMenuId = "sp-profile-menu"
 canCompose :: Model -> Boolean
 canCompose = isJust <<< activeProfile
 
--- | A viewer that the BFF accepted (the Profile context loaded) in real mode.
+-- | A viewer the BFF holds a session for, in real mode: the Profile context loaded, or
+-- | failed for a reason that needs the session (権限不足 / 選択 Profile の消失). Such a
+-- | viewer can always log out (FA: switching to another account must stay possible).
 isSignedIn :: Model -> Boolean
 isSignedIn model = case model.apiMode, model.profileContext of
   Loaded REAL, Loaded _ -> true
+  Loaded REAL, Failed (Forbidden _) -> true
+  Loaded REAL, Failed (ProfileUnavailable _) -> true
   _, _ -> false
+
+-- | The Profile switcher has something to offer: a loaded context, or one whose
+-- | selected Profile vanished (the owned list still loads, so the viewer re-selects).
+switcherContext :: Model -> Maybe (Maybe Profile)
+switcherContext model = case model.profileContext of
+  Loaded context -> Just context.activeProfile
+  Failed (ProfileUnavailable _) -> Just Nothing
+  _ -> Nothing
 
 header :: Model -> Html Message
 header model = HE.header [ HA.class' "sp-header" ]
@@ -93,11 +105,11 @@ switchLabel = case _ of
   Just profile -> "投稿用 Profile を切り替え（現在: " <> profile.displayName <> "）"
   Nothing -> "投稿用 Profile を選択"
 
--- | Header-right Profile button (L1). Unauthenticated viewers get the login entry
--- | (the login screen itself belongs to the auth UI unit).
+-- | Header-right Profile button (L1). Signed-out viewers get the login entry, which
+-- | starts the IdP login and returns to the current screen.
 profileControlDesktop :: Model -> Html Message
-profileControlDesktop model = case model.profileContext of
-  Loaded context -> HE.button
+profileControlDesktop model = case switcherContext model, model.profileContext of
+  Just active, _ -> HE.button
     [ HA.type' "button"
     , HA.id profileButtonDesktopId
     , HA.class' "sp-profile-btn"
@@ -105,10 +117,10 @@ profileControlDesktop model = case model.profileContext of
     , attr "aria-haspopup" "menu"
     , attr "aria-expanded" (menuExpanded model)
     , attr "aria-controls" profileMenuId
-    , attr "aria-label" (switchLabel context.activeProfile)
+    , attr "aria-label" (switchLabel active)
     , testId "profile-switcher"
     ]
-    case context.activeProfile of
+    case active of
       Just profile ->
         [ avatar AvatarSmall profile
         , HE.span [ HA.class' "sp-profile-names" ]
@@ -119,31 +131,33 @@ profileControlDesktop model = case model.profileContext of
         ]
       Nothing ->
         [ HE.span [ HA.class' "sp-profile-name" ] [ HE.text "Profile を選択" ], icon "chevdown" ]
-  Failed (Unauthenticated _) -> loginLink "sp-btn sp-btn-secondary" [ HE.text "ログイン" ]
-  Failed error -> profileError error
-  _ -> profilePending
+  _, Failed error
+    | Error.isSignedOut error -> loginLink model "sp-btn sp-btn-secondary" [ HE.text "ログイン" ]
+    | otherwise -> profileError error
+  _, _ -> profilePending
 
 profileControlMobile :: Model -> Html Message
-profileControlMobile model = case model.profileContext of
-  Loaded context -> HE.button
+profileControlMobile model = case switcherContext model, model.profileContext of
+  Just active, _ -> HE.button
     [ HA.type' "button"
     , HA.id profileButtonMobileId
     , HA.class' "sp-mob-avatar-btn"
     , HA.onClick (ToggleProfileMenu profileButtonMobileId)
     , attr "aria-haspopup" "dialog"
     , attr "aria-expanded" (menuExpanded model)
-    , attr "aria-label" (switchLabel context.activeProfile)
+    , attr "aria-label" (switchLabel active)
     ]
-    case context.activeProfile of
+    case active of
       Just profile -> [ avatar AvatarSmall profile, icon "chevdown" ]
       Nothing -> [ HE.span [ HA.class' "sp-avatar sp-avatar-sm sp-avatar-empty" ] [ HE.text "?" ], icon "chevdown" ]
-  Failed (Unauthenticated _) -> loginLink "sp-icon-btn" [ icon "login", visuallyHidden "ログイン" ]
-  Failed error -> profileError error
-  _ -> profilePending
+  _, Failed error
+    | Error.isSignedOut error -> loginLink model "sp-icon-btn" [ icon "login", visuallyHidden "ログイン" ]
+    | otherwise -> profileError error
+  _, _ -> profilePending
 
-loginLink :: String -> Array (Html Message) -> Html Message
-loginLink className children = HE.a
-  [ HA.href "/auth/login", HA.class' className, testId "login-link" ]
+loginLink :: Model -> String -> Array (Html Message) -> Html Message
+loginLink model className children = HE.a
+  [ HA.href (loginHref model.route), HA.class' className, testId "login-link" ]
   children
 
 profilePending :: Html Message

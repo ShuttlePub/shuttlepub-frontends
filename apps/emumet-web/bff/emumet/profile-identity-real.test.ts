@@ -12,6 +12,7 @@ import {
   EmumetAccountRestrictedError,
   EmumetApiError,
   EmumetNotFoundError,
+  EmumetRateLimitedError,
   EmumetUsernameAlreadySetError,
   EmumetUsernameConflictError,
   EmumetUsernameInvalidError,
@@ -298,5 +299,69 @@ describe("(d) 送受信 fixture は固定した OpenAPI 契約に適合する", 
   test("ProfileResponse: username あり・null (未設定) のどちらも契約に適合する", () => {
     expect(violationsForSchema("ProfileResponse", { account_id: "a", id: "p", username: "alice" })).toEqual([]);
     expect(violationsForSchema("ProfileResponse", { account_id: "a", id: "p", username: null })).toEqual([]);
+  });
+});
+
+describe("(e) 空き確認 GET /api/v1/profiles/username-availability", () => {
+  const AVAILABILITY = `${BASE}/api/v1/profiles/username-availability`;
+
+  test("method / path / Bearer: username はクエリに encode して送り、trim や小文字化をしない。200 の available と reason を写す", async () => {
+    const { calls } = stubFetch((call) => {
+      const username = new URL(call.url).searchParams.get("username");
+      if (username === "alice") return jsonResponse(200, { username, available: false, reason: "taken" });
+      if (username === "Admin") return jsonResponse(200, { username, available: false, reason: "invalid_format" });
+      if (username === "admin") return jsonResponse(200, { username, available: false, reason: "reserved" });
+      return jsonResponse(200, { username, available: true });
+    });
+    const client = makeClient();
+    expect(await client.checkUsernameAvailability("fresh")).toEqual({ available: true });
+    expect(await client.checkUsernameAvailability("alice")).toEqual({ available: false, reason: "taken" });
+    expect(await client.checkUsernameAvailability("Admin")).toEqual({ available: false, reason: "invalid_format" });
+    expect(await client.checkUsernameAvailability("admin")).toEqual({ available: false, reason: "reserved" });
+    await client.checkUsernameAvailability(" a/b?c=d\n");
+    expect(calls.every((call) => call.method === "GET" && call.headers["Authorization"] === "Bearer tok")).toBe(true);
+    expect(calls[0]?.url).toBe(`${AVAILABILITY}?username=fresh`);
+    expect(calls[4]?.url).toBe(`${AVAILABILITY}?username=${encodeURIComponent(" a/b?c=d\n")}`);
+    expect(new URL(calls[4]?.url ?? "").searchParams.get("username")).toBe(" a/b?c=d\n");
+  });
+
+  test("429 は Retry-After (秒) を持つ EmumetRateLimitedError。読めない Retry-After は null", async () => {
+    stubFetch(() => new Response("", { status: 429, headers: { "Retry-After": "17" } }));
+    const limited = await rejection(makeClient().checkUsernameAvailability("fresh"));
+    expect(limited).toBeInstanceOf(EmumetRateLimitedError);
+    expect((limited as EmumetRateLimitedError).retryAfterSeconds).toBe(17);
+    stubFetch(() => new Response("", { status: 429, headers: { "Retry-After": "soon" } }));
+    expect(((await rejection(makeClient().checkUsernameAvailability("fresh"))) as EmumetRateLimitedError).retryAfterSeconds).toBeNull();
+    stubFetch(() => plain(429));
+    expect(((await rejection(makeClient().checkUsernameAvailability("fresh"))) as EmumetRateLimitedError).retryAfterSeconds).toBeNull();
+  });
+
+  test("401 / 400 / 500 は EmumetApiError で status を保つ。接続失敗は EmumetUnavailableError", async () => {
+    for (const status of [400, 401, 500]) {
+      stubFetch(() => plain(status, "x"));
+      const error = await rejection(makeClient().checkUsernameAvailability("fresh"));
+      expect(error).toBeInstanceOf(EmumetApiError);
+      expect((error as EmumetApiError).status).toBe(status);
+    }
+    stubFetch(() => {
+      throw new TypeError("connect ECONNREFUSED");
+    });
+    expect(await rejection(makeClient().checkUsernameAvailability("fresh"))).toBeInstanceOf(EmumetUnavailableError);
+  });
+
+  test("200 の本文が契約違反・非 JSON・reason 欠落は EmumetInvalidResponseError (「利用できる」にしない)", async () => {
+    for (const body of [{ available: "yes" }, { username: "x" }, { username: "x", available: false }, { username: "x", available: false, reason: "mystery" }]) {
+      stubFetch(() => jsonResponse(200, body));
+      expect(await rejection(makeClient().checkUsernameAvailability("x")), JSON.stringify(body)).toBeInstanceOf(EmumetInvalidResponseError);
+    }
+    stubFetch(() => plain(200, "not json"));
+    expect(await rejection(makeClient().checkUsernameAvailability("x"))).toBeInstanceOf(EmumetInvalidResponseError);
+  });
+
+  test("応答 fixture は固定した OpenAPI 契約に適合する (available / 各 reason)", () => {
+    for (const reason of ["invalid_format", "reserved", "taken"]) {
+      expect(violationsForSchema("ProfileUsernameAvailabilityResponse", { username: "x", available: false, reason })).toEqual([]);
+    }
+    expect(violationsForSchema("ProfileUsernameAvailabilityResponse", { username: "x", available: true })).toEqual([]);
   });
 });

@@ -26,6 +26,12 @@ export type PostAuthor = {
 
 export type Post = {
   id: string;
+  /**
+   * The ShuttlePub Note id (UUID) of this post: the `note_id` of the quick reaction
+   * operations (S3). Kept apart from `id` because the provisional post ids are not
+   * Note ids; a real post endpoint is expected to make them the same value.
+   */
+  noteId: string;
   author: PostAuthor;
   text: string;
   /** ISO 8601 instant. */

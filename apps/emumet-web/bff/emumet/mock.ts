@@ -9,6 +9,7 @@ import { checkProfileUsername } from "./profile-username.ts";
 import {
   EmumetAccountRestrictedError,
   EmumetNotFoundError,
+  EmumetRateLimitedError,
   EmumetUsernameAlreadySetError,
   EmumetUsernameInvalidError,
   EmumetUsernameTakenError,
@@ -21,7 +22,9 @@ import {
   type Moderation,
   type Profile,
   type ProfileFields,
+  type UsernameAvailability,
 } from "./client.ts";
+import { EmumetUnavailableError } from "./registration-gate.ts";
 import {
   createMockRegistrationGate,
   type MockRegistrationGateControl,
@@ -42,6 +45,11 @@ export type MockProfileIdentityControl = {
   transferProfile(profileId: string, toAccountId: string): void;
   /** Account の停止・BAN 状態を設定する (null で解除)。停止中の Account の Profile には username を設定できない (422) */
   setModeration(accountId: string, moderation: Moderation | null): void;
+  /**
+   * 空き確認 (checkUsernameAvailability) に障害を注入する: "rate_limited" は 429 (EmumetRateLimitedError)、"unavailable" は
+   * 接続不可 (EmumetUnavailableError)。null で解除
+   */
+  setAvailabilityFailure(kind: "rate_limited" | "unavailable" | null): void;
 };
 
 /** EmumetClient に、テスト・fixture 専用の登録ゲート制御 (観測入力・権限・障害注入) と Profile identity 制御を足したもの */
@@ -65,9 +73,9 @@ export function createMockEmumetClient(options: MockEmumetClientOptions = {}): M
   }
 
   const accounts: StoredAccount[] = [
-    { id: "acc_01", name: "alice", isBot: false, publicKey: "ed25519:AAAA", createdAt: "2025-01-15T09:00:00Z", moderation: null },
-    { id: "acc_02", name: "bob", isBot: false, publicKey: "ed25519:BBBB", createdAt: "2025-02-20T14:30:00Z", moderation: null },
-    { id: "acc_03", name: "bot-news", isBot: true, publicKey: "ed25519:CCCC", createdAt: "2025-03-10T00:00:00Z", moderation: null },
+    { id: "acc_01", name: "alice", isBot: false, publicKey: null, createdAt: "2025-01-15T09:00:00Z", moderation: null },
+    { id: "acc_02", name: "bob", isBot: false, publicKey: null, createdAt: "2025-02-20T14:30:00Z", moderation: null },
+    { id: "acc_03", name: "bot-news", isBot: true, publicKey: null, createdAt: "2025-03-10T00:00:00Z", moderation: null },
   ];
 
   const profiles: Profile[] = [
@@ -91,6 +99,7 @@ export function createMockEmumetClient(options: MockEmumetClientOptions = {}): M
    * このストアは Profile を削除しないので、使用済み集合は縮まない。
    */
   const usedUsernames = new Set<string>(profiles.flatMap((p) => (p.username === null ? [] : [p.username])));
+  let availabilityFailure: "rate_limited" | "unavailable" | null = null;
 
   /** Account の Profile 参照は Profile ストアから都度導出する (移管・設定が即座に反映される) */
   function withIdentity(account: StoredAccount): Account {
@@ -128,6 +137,9 @@ export function createMockEmumetClient(options: MockEmumetClientOptions = {}): M
         if (idx < 0) throw new EmumetNotFoundError(`account not found: accountId=${accountId}`);
         accounts[idx] = { ...(accounts[idx] as StoredAccount), moderation };
       },
+      setAvailabilityFailure(kind: "rate_limited" | "unavailable" | null): void {
+        availabilityFailure = kind;
+      },
     },
     async listAccounts(): Promise<AccountConnection> {
       return { items: accounts.map(withIdentity), first: null, last: null };
@@ -150,7 +162,7 @@ export function createMockEmumetClient(options: MockEmumetClientOptions = {}): M
         id,
         name: input.name,
         isBot: input.isBot ?? false,
-        publicKey: "ed25519:MOCK_" + id,
+        publicKey: null,
         createdAt: new Date().toISOString(),
         moderation: null,
       };
@@ -218,6 +230,14 @@ export function createMockEmumetClient(options: MockEmumetClientOptions = {}): M
       const updated: Profile = { ...existing, username };
       profiles[idx] = updated;
       return updated;
+    },
+
+    async checkUsernameAvailability(username: string): Promise<UsernameAvailability> {
+      if (availabilityFailure === "rate_limited") throw new EmumetRateLimitedError(30);
+      if (availabilityFailure === "unavailable") throw new EmumetUnavailableError("mock Emumet availability check is unavailable");
+      const violation = checkProfileUsername(username);
+      if (violation !== null) return { available: false, reason: violation === "FORMAT" ? "invalid_format" : "reserved" };
+      return usedUsernames.has(username) ? { available: false, reason: "taken" } : { available: true };
     },
 
     listMetadata,
