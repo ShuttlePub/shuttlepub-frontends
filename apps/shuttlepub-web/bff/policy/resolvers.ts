@@ -33,7 +33,9 @@ function policyError(error: unknown): unknown {
       extensions: { code: error.code, ...(error.status === undefined ? {} : { upstreamStatus: error.status }) },
     });
   }
-  if (error instanceof AuthError) return new GraphQLError(error.code, { extensions: { code: error.code } });
+  if (error instanceof AuthError) {
+    return new GraphQLError(error.code, { extensions: { code: error.code, ...(error.reason ? { reason: error.reason } : {}) } });
+  }
   return error;
 }
 

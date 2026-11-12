@@ -851,6 +851,48 @@ async function verifyAmbiguousReactionRestore(page: Page, viewport: Viewport, se
  * and a dialog owns the keyboard: the toast's "元に戻す" outside it is unreachable (inert)
  * while the dialog is open, Tab stays inside, Esc closes it and returns focus.
  */
+/**
+ * Quick reaction x mute/block in one browser: the "利用できません" toast (P2) outlives the
+ * navigation to the mute/block page. While the add dialog is open that toast is behind
+ * it and inert: Tab never reaches 「入れ替える」, and even a click delivered to it does not
+ * navigate away, so the URL, the typed domain and the focus stay.
+ */
+async function verifyReactionToastUnderMuteBlock(page: Page) {
+  await page.goto("/", { waitUntil: "networkidle" });
+  await expect(page.getByTestId("timeline")).toHaveAttribute("data-state", "loaded");
+  await expect(page.locator("#content article").first().getByTestId("reactions")).toBeVisible();
+  await page.locator("#react-post-mika-picker").click();
+  const picker = page.getByTestId("picker");
+  // aria-disabled: still clickable, it explains why it cannot be picked (P2).
+  await picker.getByTestId("picker-favorites").getByRole("button", { name: ":old_blob:（利用不可）" }).click({ force: true });
+  const toast = page.getByTestId("reaction-toast");
+  await expect(toast).toContainText("利用できません");
+  await page.keyboard.press("Escape");
+  await expect(picker).toHaveCount(0);
+  // In-app navigation keeps the toast (Client.Reaction.leaveScreen).
+  await page.getByRole("link", { name: "設定" }).filter({ visible: true }).first().click();
+  await page.locator("#content").getByTestId("settings-mute-block").click();
+  await expect(page).toHaveURL(/\/settings\/mute-block\/domains$/);
+  await expect(page.getByTestId("domain-panel").locator("section")).toHaveAttribute("data-state", "loaded");
+  await expect(toast).toBeVisible();
+  await page.locator("#mb-add-button").click();
+  const input = page.locator("#mb-add-input");
+  await expect(input).toBeFocused();
+  await page.keyboard.type("keep-me.example");
+  await expect(toast).toHaveAttribute("inert", "");
+  await expect(toast).toHaveAttribute("aria-hidden", "true");
+  await expect(page.getByRole("button", { name: "入れ替える" })).toHaveCount(0);
+  // A click that still reaches the button (dispatched directly, bypassing inert) is refused.
+  await toast.locator("button").dispatchEvent("click");
+  await expect(page).toHaveURL(/\/settings\/mute-block\/domains$/);
+  await expect(page.getByTestId("add-dialog")).toBeVisible();
+  await expect(input).toHaveValue("keep-me.example");
+  await expect(input).toBeFocused();
+  await expectTabStaysInside(page, page.getByTestId("add-dialog"));
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("add-dialog")).toHaveCount(0);
+}
+
 async function verifyMuteBlock(page: Page, viewport: Viewport) {
   const content = page.locator("#content");
   await page.goto("/settings", { waitUntil: "networkidle" });
@@ -1001,12 +1043,14 @@ async function verifyMock(browser: Browser, frontendRoot: string, coreURL: strin
       } finally {
         await context.close();
       }
-      // A fresh browser for the mute/block settings (D08).
+      // A fresh browser for the mute/block settings (D08), with the quick reaction mock at its fixtures.
+      await resetMock(server);
       const muteBlock = await openPage(browser, server, viewport);
       try {
+        await verifyReactionToastUnderMuteBlock(muteBlock.page);
         await verifyMuteBlock(muteBlock.page, viewport);
         expect(muteBlock.errors, `mute/block ${viewport.name}: browser errors`).toEqual([]);
-        console.info(`OK mute/block settings: keyboard, modal, own server, Profile switch at ${viewport.name}`);
+        console.info(`OK mute/block settings: keyboard, modal, reaction toast behind it, own server, Profile switch at ${viewport.name}`);
       } finally {
         await muteBlock.context.close();
       }

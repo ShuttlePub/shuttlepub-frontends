@@ -506,6 +506,7 @@ code (Failure value) = value
 describe :: Failure -> String
 describe (Failure value) = case value of
   "UNAUTHENTICATED" -> "ログインが必要です"
+  "SESSION_EXPIRED" -> "ログインの有効期限が切れました"
   "FORBIDDEN" -> "この Profile では操作できません"
   "PROFILE_REQUIRED" -> "Profile を選択してください"
   "PROFILE_CHANGED" -> "Profile が切り替わりました"
@@ -526,6 +527,7 @@ data Recovery = ReloadLists | ReloadWholePage | LogIn
 recovery :: Failure -> Array Recovery
 recovery (Failure value) = case value of
   "UNAUTHENTICATED" -> [ LogIn ]
+  "SESSION_EXPIRED" -> [ LogIn ]
   "PROFILE_CHANGED" -> [ ReloadWholePage ]
   "PROFILE_UNAVAILABLE" -> [ ReloadWholePage ]
   "PROFILE_REQUIRED" -> []

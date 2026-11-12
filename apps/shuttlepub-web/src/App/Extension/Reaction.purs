@@ -534,11 +534,14 @@ overlay model = HE.div [ HA.class' "sp-reaction-layer" ]
 
 -- | C2 / S2 / P2 toast. It stays while hovered, touched or focused (注意 3), and sits
 -- | above the click-away layer so 「元に戻す」 works while a picker is open (注意 1).
+-- | While the mute/block dialog (D08) is open the toast is outside that modal: it moves
+-- | behind the dialog and becomes inert, so neither pointer nor keyboard can run its
+-- | action (its timer and any pending write still settle as usual).
 toastView :: Model -> Html Message
 toastView model = case model.reaction.toast of
   Nothing -> emptySlot
   Just toast -> HE.div
-    ( [ HA.class' "sp-toast"
+    ( [ HA.class' ("sp-toast" <> if behindModal then " sp-toast-behind" else "")
       , attr "role" "status"
       , testId "reaction-toast"
       , HA.createRawEvent "mouseover" \_ -> pure (Just (reaction (ToastHold HoldHover true)))
@@ -548,9 +551,10 @@ toastView model = case model.reaction.toast of
       , HA.createRawEvent "touchstart" \_ -> pure (Just (reaction (ToastHold HoldTouch true)))
       , HA.createRawEvent "touchend" \_ -> pure (Just (reaction (ToastHold HoldTouch false)))
       , HA.createRawEvent "touchcancel" \_ -> pure (Just (reaction (ToastHold HoldTouch false)))
-      ] <> case toast.kind of
-        ReactionFailed _ error -> [ attr "data-error" (Error.tag error) ]
-        _ -> []
+      ] <> (if behindModal then [ attr "inert" "", attr "aria-hidden" "true" ] else [])
+        <> case toast.kind of
+          ReactionFailed _ error -> [ attr "data-error" (Error.tag error) ]
+          _ -> []
     )
     case toast.kind of
       UndoRemoval removal -> [ glyph removal.emoji, HE.span_ [ HE.text "取り消しました" ], button "元に戻す" ToastUndo ]
@@ -559,6 +563,7 @@ toastView model = case model.reaction.toast of
       FavoriteUnavailable emoji -> [ glyph emoji, HE.span_ [ HE.text "利用できません" ], button "入れ替える" ToastAction ]
       ReactionFailed text error -> [ HE.span_ [ HE.text (text <> "（" <> Error.describe error <> "）") ] ]
   where
+  behindModal = isJust model.muteBlock.dialog
   button label message = HE.button
     [ HA.type' "button", HA.class' "sp-toast-btn", HA.createRawEvent "click" \event -> blurTarget event $> Just (reaction message) ]
     [ HE.text label ]

@@ -49,11 +49,17 @@ toEither { data_, errors } = case errors of
     Left _ -> Left (Failure "INVALID_RESPONSE")
     Right value -> Right value
   where
-  codeOf extensions = case extensions >>= FO.lookup "code" of
-    Just json -> case decodeJson json of
-      Right code -> code
-      Left _ -> "UNEXPECTED"
-    Nothing -> "UNEXPECTED"
+  codeOf extensions = case field "code", field "reason" of
+    -- The BFF cleared a session cookie it could no longer use (bff/auth-error.ts).
+    Just "UNAUTHENTICATED", Just "SESSION_EXPIRED" -> "SESSION_EXPIRED"
+    Just code, _ -> code
+    Nothing, _ -> "UNEXPECTED"
+    where
+    field name = case extensions >>= FO.lookup name of
+      Just json -> case decodeJson json of
+        Right value -> Just value
+        Left _ -> Nothing
+      Nothing -> Nothing
 
 run :: forall a b. (a -> b) -> Aff (GqlRes a) -> Aff (Either Failure b)
 run convert request = do

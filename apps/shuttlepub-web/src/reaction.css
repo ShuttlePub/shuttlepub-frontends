@@ -123,6 +123,8 @@
   background: var(--color-text-primary); color: var(--color-bg-primary);
   font-size: 12px; box-shadow: 0 8px 28px #0007;
 }
+/* Behind the mute/block dialog (z-index 50) while it is open; inert there (Extension/Reaction.purs). */
+.sp-app .sp-toast.sp-toast-behind { z-index: 40; }
 .sp-app .sp-toast .sp-emo { font-size: 15px; }
 .sp-app .sp-toast-btn { font-weight: 750; text-decoration: underline; white-space: nowrap; color: inherit; }
 .sp-app .sp-toast .sp-toast-btn:focus-visible { outline-color: var(--color-bg-primary); }

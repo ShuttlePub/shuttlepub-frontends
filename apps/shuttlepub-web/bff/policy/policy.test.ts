@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { createGraphqlHandler } from "../server.ts";
+import { AuthError } from "../auth-error.ts";
 import type { ViewerSession } from "../auth.ts";
 import { emumetContract } from "../openapi/contract.ts";
 import type { ProfileContextSource } from "../profile.ts";
@@ -302,6 +303,12 @@ describe("GraphQL policy API", () => {
     expect((await run(LIST, { p: "account-b" })).data!.domainControls).toEqual([]);
     switchTo(null);
     expect((await run(LIST, { p: "account-a" })).errors![0]!.extensions!.code).toBe("PROFILE_REQUIRED");
+  });
+
+  test("an expired session keeps its reason, so the page can say 'log in again'", async () => {
+    const expired = createRealProfilePolicy({ baseUrl: "http://emumet.test", session: () => Promise.reject(new AuthError("UNAUTHENTICATED", 401, "SESSION_EXPIRED")) });
+    const { run } = app({ policy: expired });
+    expect((await run(LIST, { p: "account-a" })).errors![0]!.extensions).toMatchObject({ code: "UNAUTHENTICATED", reason: "SESSION_EXPIRED" });
   });
 
   test("checkDomainInput normalizes or explains, and never writes", async () => {

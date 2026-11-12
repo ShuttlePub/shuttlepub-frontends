@@ -11,6 +11,7 @@ import App.MuteBlock.Types (Change(..), Dialog(..), Failure(..), InputProblem(..
 import App.MuteBlock.Update as MuteBlockUpdate
 import Generated.Schema.Gql.Enum.PolicyMode (PolicyMode(..))
 import App.Post (Post, TimelineTab(..), Visibility(..), allTimelineTabs, timelineTabFromValue, timelineTabValue)
+import App.Reaction (ToastKind(..))
 import App.Route (Route(..), routeCodec)
 import App.View (view)
 import App.View.Auth (authActionId, authActionShown)
@@ -338,6 +339,19 @@ testMuteBlock = do
   let
     ownDone = step (ready { writing = true, dialog = Just pendingDialog }) (Written fromDialog MuteDomain "calm.example" (Right (DomainUpserted { domain: "calm.example", mode: MUTE, revision: 1, createdAt: "2026-01-01T00:00:00Z" })))
   assertEqual "the dialog's own completion closes it" ownDone.next.dialog Nothing
+
+  -- Integration with quick reaction: its toast moves behind an open mute/block dialog and is inert.
+  let
+    reactionToast = { id: 1, kind: ReactionFailed "リアクションできませんでした" (NotImplemented "later"), holds: { hover: false, touch: false, focus: false }, armed: 1 }
+    withToast dialog m = m
+      { profileContext = Loaded { activeProfile: Nothing }
+      , muteBlock = ready { dialog = dialog }
+      , reaction = m.reaction { toast = Just reactionToast }
+      }
+  behind <- renderAfter (Just MuteBlockDomains) (withToast (Just (AddDomain { input: "keep-me.example", problem: Nothing, pending: false })))
+  assertContains "reaction toast is behind the mute/block dialog" behind "sp-toast sp-toast-behind"
+  free <- renderAfter (Just MuteBlockDomains) (withToast Nothing)
+  assertNotContains "without a dialog the reaction toast is usable" free "sp-toast-behind"
 
 testLoginHref :: Effect Unit
 testLoginHref = do

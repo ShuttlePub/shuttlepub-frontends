@@ -11,6 +11,7 @@ import App.Model (DetailTab(..), Model, RemoteData(..), emptyCompose, fromEither
 import App.MuteBlock.Types as MuteBlock
 import App.MuteBlock.Update as MuteBlockUpdate
 import App.Post (TimelineTab, timelineTabFromValue)
+import App.Reaction (ReactionMsg(..))
 import App.Route (Route(..), routeCodec)
 import App.View.Auth (authActionId, authActionShown)
 import App.View.Compose (composeTextId, visibilityButtonId)
@@ -174,6 +175,9 @@ mkUpdate nav model = case _ of
     mkUpdate nav model (Navigate (if tab == MuteBlock.AccountsTab then MuteBlockAccounts else MuteBlockDomains))
   MuteBlockMsg MuteBlock.OpenSettings -> mkUpdate nav model (Navigate Settings)
   MuteBlockMsg message -> delegate model message
+  -- The reaction toast is inert behind an open mute/block dialog; its actions (which
+  -- may navigate away) are refused here too, so the dialog and its input survive.
+  Reaction message | isJust model.muteBlock.dialog && toastAction message -> noMessages model
   Reaction message ->
     let
       Tuple next effects = QR.update model message
@@ -322,9 +326,16 @@ delegate model message =
   in
     Tuple next (map (map (map MuteBlockMsg)) effects <> lock)
 
+toastAction :: ReactionMsg -> Boolean
+toastAction = case _ of
+  ToastUndo -> true
+  ToastAction -> true
+  _ -> false
+
 failureOf :: ApiError -> MuteBlock.Failure
 failureOf = MuteBlock.Failure <<< case _ of
   Unauthenticated _ -> "UNAUTHENTICATED"
+  SessionExpired _ -> "SESSION_EXPIRED"
   Forbidden _ -> "FORBIDDEN"
   ProfileUnavailable _ -> "PROFILE_UNAVAILABLE"
   NotImplemented _ -> "NOT_IMPLEMENTED"
