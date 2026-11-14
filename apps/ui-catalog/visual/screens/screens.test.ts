@@ -77,7 +77,7 @@ test("ShuttlePub cases cover the SNS shell, quick reactions and login at both wi
     const required = "requires" in item ? item.requires : undefined;
     const viewer = "viewer" in item ? item.viewer : undefined;
     if (["home", "not-found"].includes(item.id)) expect(required).toBeUndefined();
-    else expect(required).toBe(viewer ? "sns-login" : item.id.startsWith("reaction-") ? "quick-reaction"
+    else expect(required).toBe(viewer ? "sns-login" : item.id.startsWith("reaction-remote") ? "remote-emoji" : item.id.startsWith("reaction-") ? "quick-reaction"
       : item.id.startsWith("mute-block-") ? "mute-block-settings" : item.id.startsWith("domain-") ? "domain-content" : "sns-shell");
     // Only login states use the real-mode BFF without a session / with a stale one.
     expect(viewer === undefined).toBe(!/^(login|home-signed-out|home-session-expired)/.test(item.id));
@@ -90,7 +90,8 @@ test("only the baseline side may skip cases whose screen feature is missing", ()
   const shuttlePub = SCREEN_CASES.filter((item) => item.app === "ShuttlePub");
   const placeholderHtml = '<main id="app"><h1>ShuttlePub</h1><template-state></template-state></main>';
   const shellHtml = '<main id="app" lang="ja"><div class="sp-app" data-testid="app-shell"></div></main>';
-  const reactionHtml = '<div class="sp-reaction-layer"></div>';
+  const reactionHtml = '<div class="sp-reaction-layer" data-remote-emoji="reuse"></div>';
+  const oldReactionHtml = '<div class="sp-reaction-layer"></div>';
   const loginHtml = '<div class="sp-page sp-page-login" data-testid="login-page"></div>';
   const muteBlockHtml = '<div data-testid="mute-block"></div>';
   const domainHtml = '<div data-testid="user-page" data-state="loading"></div>';
@@ -102,7 +103,12 @@ test("only the baseline side may skip cases whose screen feature is missing", ()
   expect(featuresInShuttlePubHtml(placeholderHtml).size).toBe(0);
   expect([...featuresInShuttlePubHtml(shellHtml)]).toEqual(["sns-shell"]);
   expect([...withLogin].sort()).toEqual(["domain-content", "mute-block-settings", "sns-login", "sns-shell"]);
-  expect([...withReaction].sort()).toEqual(["domain-content", "mute-block-settings", "quick-reaction", "sns-shell"]);
+  expect([...withReaction].sort()).toEqual(["domain-content", "mute-block-settings", "quick-reaction", "remote-emoji", "sns-shell"]);
+  // A baseline with the quick reaction UI but without D09 skips exactly the 4 remote emoji screens.
+  const withoutRemote = featuresInShuttlePubHtml(shellHtml + oldReactionHtml + loginHtml + muteBlockHtml + domainHtml);
+  expect(selectCases(shuttlePub, withoutRemote, "baseline").skipped.map((item) => item.id).sort())
+    .toEqual(["reaction-remote", "reaction-remote", "reaction-remote-picker", "reaction-remote-picker"]);
+  expect(() => selectCases(shuttlePub, withoutRemote, "branch")).toThrow(/remote-emoji/);
   const baseline = selectCases(shuttlePub, featuresInShuttlePubHtml(placeholderHtml), "baseline");
   expect(baseline.capture.map((item) => item.id).sort()).toEqual(["home", "home", "not-found", "not-found"]);
   expect(baseline.skipped).toHaveLength(shuttlePub.length - 4);

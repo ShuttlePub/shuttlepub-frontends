@@ -512,7 +512,7 @@ chipMenu index emoji count = HE.div
 -- Overlay ---------------------------------------------------------------------------
 
 overlay :: Model -> Html Message
-overlay model = HE.div [ HA.class' "sp-reaction-layer" ]
+overlay model = HE.div [ HA.class' "sp-reaction-layer", attr "data-remote-emoji" "reuse" ]
   [ pickerLayer
   , chipMenuLayer
   , toastView model
