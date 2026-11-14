@@ -15,6 +15,9 @@ module App.Emoji
   , emojiKey
   , sameEmoji
   , emojiLabel
+  , isExternal
+  , pickable
+  , shortcodeOf
   , categories
   , customCategoryId
   , categoryEmojis
@@ -29,7 +32,7 @@ import Data.Argonaut.Encode.Class (class EncodeJson)
 import Data.Argonaut.Encode.Generic (genericEncodeJson)
 import Data.Array (concatMap, filter, find, head, nubByEq)
 import Data.Generic.Rep (class Generic)
-import Data.Maybe (Maybe(..), fromMaybe)
+import Data.Maybe (Maybe(..), fromMaybe, isJust, maybe)
 import Data.Show.Generic (genericShow)
 import Data.String (Pattern(..), contains, split, toLower, trim)
 
@@ -121,10 +124,24 @@ type Entry = { char :: String, names :: String }
 
 type Category = { id :: String, label :: String, icon :: String }
 
--- | Name for screen readers and tooltips: the first catalogue name, or :shortcode:.
+-- | Another server's custom emoji (D09): it has an origin or is existing_reaction_only.
+-- | It is only ever used through an existing reaction chip.
+isExternal :: Emoji -> Boolean
+isExternal emoji = emoji.kind == CustomEmoji && (isJust emoji.origin || emoji.usage == Just ExistingReactionOnly)
+
+-- | What the picker and the favourites may offer: usable, and not another server's.
+pickable :: Emoji -> Boolean
+pickable emoji = emoji.available && not (isExternal emoji)
+
+-- | The shortcode of a custom emoji without colons (its id when the server sent none).
+shortcodeOf :: Emoji -> String
+shortcodeOf emoji = fromMaybe emoji.value emoji.shortcode
+
+-- | Name for screen readers and tooltips: the first catalogue name, or :shortcode: (with
+-- | the origin host of an external emoji, 「:name:（host）」, as the chip is read out).
 emojiLabel :: Emoji -> String
 emojiLabel emoji = case emoji.kind of
-  CustomEmoji -> ":" <> fromMaybe emoji.value emoji.shortcode <> ":"
+  CustomEmoji -> ":" <> shortcodeOf emoji <> ":" <> maybe "" (\host -> "（" <> host <> "）") emoji.origin
   UnicodeEmoji -> case find (\entry -> entry.char == emoji.value) allEntries of
     Just entry -> fromMaybe emoji.value (head (split (Pattern " ") entry.names))
     Nothing -> emoji.value
@@ -233,19 +250,19 @@ catalogue =
 allEntries :: Array Entry
 allEntries = concatMap _.entries catalogue
 
--- | The grid of one category. Custom emoji: the server's available ones.
+-- | The grid of one category. Custom emoji: this server's available ones (never another server's, D09).
 categoryEmojis :: Array Emoji -> String -> Array Emoji
 categoryEmojis custom category
-  | category == customCategoryId = filter _.available custom
+  | category == customCategoryId = filter pickable custom
   | otherwise = case find (\group -> group.category == category) catalogue of
       Just group -> map (unicode <<< _.char) group.entries
       Nothing -> []
 
 -- | Search (ui-spec P4: the favourites row is hidden meanwhile) over names, the
--- | character itself and custom shortcodes. Only usable emoji are offered.
+-- | character itself and custom shortcodes. Only usable emoji of this server are offered.
 searchEmojis :: Array Emoji -> String -> Array Emoji
 searchEmojis custom raw =
-  nubByEq sameEmoji (map (unicode <<< _.char) (filter matchesEntry allEntries) <> filter matchesCustom (filter _.available custom))
+  nubByEq sameEmoji (map (unicode <<< _.char) (filter matchesEntry allEntries) <> filter matchesCustom (filter pickable custom))
   where
   query = toLower (trim raw)
   hit text = query /= "" && contains (Pattern query) (toLower text)

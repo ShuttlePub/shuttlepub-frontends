@@ -1,7 +1,7 @@
 {
   "producer": {
     "repository": "ShuttlePub/ShuttlePub",
-    "commit": "a00d234aedecb0223ba20dc8d7e9334cf9d39e83",
+    "commit": "bd997e6cb64b7f96ce454673f0a278f47db1dcf8",
     "path": "server/tests/fixtures/personal_domain"
   },
   "files": [
@@ -27,8 +27,8 @@
     },
     {
       "file": "remote_emoji_chips.json",
-      "sha256": "c8b8b2832ff2318ee45c0fc60226c465405775ba564dd453e8e25e7dc2ceb12f",
-      "bytes": 9990
+      "sha256": "d267826c5c17f4de5daea4bbab442a8ccf27a740a913ec7e45c4ccc6f4f1bf09",
+      "bytes": 10582
     },
     {
       "file": "reveal.json",

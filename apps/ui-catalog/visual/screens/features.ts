@@ -17,6 +17,8 @@ export function featuresInShuttlePubHtml(html: string): Set<ScreenFeature> {
   const features = new Set<ScreenFeature>();
   if (html.includes('data-testid="app-shell"')) features.add("sns-shell");
   if (html.includes('class="sp-reaction-layer"')) features.add("quick-reaction");
+  // D09: the reaction layer says that another server's emoji are reused through existing chips.
+  if (html.includes('data-remote-emoji="reuse"')) features.add("remote-emoji");
   if (html.includes('data-testid="login-page"')) features.add("sns-login");
   // Only the mute/block page renders this marker; a baseline without the route serves NotFound there.
   if (html.includes('data-testid="mute-block"')) features.add("mute-block-settings");

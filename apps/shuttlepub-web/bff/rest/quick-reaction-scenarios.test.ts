@@ -17,6 +17,7 @@ const NOTE = "0f0a5d3e-8f3c-4c53-9b64-3f5f8f0f2a11";
 
 type Step =
   | { mutate_emoji: { id: string; availability: "available" | "unavailable"; reason?: "deleted" | "disabled" | null } }
+  | { mutate_emoji_origin_deleted: { id: string } }
   | { operation: QuickReactionOperation; body?: unknown; expect: { status: number; body: unknown }; note?: string };
 
 type Scenario = {
@@ -76,7 +77,7 @@ describe("producer quick reaction scenarios", () => {
   test("are vendored verbatim from the pinned producer commit", async () => {
     const [schema, vendored] = await Promise.all([verifyLock(), verifyScenarioLock()]);
     expect(vendored.producer.commit).toBe(schema.producer.commit);
-    expect(vendored.files.length).toBeGreaterThanOrEqual(21);
+    expect(vendored.files.length).toBeGreaterThanOrEqual(24);
   });
 
   test("every request and expected answer conforms to the pinned OpenAPI schema", async () => {
@@ -98,11 +99,15 @@ describe("producer quick reaction scenarios", () => {
 
   test("the stateful mock answers every step exactly as the producer expects", async () => {
     const all = await scenarios();
-    expect(all.length).toBeGreaterThanOrEqual(21);
-    expect(all.filter((scenario) => scenario.name.startsWith("remote_")).length).toBeGreaterThanOrEqual(9);
+    expect(all.length).toBeGreaterThanOrEqual(24);
+    expect(all.filter((scenario) => scenario.name.startsWith("remote_")).length).toBeGreaterThanOrEqual(12);
     for (const scenario of all) {
       const store = storeFor(scenario);
       scenario.steps.forEach((step, index) => {
+        if ("mutate_emoji_origin_deleted" in step) {
+          store.originDeleted(step.mutate_emoji_origin_deleted.id);
+          return;
+        }
         if ("mutate_emoji" in step) {
           store.mutateEmoji(step.mutate_emoji.id, step.mutate_emoji.availability, step.mutate_emoji.reason ?? null);
           return;

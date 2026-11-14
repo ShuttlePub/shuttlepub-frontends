@@ -1,7 +1,7 @@
 {
   "producer": {
     "repository": "ShuttlePub/ShuttlePub",
-    "commit": "a00d234aedecb0223ba20dc8d7e9334cf9d39e83",
+    "commit": "bd997e6cb64b7f96ce454673f0a278f47db1dcf8",
     "path": "server/tests/fixtures/quick_reaction/scenarios"
   },
   "files": [
@@ -27,48 +27,63 @@
     },
     {
       "file": "remote_emoji_is_never_a_favorite.json",
-      "sha256": "6f958fdbf05584dfe12f256c5c3bdb6a42bf3b852dfb0edbb77c286306ea56c7",
-      "bytes": 3692
+      "sha256": "da9f55c34a38130a70d35c53349d11d0b36be46ed3369ccc25a0568166fbe5a9",
+      "bytes": 4481
     },
     {
       "file": "remote_reaction_checks_availability_first.json",
-      "sha256": "fc9ffc2bc34789312b5311d649887be22853e827fa9f7e1b5425a5e5f33456f7",
-      "bytes": 3534
+      "sha256": "750675b523bb71cc6f48540cf82f73f23a9710ef80443a0b5bd06cb87c6d6322",
+      "bytes": 4611
+    },
+    {
+      "file": "remote_reaction_deleted_at_origin_reuses_the_chip.json",
+      "sha256": "abc37388f8397fd85ba24ca84a5774285956fb6392ec2d44773fe48e05dd348b",
+      "bytes": 4822
+    },
+    {
+      "file": "remote_reaction_deleted_at_origin_without_chip_is_refused.json",
+      "sha256": "0f0326855356185e776c121747328dd0d7d28e60d9cdf8c8ad8238618169cebc",
+      "bytes": 2459
     },
     {
       "file": "remote_reaction_image_missing_is_still_sendable.json",
-      "sha256": "cfe0b83337f59c16709e063a8d23a0dc42385f53ad9fd9a57a0977e9635cdc64",
-      "bytes": 2965
+      "sha256": "f379039394f5a05981ea0a77f2ece174c378bb0e516a10f95d252c7fe669dc6a",
+      "bytes": 2934
     },
     {
       "file": "remote_reaction_only_own_chip_disappears_after_delete.json",
-      "sha256": "24e530936be1dc12395d773423e59ec9ff4508bb590fbfc98b468fea53ea8c55",
-      "bytes": 2791
+      "sha256": "67721a92a90228251e49573840c5a5a9cd9c465715d14caa899760e15a259669",
+      "bytes": 2760
+    },
+    {
+      "file": "remote_reaction_origin_deletes_the_selected_emoji.json",
+      "sha256": "901c3c6c975fecbee220e8d3c94b6aba211fb7d67ac22e084893f1e9b3565edb",
+      "bytes": 4743
     },
     {
       "file": "remote_reaction_piggyback_lifecycle.json",
-      "sha256": "3b91e916c960d864fcc810311ebc15bf14620f76208832cea99b08c64db68184",
-      "bytes": 5051
+      "sha256": "c3b7481369a6471b385604d0e52956895ebecc6c6d3a8567fafcab1209156f0c",
+      "bytes": 5020
     },
     {
       "file": "remote_reaction_repeat_precedes_chip_rule.json",
-      "sha256": "d5e6762db14b520026a92fe89ad8b46c82a0177f087161fa233517398e478abe",
-      "bytes": 3030
+      "sha256": "166ba6b2a911095214c623eb2e804e89142d60abf3d3f7afeef2643f2fdc4353",
+      "bytes": 2999
     },
     {
       "file": "remote_reaction_while_reacted_is_a_conflict.json",
-      "sha256": "1e58d40aaa5f522252350d77bc7d055d97eccac520d762aa248acb2e976c44c1",
-      "bytes": 3700
+      "sha256": "174c0096e7d1a9af9609579751564fc78d95a3a30fe9307e100b4dc21314466f",
+      "bytes": 3669
     },
     {
       "file": "remote_reaction_without_chip_is_refused.json",
-      "sha256": "a857f3d5caaba2b74a26c6a7304ca1d2380b1a4812f5dfb4bf8776557862024a",
-      "bytes": 2449
+      "sha256": "b8530f2582e5852ec9764f8f9644176e4b6b10e90f7438184dd5b7c85297d7b9",
+      "bytes": 2418
     },
     {
       "file": "remote_rules_leave_local_replacement_alone.json",
-      "sha256": "e54cf08dc1890d68bcede5a9c971b2663229ff6766b85645bc04420741b0fd7c",
-      "bytes": 2824
+      "sha256": "b43c6b10e8b606399fd4fb4028e5d35ab49c2479a4b423f41baa625fc45b3ce7",
+      "bytes": 2793
     },
     {
       "file": "settings_clear_favorites.json",

@@ -221,7 +221,9 @@ newtype RelationActor = RelationActor
   , iconUrl ::
       {}
       ->
-      -- | Absolute http(s) URL of the avatar, loaded by the browser directly.
+      -- | Absolute http(s) URL of the avatar as stored. For a remote actor it points at another server,
+      -- | which the browser must not load directly (d09-q06: no ShuttlePub-side delivery route exists, so a
+      -- | placeholder icon is shown); how the screen uses it is decided by the D08 display unit.
       AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
   , actorUrl ::
       {}
@@ -285,13 +287,8 @@ newtype Emoji = Emoji
   , imageState ::
       {}
       ->
-      -- | Custom emoji only (null for Unicode). PRESENT goes with imageUrl; MISSING means show :shortcode:.
+      -- | Custom emoji only (null for Unicode). MISSING means show :shortcode:; PRESENT goes with imageUrl for this server's emoji (an external emoji is shown as :shortcode: either way).
       AsGql "EmojiImageState" (Data.Maybe.Maybe (AsGql "EmojiImageState" EmojiImageState))
-  , imageUrl ::
-      {}
-      ->
-      -- | Custom emoji only, absent once deleted.
-      AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
   , shortcode ::
       {}
       ->
@@ -302,6 +299,14 @@ newtype Emoji = Emoji
       ->
       -- | Custom emoji only; null means ANYWHERE (Unicode). An external emoji is EXISTING_REACTION_ONLY.
       AsGql "EmojiUsage" (Data.Maybe.Maybe (AsGql "EmojiUsage" EmojiUsage))
+  , imageUrl ::
+      {}
+      ->
+      -- | Image of this server's own custom emoji only, absent once deleted. Always null for an external
+      -- | emoji (origin set): its image lives on another server and the browser never loads it directly
+      -- | (d09-q06; the contract has no ShuttlePub-side delivery route), so the UI shows :shortcode: with
+      -- | the external mark.
+      AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
   , origin ::
       {}
       ->
