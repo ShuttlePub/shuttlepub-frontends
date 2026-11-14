@@ -501,6 +501,18 @@ async function prepareQuickReaction(page: Page, item: ScreenCase) {
     await page.getByRole("tab", { name: /リアクション/ }).click();
     await expect(page.getByRole("button", { name: /^すべて/ })).toHaveAttribute("aria-pressed", "true");
     await expect(page.getByTestId("reactor-list").locator("li")).toHaveCount(19);
+  } else if (item.id === "reaction-remote" || item.id === "reaction-remote-picker") {
+    // D09: the post with another server's chips (globe + :name:); the picker never offers them.
+    const chips = page.locator("#content article").nth(3).getByTestId("reactions");
+    await expect(chips.locator(".sp-rchip.is-external")).toHaveCount(3);
+    await expect(chips.getByTestId("origin-mark")).toHaveCount(3);
+    await expect(chips.locator(".sp-rchip.is-external img")).toHaveCount(0);
+    if (item.id === "reaction-remote-picker") {
+      await page.locator("#react-post-aoi-profiles").click();
+      await expect(picker).toBeVisible();
+      await picker.getByRole("tab", { name: "このサーバーのカスタム絵文字" }).click();
+      await expect(picker.getByTestId("picker-grid").getByRole("button", { name: /（.*）/ })).toHaveCount(0);
+    }
   } else if (item.id === "reaction-settings-menu") {
     // S4: the unavailable favourite's menu starts with 入れ替え.
     await page.getByRole("button", { name: ":old_blob:（利用不可）" }).click();

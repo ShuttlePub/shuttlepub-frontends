@@ -679,6 +679,200 @@ async function verifyQuickReactionTiming(page: Page, viewport: Viewport) {
   console.info(`OK quick reaction timing (hold / replacement / slow+failed DELETE / bfcache / slow favourite save) at ${viewport.name}`);
 }
 
+async function switchActingProfile(page: Page, name: string) {
+  await visible(page, /投稿用 Profile を切り替え/).click();
+  await page.getByTestId("profile-menu").getByRole("menuitemradio", { name: new RegExp(name) }).click();
+  await expect(visible(page, new RegExp(`投稿用 Profile を切り替え（現在: ${name}）`))).toHaveCount(1);
+  await expect(page.getByTestId("timeline")).toHaveAttribute("data-state", "loaded");
+}
+
+/**
+ * D09 (host note-search-ui ui-spec §5, d09-q04/q05/q06): another server's emoji is reused
+ * only by piggybacking on an existing chip. It carries the globe mark and is always the
+ * `:name:` text (the browser never requests an image from another server), a missing /
+ * deleted one looks the same and stays pressable, it is not in the picker or favourites,
+ * and a reaction on it is removed / undone / switched like any other. Profiles stay apart.
+ */
+async function verifyRemoteEmoji(page: Page, viewport: Viewport) {
+  const sent = recordOperations(page);
+  const external: string[] = [];
+  page.on("request", (request) => {
+    const { hostname } = new URL(request.url());
+    if (hostname !== "127.0.0.1" && hostname !== "localhost" && request.url().startsWith("http")) external.push(request.url());
+  });
+  await page.goto("/", { waitUntil: "networkidle" });
+  await expect(page.getByTestId("timeline")).toHaveAttribute("data-state", "loaded");
+  // The post that carries the chips of other servers (its position changes with the Profile's filters).
+  const chips = page.getByTestId("reactions").filter({ has: page.locator('[data-emoji="c:ghostcat@remote.example"]') });
+  const chip = (id: string) => chips.locator(`[data-emoji="c:${id}"]`);
+  const toast = page.getByTestId("reaction-toast");
+  const mine = page.locator("#react-mine-post-aoi-profiles");
+  const operations = (name: string) => sent.filter((operation) => operation === name).length;
+
+  // Look: globe right after the emoji and before the count; :name: text, no image of any server.
+  const kusaRemote = chip("kusa@remote.example");
+  await expect(kusaRemote).toHaveClass(/is-external/);
+  await expect(kusaRemote.locator(".sp-emo-label")).toHaveText(":kusa:");
+  await expect(kusaRemote.getByTestId("origin-mark")).toHaveCount(1);
+  await expect(kusaRemote.locator("img")).toHaveCount(0);
+  await expect(kusaRemote).toHaveAttribute("aria-label", /^:kusa:（remote\.example） でリアクション（\d+：/);
+  expect(await kusaRemote.evaluate((element) => [...element.children].map((child) => child.className.split(" ")[1] ?? child.className))).toEqual(["sp-emo-label", "sp-origin", "sp-rchip-count"].map((name) => name));
+  const globe = await kusaRemote.getByTestId("origin-mark").boundingBox();
+  expect(Math.round(globe!.width), "globe is 11px").toBe(11);
+  // Same shortcode from this server: the image, no globe.
+  const kusaLocal = chip("kusa");
+  await expect(kusaLocal.locator("img")).toHaveCount(1);
+  await expect(kusaLocal.getByTestId("origin-mark")).toHaveCount(0);
+  await expect(kusaLocal).not.toHaveClass(/is-external/);
+  // Image missing at the origin, and deleted at the origin: the same look, still pressable.
+  for (const id of ["ghostcat@remote.example", "goneblob@remote.example"]) {
+    await expect(chip(id)).toHaveClass(/is-external/);
+    await expect(chip(id).getByTestId("origin-mark")).toHaveCount(1);
+    await expect(chip(id).locator("img")).toHaveCount(0);
+    await expect(chip(id)).toBeEnabled();
+    await expect(chip(id)).not.toHaveAttribute("aria-disabled", "true");
+  }
+  await expect(chip("ghostcat@remote.example").locator(".sp-emo-label")).toHaveText(":ghostcat:");
+  await expect(chip("goneblob@remote.example").locator(".sp-emo-label")).toHaveText(":goneblob:");
+  // d09-q06: nothing was requested from another server, and no <img> points at one.
+  await expect(page.locator('img[src^="http"]')).toHaveCount(0);
+  expect(external, "no request to another origin").toEqual([]);
+
+  // A local image that fails to load falls back to its :name: (no broken image).
+  const wrapper = kusaLocal.locator(".sp-emo-custom");
+  await expect(wrapper).not.toHaveAttribute("data-image-failed", /.*/);
+  await expect(kusaLocal.locator(".sp-emo-name")).toBeHidden();
+  await kusaLocal.locator("img").evaluate((image) => { (image as HTMLImageElement).src = "data:image/png;base64,AAAA"; });
+  await expect(wrapper).toHaveAttribute("data-image-failed", "true");
+  await expect(kusaLocal.locator("img")).toBeHidden();
+  await expect(kusaLocal.locator(".sp-emo-name")).toBeVisible();
+
+  // Not in the picker (grid, custom category, search) nor in the favourites.
+  const opener = page.locator("#react-post-mika-picker");
+  await opener.focus();
+  await page.keyboard.press("Enter");
+  const picker = page.getByTestId("picker");
+  await expect(picker).toBeVisible();
+  await expect(picker.getByTestId("picker-favorites").getByRole("button", { name: /remote\.example|other\.example|ghostcat|partycat|goneblob/ })).toHaveCount(0);
+  await picker.getByRole("tab", { name: "このサーバーのカスタム絵文字" }).click();
+  const grid = picker.getByTestId("picker-grid");
+  await expect(grid.getByRole("button", { name: ":kusa:" })).toHaveCount(1);
+  await expect(grid.getByRole("button", { name: /（.*）/ })).toHaveCount(0);
+  await picker.getByRole("searchbox", { name: "絵文字を検索" }).fill("partycat");
+  await expect(grid.getByRole("button")).toHaveCount(0);
+  await picker.getByRole("searchbox", { name: "絵文字を検索" }).fill("kusa");
+  await expect(grid.getByRole("button")).toHaveCount(1);
+  await expect(grid.getByRole("button", { name: ":kusa:" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(picker).toHaveCount(0);
+
+  // Piggyback: one chip press reacts (my chip first), the count goes up.
+  const before = Number(await kusaRemote.locator(".sp-rchip-count").textContent());
+  await kusaRemote.click();
+  await expect(mine).toBeFocused();
+  await expect(mine).not.toHaveAttribute("aria-busy", "true");
+  await expect(mine).toHaveAttribute("data-emoji", "c:kusa@remote.example");
+  await expect(mine.getByTestId("origin-mark")).toHaveCount(1);
+  await expect(mine.locator(".sp-rchip-count")).toHaveText(String(before + 1));
+  await expect(chips.locator(".sp-rchip").first()).toHaveAttribute("id", "react-mine-post-aoi-profiles");
+  await expect(page.locator("#react-post-aoi-profiles")).toHaveCount(0);
+  expect(operations("SetNoteReaction")).toBe(1);
+
+  // One reaction per post: the other chips can no longer be pressed.
+  await expect(chip("ghostcat@remote.example")).toHaveCount(1);
+  await expect(chips.locator("button.sp-rchip:not(.is-mine)")).toHaveCount(0);
+
+  // Remove -> undo restores -> remove -> the removal is sent when switching to another chip.
+  await mine.click();
+  await expect(mine).toHaveCount(0);
+  await expect(toast).toContainText("取り消しました");
+  await toast.getByRole("button", { name: "元に戻す" }).click();
+  await expect(mine).toBeFocused();
+  await expect(mine).toHaveAttribute("data-emoji", "c:kusa@remote.example");
+  await mine.click();
+  await expect(toast).toContainText("取り消しました");
+  await expect(chip("ghostcat@remote.example")).toBeEnabled();
+  await chip("ghostcat@remote.example").click();
+  await expect(mine).toHaveAttribute("data-emoji", "c:ghostcat@remote.example");
+  await expect(mine).not.toHaveAttribute("aria-busy", "true");
+  await expect(mine.locator(".sp-emo-label")).toHaveText(":ghostcat:");
+  const order = sent.filter((name) => name === "SetNoteReaction" || name === "RemoveNoteReaction");
+  expect(order, "the unsent removal goes before the next external PUT (S3: 409 while reacted)").toEqual(["SetNoteReaction", "RemoveNoteReaction", "SetNoteReaction"]);
+  await expect(page.locator(".sp-toast[data-error]")).toHaveCount(0);
+
+  // Profiles stay apart: another Profile sees it as somebody else's chip and may use it.
+  await switchActingProfile(page, "Fixture Dev");
+  await expect(page.locator("#react-mine-post-aoi-profiles")).toHaveCount(0);
+  await expect(chip("ghostcat@remote.example").locator(".sp-rchip-count")).toHaveText("2");
+  await switchActingProfile(page, "Fixture Profile");
+  await expect(page.locator("#react-mine-post-aoi-profiles")).toHaveAttribute("data-emoji", "c:ghostcat@remote.example");
+  await mine.click();
+  await expect(toast).toContainText("取り消しました");
+  await page.mouse.move(0, 0);
+  await expect(toast).toHaveCount(0, { timeout: 10_000 });
+  await expect(mine).toHaveCount(0);
+
+  // A deleted one is pressed like the others; the backend refuses and nothing is shown as saved.
+  await chip("goneblob@remote.example").click();
+  await expect(toast).toHaveAttribute("data-error", "emoji_unavailable");
+  await expect(toast).not.toContainText("取り消しました");
+  await expect(mine).toHaveCount(0);
+  await expect(page.locator("#react-post-aoi-profiles")).toBeVisible();
+
+  // A slow response keeps the post busy and sends nothing else; then it settles.
+  await page.mouse.move(0, 0);
+  await expect(toast).toHaveCount(0, { timeout: 10_000 });
+  const finish = await gateOperation(page, "SetNoteReaction", "pass");
+  await chip("kusa@remote.example").click();
+  const setsBefore = operations("SetNoteReaction");
+  await expect.poll(() => operations("SetNoteReaction")).toBe(setsBefore);
+  await chip("ghostcat@remote.example").click({ timeout: 1_000 }).catch(() => undefined);
+  await finish();
+  await expect(mine).toHaveAttribute("data-emoji", "c:kusa@remote.example");
+  await expect(mine).not.toHaveAttribute("aria-busy", "true");
+  expect(operations("SetNoteReaction") - setsBefore, "nothing else sent while the response is pending").toBe(0);
+  expect(external, "still no request to another origin").toEqual([]);
+  console.info(`OK another server's emoji: globe + :name:, never in the picker, piggyback / undo / switch / Profile / refused / slow at ${viewport.name}`);
+}
+
+/**
+ * A failed image mark belongs to the image that is shown: Flame reuses the emoji wrapper when a
+ * favourite is replaced in place, so a mark left by the old emoji must not hide the new one,
+ * while drawing the same emoji again keeps its :name: (no flicker back to a broken image).
+ */
+async function verifyImageFailureFollowsEmoji(page: Page, viewport: Viewport) {
+  await page.goto("/settings", { waitUntil: "networkidle" });
+  const chips = page.getByTestId("favorites");
+  await expect(chips).toHaveAttribute("data-state", "loaded");
+  const chip = (index: number) => page.locator(`#sp-fav-chip-${index}`);
+  const wrapper = chip(4).locator(".sp-emo-custom");
+  await expect(wrapper).toHaveCount(1);
+  await chip(4).locator("img").evaluate((image) => { (image as HTMLImageElement).src = "data:image/png;base64,AAAA"; });
+  await expect(wrapper).toHaveAttribute("data-image-failed", "true");
+  await expect(chip(4).locator(".sp-emo-name")).toBeVisible();
+  // The same emoji drawn again (the menu opens and closes): still the name, never a broken image.
+  await chip(4).click();
+  const menu = page.getByTestId("favorite-menu");
+  await expect(menu.getByRole("menuitem").first()).toHaveText("入れ替え");
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(wrapper).toHaveAttribute("data-image-failed", "true");
+  await expect(chip(4).locator("img")).toBeHidden();
+  // Replaced in place by another custom emoji: its image shows, the mark is gone.
+  await chip(4).click();
+  await menu.getByRole("menuitem", { name: "入れ替え" }).click();
+  const picker = page.getByRole("dialog", { name: "常用絵文字を入れ替え" });
+  await picker.getByRole("tab", { name: "このサーバーのカスタム絵文字" }).click();
+  await picker.getByRole("button", { name: ":ok_sign:" }).click();
+  await expect(picker).toHaveCount(0);
+  await expect(chips).toHaveAttribute("aria-busy", "false");
+  await expect(chip(4)).toHaveAttribute("aria-label", ":ok_sign:");
+  await expect(chip(4).locator(".sp-emo-custom")).not.toHaveAttribute("data-image-failed", /.*/);
+  await expect(chip(4).locator("img")).toBeVisible();
+  await expect(chip(4).locator(".sp-emo-name")).toBeHidden();
+  console.info(`OK a failed emoji image does not hide the emoji that replaces it (favourites replaced in place) at ${viewport.name}`);
+}
+
 /**
  * Two sessions (devices) acting as the same Profile share its favourites and its
  * reactions through the stateful mock; the stale one gets 409 and can save again.
@@ -1410,6 +1604,10 @@ async function verifyMock(browser: Browser, frontendRoot: string, coreURL: strin
         await resetMock(server);
         await verifyQuickReactionTiming(page, viewport);
         await verifyAmbiguousReactionRestore(page, viewport, server);
+        await resetMock(server);
+        await verifyRemoteEmoji(page, viewport);
+        await resetMock(server);
+        await verifyImageFailureFollowsEmoji(page, viewport);
         expect(errors, `mock ${viewport.name}: browser errors`).toEqual([]);
         console.info(`OK mock mode hydrates and keeps the shell's keyboard/focus rules at ${viewport.name} (${viewport.width}x${viewport.height})`);
       } finally {

@@ -6,7 +6,7 @@ module Test.Reaction (testReaction) where
 import Prelude
 
 import App.Api.Error (ApiError(..))
-import App.Emoji (Emoji, EmojiImageState(..), EmojiKind(..), EmojiUsage(..), emojiKey, unicode)
+import App.Emoji (Emoji, EmojiImageState(..), EmojiKind(..), EmojiUsage(..), UnavailableReason(..), categoryEmojis, customCategoryId, emojiKey, emojiLabel, isExternal, pickable, sameEmoji, searchEmojis, unicode)
 import App.Model (Model, RemoteData(..), initialModel)
 import App.Reaction (DetailFilter(..), HoldReason(..), PickerTarget(..), PostReactions, QuickSettings, ReactionMsg(..), ToastKind(..), chipsOf, moveItem, reactorRows, totalCount)
 import App.Route (Route(..))
@@ -16,6 +16,7 @@ import Data.Argonaut.Encode (encodeJson)
 import Data.Array (length)
 import Data.Array as Array
 import Data.Either (Either(..), hush)
+import Data.Foldable (for_)
 import Data.Maybe (Maybe(..), isJust, isNothing, maybe)
 import Data.Tuple (Tuple(..), fst)
 import Effect (Effect)
@@ -123,6 +124,7 @@ testReaction = do
   testRestoreWaits
   testConflictRefetchFailureRetry
   testFetchedReactionRestoresUi
+  testRemoteEmoji
 
 testRules :: Effect Unit
 testRules = do
@@ -750,3 +752,126 @@ testFetchedReactionRestoresUi = do
     Tuple duplicate duplicateEffects = QR.update restored (PostReactionsLoaded restored.reaction.epoch (readSnapshot restored) (Right server))
   assertEqual "unchanged response has no focus effect" (length duplicateEffects) 0
   assertTrue "unchanged response leaves picker closed" (isNothing duplicate.reaction.picker)
+
+-- D09: another server's emoji are used only through an existing reaction chip.
+localKusa :: Emoji
+localKusa = { kind: CustomEmoji, value: "kusa", shortcode: Just "kusa", imageUrl: Just "/kusa.png", available: true, unavailableReason: Nothing, origin: Nothing, imageState: Just ImagePresent, usage: Just Anywhere }
+
+-- | The same shortcode as this server's :kusa: from another server: a different emoji (stable id).
+remoteKusa :: Emoji
+remoteKusa = localKusa { value = "kusa@remote.example", imageUrl = Nothing, origin = Just "remote.example", usage = Just ExistingReactionOnly }
+
+-- | Deleted at its origin: unavailable, no image.
+remoteGone :: Emoji
+remoteGone = remoteKusa { value = "goneblob@remote.example", shortcode = Just "goneblob", available = false, unavailableReason = Just Deleted, imageState = Just ImageMissing }
+
+aoi :: { postId :: String, noteId :: String }
+aoi = { postId: "post-aoi-profiles", noteId: "note-aoi" }
+
+-- | A Note carrying this server's :kusa:, another server's :kusa: and one deleted at its origin.
+withRemoteChips :: Model
+withRemoteChips = ready
+  { reaction = ready.reaction
+      { posts = reactions <>
+          [ { noteId: aoi.noteId
+            , mine: Nothing
+            , others: [ { emoji: remoteKusa, count: 3, reactors: [] }, { emoji: localKusa, count: 2, reactors: [] }, { emoji: remoteGone, count: 1, reactors: [] } ]
+            }
+          ]
+      }
+  }
+
+failureOf :: Model -> Maybe ApiError
+failureOf model = case model.reaction.toast of
+  Just { kind: ReactionFailed _ error } -> Just error
+  _ -> Nothing
+
+testRemoteEmoji :: Effect Unit
+testRemoteEmoji = do
+  assertTrue "origin or usage marks an external emoji"
+    (isExternal remoteKusa && isExternal (localKusa { usage = Just ExistingReactionOnly }) && not (isExternal localKusa) && not (isExternal party))
+  assertTrue "an external emoji is never pickable, even when usable" (not (pickable remoteKusa) && pickable localKusa && not (pickable oldBlob))
+  assertEqual "the same shortcode on two servers is two emoji (stable id)" (Tuple (sameEmoji remoteKusa localKusa) (emojiKey remoteKusa)) (Tuple false "c:kusa@remote.example")
+  assertEqual "the label names the origin host" (emojiLabel remoteKusa) ":kusa:（remote.example）"
+  assertEqual "this server's label is unchanged" (emojiLabel localKusa) ":kusa:"
+  let
+    catalogue = [ localKusa, remoteKusa, remoteGone, oldBlob ]
+  assertEqual "the custom category offers this server's usable emoji only" (map emojiKey (categoryEmojis catalogue customCategoryId)) [ "c:kusa" ]
+  assertEqual "search never finds an external emoji" (map emojiKey (searchEmojis catalogue "kusa")) [ "c:kusa" ]
+  assertEqual "search by origin finds nothing" (map emojiKey (searchEmojis [ remoteKusa ] "remote")) []
+  -- Not through the picker, not as a favourite: nothing is sent.
+  let
+    opened = step withRemoteChips (OpenPicker (ReactTo aoi) "x")
+    picked = step opened (Pick remoteKusa)
+  assertEqual "picking an external emoji reacts to nothing" (mineOn picked aoi.noteId) Nothing
+  assertTrue "nothing is sent and the picker stays" (Array.null picked.reactionWrites.notes && isJust picked.reaction.picker)
+  let
+    adding = step withRemoteChips (OpenPicker AddFavorite "sp-fav-add")
+    added = step adding (Pick remoteKusa)
+  assertTrue "an external emoji is never added as a favourite" (Array.null added.reactionWrites.settings && not added.reaction.savingSettings)
+  let
+    replacing = step withRemoteChips (OpenPicker (ReplaceFavorite 0) "sp-fav-0")
+  assertTrue "nor does it replace one" (Array.null (step replacing (Pick remoteKusa)).reactionWrites.settings)
+  -- The chip: reacts when not reacted; a deleted one is pressed too (the server decides).
+  let
+    reacted = step withRemoteChips (ReactWithChip aoi remoteKusa)
+  assertEqual "the chip reacts with the same emoji" (mineOn reacted aoi.noteId) (Just remoteKusa)
+  assertTrue "one request in flight" (busyOn reacted aoi.noteId)
+  assertEqual "a second press while in flight is ignored" (mineOn (step reacted (ReactWithChip aoi remoteGone)) aoi.noteId) (Just remoteKusa)
+  assertTrue "removal is ignored while in flight" (isNothing (step reacted (RemoveMine aoi)).reaction.pendingRemoval)
+  let
+    confirmed = saved reacted aoi (Right (Just remoteKusa))
+  assertEqual "the reaction is kept once the server answers 200" (mineOn confirmed aoi.noteId) (Just remoteKusa)
+  assertTrue "success shows no toast" (isNothing confirmed.reaction.toast && not (busyOn confirmed aoi.noteId))
+  -- Piggyback -> remove -> undo sends nothing and restores the reaction.
+  let
+    removed = step confirmed (RemoveMine aoi)
+    undone = step removed ToastUndo
+  assertEqual "removal shows at once" (mineOn removed aoi.noteId) Nothing
+  assertEqual "undo restores the external reaction" (mineOn undone aoi.noteId) (Just remoteKusa)
+  assertTrue "undo sends nothing" (Array.null undone.reactionWrites.notes && isNothing undone.reaction.pendingRemoval)
+  -- Pressing a deleted external emoji sends it; 422 emoji_unavailable saves nothing.
+  let
+    gone = step withRemoteChips (ReactWithChip aoi remoteGone)
+    refusedGone = saved gone aoi (Left (EmojiUnavailable "deleted"))
+  assertTrue "a deleted external emoji is pressable" (busyOn gone aoi.noteId)
+  assertEqual "422 emoji_unavailable keeps no reaction" (mineOn refusedGone aoi.noteId) Nothing
+  assertEqual "422 emoji_unavailable is shown as such" (failureOf refusedGone) (Just (EmojiUnavailable "deleted"))
+  assertTrue "an unavailable emoji of this server is still not sent" (Array.null (step withRemoteChips (ReactWithChip aoi oldBlob)).reactionWrites.notes)
+  -- Every refusal is told apart, and none leaves a saved reaction or a success toast.
+  for_ [ EmojiUsageNotAllowed "no chip", Conflict "reacted", NotImplemented "501", EmojiUnavailable "gone", UpstreamError "500" ] \error -> do
+    let
+      failed = saved reacted aoi (Left error)
+    assertEqual ("no reaction after " <> show error) (mineOn failed aoi.noteId) Nothing
+    assertEqual ("the refusal is shown as itself: " <> show error) (failureOf failed) (Just error)
+    assertTrue ("settled after " <> show error) (not (busyOn failed aoi.noteId))
+  -- A reaction removed but not sent yet: another server's emoji is no replacement, so the
+  -- removal is sent first and the PUT waits behind it (S3: 409 conflict while reacted).
+  let
+    holding = ready
+      { reaction = ready.reaction
+          { posts = [ { noteId: aoi.noteId, mine: Just localKusa, others: [ { emoji: remoteKusa, count: 3, reactors: [] } ] } ] }
+      }
+    unsent = step holding (RemoveMine aoi)
+    piggy = step unsent (ReactWithChip aoi remoteKusa)
+  assertEqual "DELETE first, then the external PUT" (map _.mine piggy.reactionWrites.notes) [ Nothing, Just remoteKusa ]
+  assertEqual "only the DELETE is in flight" (map _.started piggy.reactionWrites.notes) [ true, false ]
+  assertTrue "the removal is no longer pending and its toast is gone" (isNothing piggy.reaction.pendingRemoval && isNothing piggy.reaction.toast)
+  assertEqual "the reaction shows at once" (mineOn piggy aoi.noteId) (Just remoteKusa)
+  -- Taking back the same external emoji repeats the PUT instead (200 no-op), nothing is lost.
+  let
+    ownExternal = ready
+      { reaction = ready.reaction
+          { posts = [ { noteId: aoi.noteId, mine: Just remoteKusa, others: [ { emoji: remoteKusa, count: 3, reactors: [] } ] } ] }
+      }
+    again = step (step ownExternal (RemoveMine aoi)) (ReactWithChip aoi remoteKusa)
+  assertEqual "the same emoji is one PUT carrying the unsent removal" (map (\write -> Tuple write.mine (isJust write.removal)) again.reactionWrites.notes) [ Tuple (Just remoteKusa) true ]
+  -- Profile round trip: A's external reaction in flight does not appear for B.
+  let
+    toB = fst (QR.syncProfile (reacted { profileContext = Loaded { activeProfile: Just other } }))
+    answered = step toB (ReactionSaved reacted.reaction.epoch (requestOf reacted aoi.noteId) aoi Nothing (Right (Just remoteKusa)))
+    back = fst (QR.syncProfile (answered { profileContext = Loaded { activeProfile: Just me } }))
+  assertEqual "B does not show A's external reaction" (mineOn toB aoi.noteId) Nothing
+  assertEqual "A's late answer is not painted into B" (mineOn answered aoi.noteId) Nothing
+  assertTrue "the lane settles" (not (busyOn answered aoi.noteId))
+  assertTrue "back on A, its reactions are read again" (isNothing (mineOn back aoi.noteId) && back.reaction.profileId == Just me.id)

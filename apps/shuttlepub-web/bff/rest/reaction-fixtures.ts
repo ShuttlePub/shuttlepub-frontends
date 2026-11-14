@@ -28,25 +28,41 @@ export const MOCK_CUSTOM_EMOJI: Record<string, CustomEmojiSetup> = Object.fromEn
   custom("old_blob", '<path d="M16 3c8 0 13 6 13 13s-5 13-13 13S3 24 3 16 8 3 16 3Z" fill="#89dceb"/><circle cx="11.5" cy="14" r="2" fill="#1e1e2e"/><circle cx="20.5" cy="14" r="2" fill="#1e1e2e"/><path d="M11 20q5 4 10 0" stroke="#1e1e2e" stroke-width="2" fill="none" stroke-linecap="round"/>', "unavailable", "disabled"),
 ]);
 
+/**
+ * External custom emoji (D09): another server's emoji carried by the chips of a Note. The id is
+ * `shortcode@origin`, so the same shortcode on different servers (and this server's own `kusa`)
+ * stay different emoji. They are existing_reaction_only: usable only through a chip of the Note.
+ * The image_url of a present one points at the origin server, as the producer's fixtures do:
+ * the browser must never load it (d09-q06), which is why the app shows :name: for every one.
+ * `ghostcat` has no image (image_state missing) but stays selectable; `goneblob` was deleted at
+ * its origin (unavailable: the server answers 422 emoji_unavailable if it is pressed).
+ */
+const external = (shortcode: string, origin: string, state: "present" | "missing" | "deleted"): [string, CustomEmojiSetup] => [
+  `${shortcode}@${origin}`,
+  {
+    shortcode,
+    ...(state === "present" ? { image_url: `https://${origin}/emoji/${shortcode}.png` } : {}),
+    availability: state === "deleted" ? "unavailable" : "available",
+    ...(state === "deleted" ? { reason: "deleted" as const } : {}),
+    origin,
+    image_state: state === "present" ? "present" : "missing",
+    usage: "existing_reaction_only",
+  },
+];
+
+/** The external emoji the mock Notes carry. */
+export const MOCK_EXTERNAL_EMOJI: Record<string, CustomEmojiSetup> = Object.fromEntries([
+  external("kusa", "remote.example", "present"),
+  external("partycat", "remote.example", "present"),
+  external("partycat", "other.example", "present"),
+  external("ghostcat", "remote.example", "missing"),
+  external("goneblob", "remote.example", "deleted"),
+]);
+
 const u = (value: string): EmojiRef => ({ type: "unicode", value });
 const c = (id: string): EmojiRef => ({ type: "custom", id });
 
 const [profile1, profile2, profile3] = availableProfilesFixture.map((profile) => profile.id) as [string, string, string];
-
-/** Initial S3 state of the mock (restored by POST /__mock/reset). */
-export const MOCK_QUICK_REACTION_SETUP: QuickReactionSetup = {
-  emoji: MOCK_CUSTOM_EMOJI,
-  profiles: [profile1, profile2, profile3],
-  notes: allMockNoteIds(),
-  settings: {
-    [profile1]: { revision: 3, favorites: [u("👍"), u("🎉"), c("neko_yes"), u("🙏"), c("old_blob")] },
-    [profile3]: { revision: 1, favorites: [u("✨"), u("💜"), c("kusa")] },
-  },
-  reactions: [
-    { profile: profile1, note: NOTE_IDS["post-sora-zine"], emoji: u("🎉") },
-    { profile: profile3, note: NOTE_IDS["post-kei-release"], emoji: c("kusa") },
-  ],
-};
 
 // --- PROVISIONAL: other people's reactions -------------------------------------------
 
@@ -62,11 +78,34 @@ const OTHERS: Record<string, readonly [EmojiRef, number][]> = {
   [NOTE_IDS["post-mika-picker"]]: [[u("👍"), 3], [c("neko_yes"), 2], [u("🎉"), 1]],
   [NOTE_IDS["post-sora-zine"]]: [[u("🎉"), 4], [u("✨"), 2], [u("💜"), 1]],
   [NOTE_IDS["post-nekota-coffee"]]: [[u("☕"), 4], [u("👍"), 1]],
+  // D09: this server's :kusa: beside another server's :kusa: (same shortcode, different emoji), an
+  // external emoji whose image is gone (still selectable) and one deleted at its origin.
+  [NOTE_IDS["post-aoi-profiles"]]: [
+    [c("kusa@remote.example"), 3], [c("kusa"), 2], [c("ghostcat@remote.example"), 1], [c("goneblob@remote.example"), 1],
+  ],
   [NOTE_IDS["post-kei-release"]]: [
     [c("kusa"), 6], [u("😂"), 3], [u("👀"), 2], [c("shuttle"), 2], [u("🙏"), 1],
     [u("🔥"), 1], [u("💯"), 1], [u("🥹"), 1], [u("👏"), 1],
   ],
   [NOTE_IDS["post-taro-reply"]]: [[u("💜"), 1]],
+};
+
+/** Initial S3 state of the mock (restored by POST /__mock/reset). */
+export const MOCK_QUICK_REACTION_SETUP: QuickReactionSetup = {
+  emoji: { ...MOCK_CUSTOM_EMOJI, ...MOCK_EXTERNAL_EMOJI },
+  profiles: [profile1, profile2, profile3],
+  notes: allMockNoteIds(),
+  settings: {
+    [profile1]: { revision: 3, favorites: [u("👍"), u("🎉"), c("neko_yes"), u("🙏"), c("old_blob")] },
+    [profile3]: { revision: 1, favorites: [u("✨"), u("💜"), c("kusa")] },
+  },
+  reactions: [
+    { profile: profile1, note: NOTE_IDS["post-sora-zine"], emoji: u("🎉") },
+    { profile: profile3, note: NOTE_IDS["post-kei-release"], emoji: c("kusa") },
+  ],
+  // The chips other people carry are the ones OTHERS shows: an external emoji can be used only
+  // from a chip of the same emoji on the Note (S3 rule), so the two must agree.
+  chips: Object.entries(OTHERS).flatMap(([note, entries]) => entries.map(([emoji]) => ({ note, emoji }))),
 };
 
 function seed(text: string): number {

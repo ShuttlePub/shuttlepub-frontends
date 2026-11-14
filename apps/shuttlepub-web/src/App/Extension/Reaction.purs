@@ -34,7 +34,7 @@ import Prelude
 import App.Api.Error (ApiError(..))
 import App.Api.Error as Error
 import App.Dom (preventDefault)
-import App.Emoji (Emoji, EmojiKind(..), categories, categoryEmojis, customCategoryId, emojiKey, emojiLabel, sameEmoji, searchEmojis)
+import App.Emoji (Emoji, EmojiKind(..), categories, categoryEmojis, customCategoryId, emojiKey, emojiLabel, isExternal, sameEmoji, searchEmojis, shortcodeOf)
 import App.Message (Message(..))
 import App.Model (Model, RemoteData(..), activeProfile)
 import App.Post (Post)
@@ -44,7 +44,7 @@ import App.ReactionDom (blurTarget, leavesClosest, startDrag)
 import App.Route (Route(..))
 import App.View.Common (AvatarSize(..), attr, avatar, emptySlot, errorNote, icon, routeLink, stateNote, testId, visuallyHidden)
 import Data.Array (any, drop, length, mapWithIndex, null, take)
-import Data.Maybe (Maybe(..), isJust)
+import Data.Maybe (Maybe(..), fromMaybe, isJust)
 import Data.String (trim)
 import Flame (Html)
 import Flame.Html.Attribute as HA
@@ -94,13 +94,32 @@ reactionsOf model post = postReactionsFor model.reaction.posts post.noteId
 inFlight :: Model -> Post -> Boolean
 inFlight model post = model.reaction.restoring || any (\entry -> Just entry.profileId == model.reaction.profileId && entry.epoch == model.reaction.epoch && entry.post.noteId == post.noteId) model.reactionWrites.notes
 
--- | The emoji itself: a character, the custom emoji image, or a placeholder once the
--- | image is gone (deleted). Decorative: the control around it carries the name.
+-- | The emoji itself: a character, this server's custom emoji image, or a `:name:` text.
+-- | Another server's emoji is always the text (d09-q06: the browser never loads an image from
+-- | another server), and so is one whose image cannot be loaded (data-image-failed, set by the
+-- | image error handler of App.Dom.trackImageFailures): no broken image is shown. A deleted
+-- | emoji of this server keeps its placeholder. Decorative: the control around it carries the name.
 glyph :: Emoji -> Html Message
 glyph emoji = case emoji.kind, emoji.imageUrl of
   UnicodeEmoji, _ -> HE.span [ HA.class' "sp-emo", attr "aria-hidden" "true" ] [ HE.text emoji.value ]
-  CustomEmoji, Just url -> HE.img [ HA.class' "sp-emo sp-emo-img", HA.src url, HA.alt "", attr "aria-hidden" "true", attr "draggable" "false" ]
+  CustomEmoji, _ | isExternal emoji -> nameGlyph emoji
+  CustomEmoji, Just url -> HE.span [ HA.class' "sp-emo sp-emo-custom", attr "aria-hidden" "true" ]
+    [ HE.img [ HA.class' "sp-emo-img", HA.src url, HA.alt "", attr "draggable" "false" ]
+    , HE.span [ HA.class' "sp-emo-name" ] [ HE.text (":" <> shortcodeOf emoji <> ":") ]
+    ]
   CustomEmoji, Nothing -> HE.span [ HA.class' "sp-emo sp-emo-missing", attr "aria-hidden" "true" ] [ HE.text "?" ]
+
+nameGlyph :: Emoji -> Html Message
+nameGlyph emoji = HE.span [ HA.class' "sp-emo sp-emo-label", attr "aria-hidden" "true" ] [ HE.text (":" <> shortcodeOf emoji <> ":") ]
+
+-- | D09 / U5=c: the external mark of another server's emoji, right after the emoji and before
+-- | the count (11px, muted). Same-named emoji of this server and of other servers are told apart.
+originMark :: Emoji -> Html Message
+originMark emoji
+  | isExternal emoji = HE.span
+      [ HA.class' "sp-origin", attr "aria-hidden" "true", HA.title (fromMaybe "他サーバー" emoji.origin), testId "origin-mark" ]
+      [ rIcon "globe" ]
+  | otherwise = emptySlot
 
 -- | Icons this unit needs beyond App.View.Common.icon (same 24px outline style).
 rIcon :: String -> Html Message
@@ -120,6 +139,7 @@ rIcon kind = HE.svg
     "left" -> "M15 5l-7 7 7 7"
     "right" -> "M9 5l7 7-7 7"
     "trash" -> "M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"
+    "globe" -> "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18ZM3 12h18M12 3c2.5 2.6 3.8 5.6 3.8 9s-1.3 6.4-3.8 9c-2.5-2.6-3.8-5.6-3.8-9S9.5 5.6 12 3Z"
     _ -> "M12 12h.01"
 
 problemText :: ApiError -> String
@@ -158,14 +178,16 @@ summary model post = case reactionsOf model post of
     let
       tip = tooltipOf entry
       label = emojiLabel entry.emoji
-      classes = "sp-rchip" <> (if entry.mine then " is-mine" else "") <> (if entry.emoji.available then "" else " is-unavailable")
-      inner = [ glyph entry.emoji, HE.span [ HA.class' "sp-rchip-count" ] [ HE.text (show entry.count) ] ]
+      classes = "sp-rchip" <> (if entry.mine then " is-mine" else "") <> (if isExternal entry.emoji then " is-external" else "")
+        <> (if entry.emoji.available || isExternal entry.emoji then "" else " is-unavailable")
+      inner = [ glyph entry.emoji, originMark entry.emoji, HE.span [ HA.class' "sp-rchip-count" ] [ HE.text (show entry.count) ] ]
     in
       if entry.mine then
         HE.button
           ( [ HA.type' "button"
             , HA.id (mineChipId post.id)
             , attr "data-focus-post" post.id
+            , attr "data-emoji" (emojiKey entry.emoji)
             , HA.class' classes
             , attr "aria-pressed" "true"
             , attr "aria-label" (label <> " を取り消す（" <> show entry.count <> "：" <> tip <> "）")
@@ -173,9 +195,10 @@ summary model post = case reactionsOf model post of
             ] <> busyOr (reaction (RemoveMine (refOf post)))
           )
           inner
-      else if not reacted && entry.emoji.available && isJust (activeProfile model) then
+      else if not reacted && (entry.emoji.available || isExternal entry.emoji) && isJust (activeProfile model) then
         HE.button
           ( [ HA.type' "button"
+            , attr "data-emoji" (emojiKey entry.emoji)
             , HA.class' classes
             , attr "aria-label" (label <> " でリアクション（" <> show entry.count <> "：" <> tip <> "）")
             , HA.title tip
@@ -183,7 +206,7 @@ summary model post = case reactionsOf model post of
           )
           inner
       else
-        HE.span [ HA.class' classes, HA.title tip ]
+        HE.span [ HA.class' classes, attr "data-emoji" (emojiKey entry.emoji), HA.title tip ]
           (inner <> [ visuallyHidden (label <> " " <> show entry.count <> "：" <> tip) ])
   -- While a request for this post is in flight nothing else may be sent (二重送信防止).
   busyOr message =
@@ -365,7 +388,7 @@ detailPanel model post = case reactionsOf model post of
           HE.div [ HA.class' "sp-reactors", testId "reactors", attr "data-state" "loaded" ]
             [ HE.div [ HA.class' "sp-rtabs", attr "role" "group", attr "aria-label" "絵文字ごとに反応した人を表示" ]
                 ( [ toggle AllReactors [ HE.text ("すべて " <> show (totalCount reactions)) ] Nothing ]
-                    <> map (\entry -> toggle (OnlyEmoji (emojiKey entry.emoji)) [ glyph entry.emoji, HE.text (" " <> show entry.count) ] (Just (emojiLabel entry.emoji <> " " <> show entry.count)))
+                    <> map (\entry -> toggle (OnlyEmoji (emojiKey entry.emoji)) [ glyph entry.emoji, originMark entry.emoji, HE.text (" " <> show entry.count) ] (Just (emojiLabel entry.emoji <> " " <> show entry.count)))
                       (chipsOf (me model) reactions)
                 )
             , if filterBy == ListClosed then HE.p [ HA.class' "sp-rhint" ] [ HE.text "絵文字を選ぶと反応した人を表示します（もう一度押すと閉じる）" ]
@@ -378,6 +401,7 @@ detailPanel model post = case reactionsOf model post of
                         , HE.span [ HA.class' "sp-muted sp-reactor-handle" ] [ HE.text ("@" <> row.reactor.handle) ]
                         ]
                     , glyph row.emoji
+                    , originMark row.emoji
                     ]
                 )
             ]
@@ -488,7 +512,7 @@ chipMenu index emoji count = HE.div
 -- Overlay ---------------------------------------------------------------------------
 
 overlay :: Model -> Html Message
-overlay model = HE.div [ HA.class' "sp-reaction-layer" ]
+overlay model = HE.div [ HA.class' "sp-reaction-layer", attr "data-remote-emoji" "reuse" ]
   [ pickerLayer
   , chipMenuLayer
   , toastView model

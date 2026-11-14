@@ -84,7 +84,7 @@ producer commit `a00d234aedecb0223ba20dc8d7e9334cf9d39e83`) どおりに表示�
 
 絵文字 (S3 EmojiView / EmojiReactionCount): `origin` (他サーバー由来のドメイン)・`image_state` (`present` / `missing`)・
 `usage` (`anywhere` / `existing_reaction_only`) と集計チップの `view` を REST → GraphQL (`Emoji.origin` / `imageState` / `usage`、
-`PostView.reactionCounts`) → PureScript (`App.Emoji.Emoji`、`App.Post.ReactionCounts`) まで保持します (表示は後続 unit)。他サーバーの
+`PostView.reactionCounts`) → PureScript (`App.Emoji.Emoji`、`App.Post.ReactionCounts`) まで保持します (他サーバーの絵文字の表示は D09 unit、下記)。他サーバーの
 絵文字を常用絵文字にすると 422 `emoji_usage_not_allowed` (`EMOJI_USAGE_NOT_ALLOWED`)、チップの無い他サーバーの絵文字での反応も同じ
 422、別の反応が付いている間の他サーバーの絵文字は 409 `conflict` (`CONFLICT`) です。個人の mute/block (`ActorPolicy.targetActor`、
 Emumet `target_actor`) の表示情報も一覧・作成応答の両方で保持します (表示は後続 unit)。
@@ -97,6 +97,27 @@ commit から `bun run openapi:sync-scenarios` で取込) を投影に再生し�
 **投稿の実抑制・反応拒否は ShuttlePub 側が未実装 (S8 は全 route 501)** で、real の投稿系は従来どおり
 `NOT_IMPLEMENTED` です。mock の既定 Profile は noisy.social をミュート・bot-farm.example をブロック済みで、
 他の Profile は未設定です (Profile ごとに分かれることを確認できます)。
+
+### 他サーバーの絵文字 (D09 / shuttlepub-web-remote-emoji-reuse-ui)
+
+`EmojiView.origin` を持つ絵文字 (`usage=existing_reaction_only`) は **既存のリアクションチップへの便乗でだけ**使えます。
+ピッカー (カテゴリ・検索)・常用絵文字・設定のピッカーには出さず (`App.Emoji.pickable`、カスタム一覧の
+`customEmojis` も自サーバー分だけ)、直接の mutation は mock も 422 `emoji_usage_not_allowed` で拒否します。
+チップは絵文字の直後・件数の前に地球マーク (11px・muted) を付け、読み上げは「:name:（host） でリアクション（件数）」です。
+同じ shortcode でも origin 違い・自サーバーのものは別の絵文字として扱います (安定 ID は `shortcode@origin`)。
+
+**画像の経路 (d09-q06)**: ブラウザから他サーバーの絵文字画像は直接読み込みません。固定済みの OpenAPI
+(`openapi/shuttlepub.json`) に ShuttlePub 側の画像配信・プロキシ経路が無い (`EmojiView.image_url` は元サーバーの URL、
+`icon_url` も「取得・中継は frontends の画像方針」とだけ書かれている) ため、BFF が他サーバーの `imageUrl` を GraphQL に載せず
+(`bff/resolvers.ts` の `toEmoji`)、UI は他サーバーの絵文字を**常に `:name:` + 地球マーク**で表示します。`image_state=missing`・
+元サーバーで削除済み・画像が読めない場合も同じ見た目で、押せます (壊れた画像は出しません。自サーバーの画像が
+読み込めなかった場合も `App.Dom.trackImageFailures` が `:name:` に切り替えます)。自サーバー経由の配信 (プロキシ) は別 unit です。
+`RelationActor.iconUrl` も同じ方針で、表示の変更は D08 unit が行います。
+
+反応の規則 (S3): 422 `emoji_unavailable` → 同一絵文字の再送は 200 の no-op → 422 `emoji_usage_not_allowed` → 409 `conflict`
+の順です。`EMOJI_USAGE_NOT_ALLOWED` は `EMOJI_UNAVAILABLE` と別の失敗として扱い、422 / 501 では成功トーストも保存済みの
+状態も作りません。反応済みの間は他サーバーの絵文字へ直接置き換えられない (409) ため、未送信の解除があるときは先にそれを送ってから
+PUT します (`Client.Reaction.flushFirst`)。
 
 ### クイックリアクション (D03, quick-reaction-web-ui)
 
