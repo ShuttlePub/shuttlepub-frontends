@@ -129,26 +129,22 @@ lockedButton post kind label count control = HE.button
   where
   buttonId = "sp-locked-" <> kind <> "-" <> post.id
 
--- | ui-spec 3-4 (S8 EmbeddedNotePresentation): the quoted post, or only its kind and
--- | domain while hidden (a reveal of the quote never reveals it), or its gate.
+-- | ui-spec 3-4 (S8 EmbeddedNotePresentation): the quoted post or its gate. A quote of a
+-- | controlled post never gets here: the whole quoting post is hidden (Hidden QUOTE).
 quoteBox :: Post -> Html Message
 quoteBox post = case quotedOf post of
   Nothing -> emptySlot
-  Just quoted -> case quoted.post, quoted.hidden, quoted.restriction of
-    Just target, _, _ -> routeLink (PostDetail target.id) [ HA.class' "sp-quote", testId "quote" ]
+  Just quoted -> case quoted.post, quoted.restriction of
+    Just target, _ -> routeLink (PostDetail target.id) [ HA.class' "sp-quote", testId "quote" ]
       [ HE.span [ HA.class' "sp-quote-head" ]
           [ HE.span [ HA.class' "sp-post-name" ] [ HE.text target.author.displayName ]
           , HE.span [ HA.class' "sp-post-handle" ] [ HE.text ("@" <> target.author.handle) ]
           ]
       , HE.span [ HA.class' "sp-quote-text" ] [ HE.text target.text ]
       ]
-    _, Just control, _ -> HE.div [ HA.class' "sp-quote sp-quote-hidden", testId "quote", attr "data-state" "hidden", attr "data-domain" control.domain ]
-      [ HE.span_ [ HE.text (controlLabel control.mode <> "中のドメインの投稿") ]
-      , HE.span [ HA.class' "sp-mono" ] [ HE.text control.domain ]
-      ]
-    _, _, Just restriction -> HE.div [ HA.class' "sp-quote sp-quote-hidden", testId "quote", attr "data-state" "restricted" ]
+    _, Just restriction -> HE.div [ HA.class' "sp-quote sp-quote-hidden", testId "quote", attr "data-state" "restricted" ]
       [ HE.text (restrictionText restriction) ]
-    _, _, _ -> emptySlot
+    _, _ -> emptySlot
 
 restrictionText :: ContentRestriction -> String
 restrictionText = case _ of

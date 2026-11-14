@@ -118,6 +118,17 @@ describe("mock mode: stateful S3 mock", () => {
     expect(await gql(REMOVE, { p: p1, n: MIKA })).toEqual({ data: { removeNoteReaction: { noteId: MIKA, emoji: null } } });
   });
 
+  test("emoji carry their origin, image state and usage end to end (D09 data; no display here)", async () => {
+    app = createApp(loadConfig({}));
+    const favorites = ((await gql(`query($p: ID!) { quickReactionSettings(profileId: $p) { favorites { kind value origin imageState usage } } }`, { p: p1 })).data!.quickReactionSettings as { favorites: Record<string, unknown>[] }).favorites;
+    // This server's own emoji: no origin, image present, usable anywhere (a disabled one keeps its image).
+    expect(favorites.find((emoji) => emoji.value === "neko_yes")).toEqual({ kind: "CUSTOM", value: "neko_yes", origin: null, imageState: "PRESENT", usage: "ANYWHERE" });
+    expect(favorites.find((emoji) => emoji.value === "old_blob")).toMatchObject({ origin: null, imageState: "PRESENT", usage: "ANYWHERE" });
+    expect(favorites.find((emoji) => emoji.value === "👍")).toMatchObject({ kind: "UNICODE", origin: null });
+    const catalogue = (await gql("{ customEmojis { value origin imageState usage } }")).data!.customEmojis as { origin: string | null; usage: string }[];
+    expect(catalogue.every((emoji) => emoji.origin === null && emoji.usage === "ANYWHERE")).toBe(true);
+  });
+
   test("other people's reactions exclude the acting Profile's own and list the custom emoji catalogue", async () => {
     app = createApp(loadConfig({}));
     const sora = ((await gql(REACTIONS, { p: p1, n: [SORA] })).data!.postReactions as { others: { emoji: { value: string }; count: number }[] }[])[0]!;
@@ -224,6 +235,8 @@ describe("real adapter: S3 endpoints", () => {
     const answers: Response[] = [
       Response.json({ code: "revision_conflict", message: "stale", current_revision: 7 }, { status: 409 }),
       Response.json({ code: "emoji_unavailable", message: "gone", details: [{ field: "/emoji", message: "emoji is unavailable" }] }, { status: 422 }),
+      Response.json({ code: "emoji_usage_not_allowed", message: "external", details: [{ field: "/emoji", message: "no existing reaction chip" }] }, { status: 422 }),
+      Response.json({ code: "conflict", message: "remove the current reaction first" }, { status: 409 }),
       Response.json({ code: "forbidden", message: "not yours" }, { status: 403 }),
       Response.json({ revision: "seven", favorites: [] }),
       new Response("<html>", { status: 200 }),
@@ -233,6 +246,9 @@ describe("real adapter: S3 endpoints", () => {
     const conflict = await failure(api.putQuickReactionSettings(auth, p1, { expected_revision: 6, favorites: [] }));
     expect([conflict.kind, conflict.currentRevision]).toEqual(["revision_conflict", 7]);
     expect((await failure(api.putNoteReaction(auth, p1, SORA, { type: "custom", id: "gone" }))).kind).toBe("emoji_unavailable");
+    expect((await failure(api.putNoteReaction(auth, p1, SORA, { type: "custom", id: "far", origin: "far.example" } as never))).kind).toBe("emoji_usage_not_allowed");
+    const reactedConflict = await failure(api.putNoteReaction(auth, p1, SORA, { type: "custom", id: "far", origin: "far.example" } as never));
+    expect([reactedConflict.kind, reactedConflict.status]).toEqual(["conflict", 409]);
     const forbidden = await failure(api.getNoteReaction(auth, p1, SORA));
     expect([forbidden.kind, forbidden.status]).toEqual(["upstream_error", 403]);
     expect((await failure(api.getQuickReactionSettings(auth, p1))).kind).toBe("invalid_response");

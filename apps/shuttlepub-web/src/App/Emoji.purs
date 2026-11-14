@@ -7,6 +7,8 @@
 module App.Emoji
   ( EmojiKind(..)
   , UnavailableReason(..)
+  , EmojiImageState(..)
+  , EmojiUsage(..)
   , Emoji
   , Category
   , unicode
@@ -59,7 +61,40 @@ instance EncodeJson UnavailableReason where
 instance DecodeJson UnavailableReason where
   decodeJson = genericDecodeJson
 
--- | value: the Unicode sequence, or the custom emoji's stable id.
+-- | Custom emoji only: whether the image is held (PRESENT goes with imageUrl; MISSING means
+-- | show :shortcode:).
+data EmojiImageState = ImagePresent | ImageMissing
+
+derive instance Generic EmojiImageState _
+derive instance Eq EmojiImageState
+
+instance Show EmojiImageState where
+  show = genericShow
+
+instance EncodeJson EmojiImageState where
+  encodeJson = genericEncodeJson
+
+instance DecodeJson EmojiImageState where
+  decodeJson = genericDecodeJson
+
+-- | Custom emoji only (Nothing for Unicode): ExistingReactionOnly is an external emoji,
+-- | usable only as an existing reaction chip (never a favourite).
+data EmojiUsage = Anywhere | ExistingReactionOnly
+
+derive instance Generic EmojiUsage _
+derive instance Eq EmojiUsage
+
+instance Show EmojiUsage where
+  show = genericShow
+
+instance EncodeJson EmojiUsage where
+  encodeJson = genericEncodeJson
+
+instance DecodeJson EmojiUsage where
+  decodeJson = genericDecodeJson
+
+-- | value: the Unicode sequence, or the custom emoji's stable id. origin: the originating
+-- | domain of an external custom emoji (Nothing for Unicode and this server's own emoji).
 type Emoji =
   { kind :: EmojiKind
   , value :: String
@@ -67,10 +102,13 @@ type Emoji =
   , imageUrl :: Maybe String
   , available :: Boolean
   , unavailableReason :: Maybe UnavailableReason
+  , origin :: Maybe String
+  , imageState :: Maybe EmojiImageState
+  , usage :: Maybe EmojiUsage
   }
 
 unicode :: String -> Emoji
-unicode value = { kind: UnicodeEmoji, value, shortcode: Nothing, imageUrl: Nothing, available: true, unavailableReason: Nothing }
+unicode value = { kind: UnicodeEmoji, value, shortcode: Nothing, imageUrl: Nothing, available: true, unavailableReason: Nothing, origin: Nothing, imageState: Nothing, usage: Nothing }
 
 -- | Identity (the contract compares EmojiRef as JSON values).
 emojiKey :: Emoji -> String

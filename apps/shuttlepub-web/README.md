@@ -52,7 +52,7 @@ mock / real 切替、SSR + hydration、Profile context の型・fixture、visual
 ### 投稿表示面と「…」メニュー (D08 第2段 / personal-domain-controls-web-ui)
 
 ui-spec v5 の 1-1 (主導線)・3-1〜3-6・4-1〜4-5・5-1 を、ShuttlePub の S8 契約 (`openapi/shuttlepub.json`、
-producer commit `60cb47d60da3c5b4ff3fc570fe3bc1796f983b3b`) どおりに表示します。
+producer commit `a00d234aedecb0223ba20dc8d7e9334cf9d39e83`) どおりに表示します。
 
 - 投稿カードとユーザーページの「…」: 「@user をミュート／ブロック」「〈ドメイン〉 をミュート／ブロック」(自サーバーの
   人にはドメイン項目なし)。設定済みなら「…のミュートを解除」「…のブロックを解除…」。ミュートは即時で「元に戻す」付き
@@ -66,8 +66,11 @@ producer commit `60cb47d60da3c5b4ff3fc570fe3bc1796f983b3b`) どおりに表示�
   reveal の応答は捨てます (要求ごとの番号で照合)。ユーザーページの［投稿を表示］も同じです。ブロック中は
   返信・リポスト・リアクションが鍵付きで、押すと 4-1 のシート →［ブロックを解除…］で設定画面と同じ解除ダイアログ。
   CW・センシティブ・削除・閲覧権は reveal しても解除せず、本文を出しません。
-- 引用 (S8 との差、ui-spec 3-4): S8 の hidden 応答は種別・ドメイン・revision だけで「引用かどうか」を含まないため、
-  隠し表示は引用でも 3-1 と同じ文言です。引用を reveal しても引用元は隠れたまま (S8 EmbeddedNotePresentation)。
+- 引用 (ui-spec 3-4): S8 の hidden 応答は `cause` (`direct`: 投稿者自身のドメイン / `quote`: 引用元のドメイン) と
+  control (種別・ドメイン・revision) を持ちます。BFF の GraphQL `PostView.hidden` は `HiddenContent { cause, control }`
+  で保持し (汎用の `ContentControl` には cause を足さない)、画面の隠し表示の文言はこの unit では従来のまま (cause 別の
+  文言は後続 unit)。引用先 (`QuotedPost`) に hidden は無く (S8 EmbeddedNotePresentation)、引用先が制御対象なら引用した
+  投稿全体が `quote` として隠れ、[この投稿だけ表示] の reveal で引用先も一緒に表示されます。
 - 純粋リポスト: リポスト自体の画面は持たず、カードのリンクは元投稿の URL (通常の単一投稿 reveal) です
   (S8 は boost wrapper の直接 reveal を未決として契約外にしています)。
 - 返信 (3-5): 対象ドメインの返信は「非表示の返信 n 件」に折りたたみ、展開後も 1 件ずつ［表示］。
@@ -78,6 +81,13 @@ producer commit `60cb47d60da3c5b4ff3fc570fe3bc1796f983b3b`) どおりに表示�
 - mock の注記: 投稿を表示する画面 (タイムライン・投稿詳細・ユーザーページ) の上部に「投稿の非表示・操作の制限は
   プレビューです（サーバー未接続）」と出します。API モードが real と確定したら消します
   (mock のときと、モードの取得前・取得失敗時は出したままです)。
+
+絵文字 (S3 EmojiView / EmojiReactionCount): `origin` (他サーバー由来のドメイン)・`image_state` (`present` / `missing`)・
+`usage` (`anywhere` / `existing_reaction_only`) と集計チップの `view` を REST → GraphQL (`Emoji.origin` / `imageState` / `usage`、
+`PostView.reactionCounts`) → PureScript (`App.Emoji.Emoji`、`App.Post.ReactionCounts`) まで保持します (表示は後続 unit)。他サーバーの
+絵文字を常用絵文字にすると 422 `emoji_usage_not_allowed` (`EMOJI_USAGE_NOT_ALLOWED`)、チップの無い他サーバーの絵文字での反応も同じ
+422、別の反応が付いている間の他サーバーの絵文字は 409 `conflict` (`CONFLICT`) です。個人の mute/block (`ActorPolicy.targetActor`、
+Emumet `target_actor`) の表示情報も一覧・作成応答の両方で保持します (表示は後続 unit)。
 
 データの流れ: mock では Profile の Emumet domain-controls (設定画面と同じ状態 mock) を S8 の純関数投影
 (`bff/rest/content.ts`) に渡し、S8 の応答形 (`TimelineResponse` / `DirectNoteResponse`) を固定 schema で検証してから、

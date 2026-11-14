@@ -6,7 +6,7 @@ module Test.Reaction (testReaction) where
 import Prelude
 
 import App.Api.Error (ApiError(..))
-import App.Emoji (Emoji, EmojiKind(..), emojiKey, unicode)
+import App.Emoji (Emoji, EmojiImageState(..), EmojiKind(..), EmojiUsage(..), emojiKey, unicode)
 import App.Model (Model, RemoteData(..), initialModel)
 import App.Reaction (DetailFilter(..), HoldReason(..), PickerTarget(..), PostReactions, QuickSettings, ReactionMsg(..), ToastKind(..), chipsOf, moveItem, reactorRows, totalCount)
 import App.Route (Route(..))
@@ -36,7 +36,12 @@ thumbs :: Emoji
 thumbs = unicode "👍"
 
 oldBlob :: Emoji
-oldBlob = { kind: CustomEmoji, value: "old_blob", shortcode: Just "old_blob", imageUrl: Nothing, available: false, unavailableReason: Nothing }
+oldBlob = { kind: CustomEmoji, value: "old_blob", shortcode: Just "old_blob", imageUrl: Nothing, available: false, unavailableReason: Nothing, origin: Nothing, imageState: Nothing, usage: Nothing }
+
+-- | An external custom emoji (Emumet/ShuttlePub #21): its origin, a missing image and the
+-- | existing-reaction-only usage are all kept as the contract states them.
+externalBlob :: Emoji
+externalBlob = oldBlob { available = true, origin = Just "remote.example", imageState = Just ImageMissing, usage = Just ExistingReactionOnly }
 
 sora :: { postId :: String, noteId :: String }
 sora = { postId: "post-sora-zine", noteId: "note-sora" }
@@ -298,6 +303,15 @@ testSettings = do
   let
     refusedUnavailable = settingsSaved added previous intended (Left (EmojiUnavailable "gone"))
   assertTrue "422 has no retry" (map _.retry refusedUnavailable.reaction.settingsProblem == Just Nothing)
+  -- 422 emoji_usage_not_allowed (an external emoji as a favourite): the stored list stays, no retry.
+  let
+    refusedExternal = settingsSaved added previous (intended <> [ externalBlob ]) (Left (EmojiUsageNotAllowed "external"))
+  assertTrue "usage 422 has no retry" (map _.retry refusedExternal.reaction.settingsProblem == Just Nothing)
+  assertEqual "usage 422 shows the stored list" (favorites refusedExternal) [ "u:👍", "u:🎉", "c:old_blob" ]
+  assertEqual "the external emoji keeps what the contract says"
+    (Tuple externalBlob.origin (Tuple externalBlob.imageState externalBlob.usage))
+    (Tuple (Just "remote.example") (Tuple (Just ImageMissing) (Just ExistingReactionOnly)))
+  assertEqual "the emoji survives the Json round trip" (hush (decodeJson (encodeJson externalBlob))) (Just externalBlob)
   -- At most five, no duplicates.
   let
     five = ready { reaction = ready.reaction { settings = Loaded { profileId: me.id, revision: 1, favorites: map unicode [ "😀", "😂", "🥹", "😊", "😍" ] } } }

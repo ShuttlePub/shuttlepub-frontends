@@ -9,6 +9,7 @@ import App.Model as AppModel
 import App.MuteBlock.Types as MuteBlock
 import App.MuteBlock.Types (Change(..), Dialog(..), Failure(..), InputProblem(..), Message(..), Undo(..), Write(..))
 import App.MuteBlock.Update as MuteBlockUpdate
+import Generated.Schema.Gql.Enum.HiddenCause (HiddenCause(..))
 import Generated.Schema.Gql.Enum.PolicyMode (PolicyMode(..))
 import App.Post (Post, PostView, Quoted(..), TimelineTab(..), Visibility(..), allowedOperations, allTimelineTabs, timelineTabFromValue, timelineTabValue)
 import App.Reaction (ToastKind(..))
@@ -112,16 +113,21 @@ samplePost =
   , quoted: Nothing
   }
 
--- | A quote whose target S8 keeps hidden (the shape a revealed quote of a muted post has).
+-- | A quote whose target is shown (S8 EmbeddedNotePresentation has no hidden variant: a
+-- | controlled target hides the whole quoting post instead, see quoteHiddenView).
 quotePost :: Post
 quotePost = samplePost
   { id = "post-quote"
   , repostedBy = Nothing
-  , quoted = Just (Quoted { post: Nothing, hidden: Just { mode: MUTE, domain: "noisy.social", revision: 3 }, restriction: Nothing })
+  , quoted = Just (Quoted { post: Just samplePost { id = "post-quoted", text = "quoted text" }, restriction: Nothing })
   }
 
 hiddenView :: PostView
-hiddenView = { id: "post-hidden", post: Nothing, hidden: Just { mode: BLOCK, domain: "bot-farm.example", revision: 2 }, restriction: Nothing, operations: Nothing }
+hiddenView = { id: "post-hidden", post: Nothing, hidden: Just { cause: DIRECT, control: { mode: BLOCK, domain: "bot-farm.example", revision: 2 } }, restriction: Nothing, operations: Nothing, reactionCounts: Nothing }
+
+-- | A post hidden because it quotes a note of a controlled domain (the control is the quoted source's).
+quoteHiddenView :: PostView
+quoteHiddenView = hiddenView { id = "post-quote-hidden", hidden = Just { cause: QUOTE, control: { mode: MUTE, domain: "noisy.social", revision: 3 } } }
 
 visibleView :: PostView
 visibleView =
@@ -130,6 +136,7 @@ visibleView =
   , hidden: Nothing
   , restriction: Nothing
   , operations: Just allowedOperations { reply = Just { mode: BLOCK, domain: "bot-farm.example", revision: 2 } }
+  , reactionCounts: Nothing
   }
 
 testModelRoundTrip :: Effect Unit
@@ -180,6 +187,10 @@ testErrorMapping = do
   assertEqual "UPSTREAM_ERROR" (fromGqlCode (Just "UPSTREAM_ERROR") "m") (UpstreamError "m")
   assertEqual "UPSTREAM_UNAVAILABLE" (fromGqlCode (Just "UPSTREAM_UNAVAILABLE") "m") (Unavailable "m")
   assertEqual "INVALID_UPSTREAM_RESPONSE" (fromGqlCode (Just "INVALID_UPSTREAM_RESPONSE") "m") (InvalidResponse "m")
+  assertEqual "EMOJI_USAGE_NOT_ALLOWED" (fromGqlCode (Just "EMOJI_USAGE_NOT_ALLOWED") "m") (EmojiUsageNotAllowed "m")
+  assertEqual "CONFLICT" (fromGqlCode (Just "CONFLICT") "m") (Conflict "m")
+  assertEqual "usage tag" (tag (EmojiUsageNotAllowed "m")) "emoji_usage_not_allowed"
+  assertEqual "conflict tag" (tag (Conflict "m")) "conflict"
   assertEqual "unknown code" (fromGqlCode (Just "WHATEVER") "m") (Unexpected "m")
   assertEqual "no code" (fromGqlCode Nothing "m") (Unexpected "m")
   -- extensions.reason refines only an UNAUTHENTICATED error.
@@ -510,10 +521,13 @@ testPostDisplay = do
   assertContains "fold" folded "非表示の返信 1 件"
   assertContains "fold closed" folded "aria-expanded=\"false\""
   assertContains "hidden reply row" folded "ブロック中のドメインの返信"
-  -- 3-4: a quote whose target stays hidden shows only kind and domain.
+  -- 3-4: a quote shows its target; a post hidden because of its quote is a hidden card (cause QUOTE).
   quoted <- renderAfter (Just Home) (\m -> (signedIn m) { timeline = Loaded [ quotePost ] })
-  assertContains "hidden quote target" quoted "data-state=\"hidden\" data-domain=\"noisy.social\""
-  assertContains "hidden quote text" quoted "ミュート中のドメインの投稿"
+  assertContains "quote target" quoted "data-testid=\"quote\""
+  assertContains "quote target text" quoted "quoted text"
+  assertNotContains "no hidden variant of a quote" quoted "sp-quote-hidden"
+  quoteHidden <- renderAfter (Just (PostDetail "post-quote-hidden")) (detailWith quoteHiddenView [])
+  assertContains "quote-caused hidden card" quoteHidden "data-testid=\"hidden-post\" data-mode=\"mute\" data-domain=\"noisy.social\""
   -- 1-1: the menu reflects the Profile's settings; this server's people get no domain items.
   let
     mbReady = MuteBlock.init { profile = Just "p1", profileKnown = true, domains = MuteBlock.Ready [ { domain: "misskey.example", mode: MUTE, revision: 2, createdAt: "" } ], actors = MuteBlock.Ready [] }

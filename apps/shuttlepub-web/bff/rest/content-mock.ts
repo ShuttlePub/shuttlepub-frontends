@@ -21,6 +21,7 @@ import {
   type FeedItem,
   type NoteContent,
   type PostOperationAvailability,
+  type ReactionCounts,
 } from "./content.ts";
 import {
   MOCK_LOCAL_HOST,
@@ -36,7 +37,8 @@ import {
   type MockPerson,
   type TimelineEntry,
 } from "./post-fixtures.ts";
-import type { ContentControl, ContentViewer, Post, PostAuthor, PostOperations, PostView, QuotedPost, TimelineKind, UserPage } from "./posts.ts";
+import { chipInconsistency } from "./quick-reaction.ts";
+import type { ContentControl, ContentViewer, HiddenContent, Post, PostAuthor, PostOperations, PostReactionCounts, PostView, QuotedPost, TimelineKind, UserPage } from "./posts.ts";
 
 function checked<T>(schema: string, body: T): T {
   const violations = violationsForSchema(schema, body);
@@ -125,7 +127,7 @@ function feedPost(item: FeedItem, selfDomains: readonly string[]): Post {
     case "quote": {
       const target = byNoteId(item.quoted_note.note_id);
       return postOf(byNoteId(item.note.note_id), item.note, selfDomains, {
-        quoted: { post: postOf(target, item.quoted_note, selfDomains), hidden: null, restriction: null },
+        quoted: { post: postOf(target, item.quoted_note, selfDomains), restriction: null },
       });
     }
     case "repost": {
@@ -139,12 +141,31 @@ function feedPost(item: FeedItem, selfDomains: readonly string[]): Post {
 function embeddedOut(embedded: EmbeddedNotePresentation, selfDomains: readonly string[]): QuotedPost {
   switch (embedded.state) {
     case "visible":
-      return { post: postOf(byNoteId(embedded.note.note_id), embedded.note, selfDomains), hidden: null, restriction: null };
-    case "hidden":
-      return { post: null, hidden: controlOut(embedded), restriction: null };
+      return { post: postOf(byNoteId(embedded.note.note_id), embedded.note, selfDomains), restriction: null };
     case "restricted":
-      return { post: null, hidden: null, restriction: embedded.reason };
+      return { post: null, restriction: embedded.reason };
   }
+}
+
+/** The hidden note's cause and the control that caused it (the quoted source's for `quote`). */
+const hiddenOut = (presentation: { cause: HiddenContent["cause"] } & Pick<DomainControlRef, "mode" | "domain" | "revision">): HiddenContent =>
+  ({ cause: presentation.cause, control: controlOut(presentation) });
+
+/**
+ * S8 ReactionCounts of a visible note as the app carries them, chips with their view
+ * data (origin, image state, usage). A chip the server must not send (a custom emoji
+ * without view, a view of another emoji, an inconsistent view) is an invalid response,
+ * never repaired or guessed. A Unicode chip without view is the Unicode emoji itself.
+ */
+export function reactionCountsOut(counts: ReactionCounts): PostReactionCounts {
+  return {
+    likes: counts.likes,
+    emoji: counts.emoji.map((chip) => {
+      const problem = chipInconsistency(chip);
+      if (problem !== null) throw new ShuttlePubApiError("invalid_response", `reaction chip violates the contract: ${problem}`);
+      return { count: chip.count, emoji: structuredClone(chip.view ?? { emoji: chip.emoji, availability: "available" as const }) };
+    }),
+  };
 }
 
 function operationsOut(operations: PostOperationAvailability): PostOperations {
@@ -163,14 +184,14 @@ export function viewOf(id: string, response: DirectNoteResponse, selfDomains: re
   const presentation = response.presentation;
   switch (presentation.state) {
     case "hidden":
-      return { id, post: null, hidden: controlOut(presentation), restriction: null, operations: null };
+      return { id, post: null, hidden: hiddenOut(presentation), restriction: null, operations: null, reactionCounts: null };
     case "restricted":
-      return { id, post: null, hidden: null, restriction: presentation.reason, operations: operationsOut(presentation.operations) };
+      return { id, post: null, hidden: null, restriction: presentation.reason, operations: operationsOut(presentation.operations), reactionCounts: null };
     case "visible": {
       const item = presentation.item;
       const note = byNoteId(item.note.note_id);
       const post = postOf(note, item.note, selfDomains, item.kind === "quote" ? { quoted: embeddedOut(item.quoted_note, selfDomains) } : {});
-      return { id, post, hidden: null, restriction: null, operations: operationsOut(presentation.operations) };
+      return { id, post, hidden: null, restriction: null, operations: operationsOut(presentation.operations), reactionCounts: reactionCountsOut(presentation.reaction_counts) };
     }
   }
 }

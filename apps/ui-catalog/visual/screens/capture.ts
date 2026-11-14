@@ -436,7 +436,8 @@ async function prepareDomainContent(page: Page, item: ScreenCase) {
     }
   } else if (item.id === "domain-quote-revealed") {
     await reveal();
-    await expect(content.getByTestId("quote")).toHaveAttribute("data-state", "hidden");
+    await expect(content.getByTestId("quote")).toBeVisible();
+    await expect(content.getByTestId("quote")).not.toHaveAttribute("data-state", "hidden");
   } else if (item.id === "domain-replies") {
     await expect(content.getByTestId("reactions").first()).toBeVisible();
     await page.getByTestId("hidden-replies").click();

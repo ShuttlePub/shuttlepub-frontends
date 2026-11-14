@@ -1,12 +1,12 @@
 {
   "producer": {
     "repository": "ShuttlePub/ShuttlePub",
-    "commit": "60cb47d60da3c5b4ff3fc570fe3bc1796f983b3b",
+    "commit": "a00d234aedecb0223ba20dc8d7e9334cf9d39e83",
     "path": "openapi/shuttlepub.json"
   },
   "schema": {
     "file": "shuttlepub.json",
-    "sha256": "b58553d8e32565903fe986a532de1dec48809b6e3446ce92d501bcdcd524b7f7",
-    "bytes": 83419
+    "sha256": "51a0c9f92b119add130c036a87362800d0b417743b2ed7c780a4313ea7244080",
+    "bytes": 115812
   }
 }

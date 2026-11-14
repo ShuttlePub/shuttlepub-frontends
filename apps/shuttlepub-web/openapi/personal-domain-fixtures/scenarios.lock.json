@@ -1,14 +1,14 @@
 {
   "producer": {
     "repository": "ShuttlePub/ShuttlePub",
-    "commit": "60cb47d60da3c5b4ff3fc570fe3bc1796f983b3b",
+    "commit": "a00d234aedecb0223ba20dc8d7e9334cf9d39e83",
     "path": "server/tests/fixtures/personal_domain"
   },
   "files": [
     {
       "file": "counts.json",
-      "sha256": "f4eee0fd87afea52061623121f4164933a9c23605050183352a8e670d3af6603",
-      "bytes": 1732
+      "sha256": "5702c943ea5faf59e2bf70cce3f21d30220538bf28d0d8c7f32c6221f0da81e5",
+      "bytes": 2725
     },
     {
       "file": "e8_contract.json",
@@ -16,24 +16,49 @@
       "bytes": 5040
     },
     {
+      "file": "hidden_quote.json",
+      "sha256": "cca16c8bc3eb18c4661c04b6a0a8f072f01a705d431acb3ff83c171f1c9e9ce2",
+      "bytes": 44455
+    },
+    {
       "file": "rejections.json",
       "sha256": "ce55eb66a36c8ba703ee72750ccd7b94207e1eb648a973e1df6d01eef1abde29",
       "bytes": 4320
     },
     {
+      "file": "remote_emoji_chips.json",
+      "sha256": "c8b8b2832ff2318ee45c0fc60226c465405775ba564dd453e8e25e7dc2ceb12f",
+      "bytes": 9990
+    },
+    {
       "file": "reveal.json",
-      "sha256": "7b93ff4aba6e81ffc34edb2aa03e0e658e6ee170a13e96bbbf891a85f6a49c21",
-      "bytes": 21604
+      "sha256": "642773a51ec93f5da4dd85c534befffe892be89cf93305621a95e4eccfe381b4",
+      "bytes": 19571
     },
     {
       "file": "schema_cases.json",
-      "sha256": "b4ddc59ec40ec629a8c23628ac632f522a33c2a5b0cd1315d72f925d471364bb",
-      "bytes": 33536
+      "sha256": "7ae53197ebbbccaf03660bdc52a31343e3b85312a888e70e8617fcfe53adc732",
+      "bytes": 37459
+    },
+    {
+      "file": "search.json",
+      "sha256": "f171074e674971e67c366f42695b136c508d3639e6cf938e59c9bc02a00f1c7e",
+      "bytes": 32405
+    },
+    {
+      "file": "search_ordering.json",
+      "sha256": "1abbc791ebf3b5d0a3c1cfaffc410435a23a3c24d87d4fb9640c0464cd930ba3",
+      "bytes": 2770
+    },
+    {
+      "file": "search_schema_cases.json",
+      "sha256": "7b6b294fce86bbc65e67e8ba0e2bc38f9597cd2e834448181109150d8ee7e9f1",
+      "bytes": 19919
     },
     {
       "file": "surfaces.json",
-      "sha256": "1bd27cc7fb28510f2fdb6b19d7051969bf959ef83110365e30005fe58f3c80c5",
-      "bytes": 29369
+      "sha256": "f283004af1b393636699e5ea4eef4a7350c267bd4fa26f7ce4ad7ad71ea87ad0",
+      "bytes": 24343
     }
   ]
 }

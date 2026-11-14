@@ -16,9 +16,9 @@ import type { NoteReactionSummary, ReactionGroup, Reactor } from "./reactions.ts
 const svg = (body: string) => `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">${body}</svg>`)}`;
 
 const custom = (id: string, body: string, availability: CustomEmojiSetup["availability"] = "available", reason?: CustomEmojiSetup["reason"]): [string, CustomEmojiSetup] =>
-  [id, { shortcode: id, image_url: svg(body), availability, ...(reason ? { reason } : {}) }];
+  [id, { shortcode: id, image_url: svg(body), image_state: "present", usage: "anywhere", availability, ...(reason ? { reason } : {}) }];
 
-/** The mock server's custom emoji. old_blob was disabled after people favourited it. */
+/** The mock server's own custom emoji (no origin; image present; usable anywhere). old_blob was disabled after people favourited it. */
 export const MOCK_CUSTOM_EMOJI: Record<string, CustomEmojiSetup> = Object.fromEntries([
   custom("neko_yes", '<path d="M6 11 8.5 3l5.5 5h4l5.5-5L26 11c2.5 4 2.5 11-1.5 15-4 3.5-14 3.5-18 0C2.5 22 3.5 15 6 11Z" fill="#f9e2af"/><circle cx="12" cy="16" r="1.9" fill="#1e1e2e"/><circle cx="20" cy="16" r="1.9" fill="#1e1e2e"/><path d="M13 21q3 2.6 6 0" stroke="#1e1e2e" stroke-width="1.7" fill="none" stroke-linecap="round"/>'),
   custom("shuttle", '<circle cx="16" cy="16" r="15" fill="#cba6f7"/><circle cx="16" cy="16" r="6.5" fill="#1e1e2e"/><ellipse cx="16" cy="16" rx="12.5" ry="4" fill="none" stroke="#1e1e2e" stroke-width="2.2" transform="rotate(-22 16 16)"/>'),

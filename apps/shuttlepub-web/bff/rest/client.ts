@@ -21,6 +21,10 @@ export type ShuttlePubApiErrorKind =
   | "revision_conflict"
   /** 422 emoji_unavailable: the emoji cannot be newly used; nothing was changed. */
   | "emoji_unavailable"
+  /** 422 emoji_usage_not_allowed: an external emoji (usage existing_reaction_only) without a chip on the Note, or as a favourite. */
+  | "emoji_usage_not_allowed"
+  /** 409 conflict on the reaction PUT: an external emoji while another reaction is selected; the current reaction stays. */
+  | "conflict"
   /** The backend could not be reached (connection refused, DNS, timeout...). */
   | "unavailable"
   /** The backend answered 2xx with a body that violates the pinned OpenAPI contract. */

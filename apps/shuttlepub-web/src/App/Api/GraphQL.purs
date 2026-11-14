@@ -21,7 +21,7 @@ module App.Api.GraphQL
 import Prelude
 
 import App.Api.Error (ApiError(..), fromGqlCode, withReason)
-import App.Emoji (Emoji, EmojiKind(..), UnavailableReason(..))
+import App.Emoji (Emoji, EmojiImageState(..), EmojiKind(..), EmojiUsage(..), UnavailableReason(..))
 import App.Model (ApiStatus, PostDetailData)
 import App.Post (Author, Control, Operations, Post, PostView, Quoted(..), TimelineTab(..), UserPage, Visibility(..))
 import App.Profile (Profile, ProfileContext)
@@ -36,8 +36,11 @@ import Foreign.Object as FO
 import Generated.Schema.Gql (Mutation, Query)
 import Generated.Schema.Gql.Enum.ApiMode (ApiMode)
 import Generated.Schema.Gql.Enum.ContentRestriction (ContentRestriction)
+import Generated.Schema.Gql.Enum.EmojiImageState as GqlImageState
 import Generated.Schema.Gql.Enum.EmojiKind as GqlEmojiKind
 import Generated.Schema.Gql.Enum.EmojiUnavailableReason as GqlReason
+import Generated.Schema.Gql.Enum.EmojiUsage as GqlUsage
+import Generated.Schema.Gql.Enum.HiddenCause (HiddenCause)
 import Generated.Schema.Gql.Enum.PostVisibility as GqlVisibility
 import Generated.Schema.Gql.Enum.TimelineKind as GqlTimeline
 import GraphQL.Client.Args (Args(..))
@@ -170,7 +173,7 @@ type PostSelection =
   , repostCount :: Unit
   , repostedBy :: AuthorSelection
   , inReplyToId :: Unit
-  , quoted :: { post :: InnerPostSelection, hidden :: ControlSelection, restriction :: Unit }
+  , quoted :: { post :: InnerPostSelection, restriction :: Unit }
   }
 
 -- | One level of quote: the quoted post's own quote is not asked for.
@@ -185,13 +188,23 @@ postSelection =
   , repostCount: unit
   , repostedBy: authorSelection
   , inReplyToId: unit
-  , quoted: { post: innerPostSelection, hidden: controlSelection, restriction: unit }
+  , quoted: { post: innerPostSelection, restriction: unit }
   }
+
+type HiddenSelection = { cause :: Unit, control :: ControlSelection }
+
+hiddenSelection :: HiddenSelection
+hiddenSelection = { cause: unit, control: controlSelection }
+
+type ReactionCountsSelection = { likes :: Unit, emoji :: { emoji :: EmojiSelection, count :: Unit } }
+
+reactionCountsSelection :: ReactionCountsSelection
+reactionCountsSelection = { likes: unit, emoji: { emoji: emojiSelection, count: unit } }
 
 type ViewSelection =
   { id :: Unit
   , post :: PostSelection
-  , hidden :: ControlSelection
+  , hidden :: HiddenSelection
   , restriction :: Unit
   , operations ::
       { reply :: ControlSelection
@@ -200,15 +213,17 @@ type ViewSelection =
       , like :: ControlSelection
       , emojiReaction :: ControlSelection
       }
+  , reactionCounts :: ReactionCountsSelection
   }
 
 viewSelection :: ViewSelection
 viewSelection =
   { id: unit
   , post: postSelection
-  , hidden: controlSelection
+  , hidden: hiddenSelection
   , restriction: unit
   , operations: { reply: controlSelection, quote: controlSelection, repost: controlSelection, like: controlSelection, emojiReaction: controlSelection }
+  , reactionCounts: reactionCountsSelection
   }
 
 type UserPageSelection =
@@ -241,15 +256,16 @@ type RawPost =
   , repostCount :: Int
   , repostedBy :: Maybe RawAuthor
   , inReplyToId :: Maybe ID
-  , quoted :: Maybe { post :: Maybe RawInnerPost, hidden :: Maybe Control, restriction :: Maybe ContentRestriction }
+  , quoted :: Maybe { post :: Maybe RawInnerPost, restriction :: Maybe ContentRestriction }
   }
 
 type RawView =
   { id :: ID
   , post :: Maybe RawPost
-  , hidden :: Maybe Control
+  , hidden :: Maybe { cause :: HiddenCause, control :: Control }
   , restriction :: Maybe ContentRestriction
   , operations :: Maybe Operations
+  , reactionCounts :: Maybe { likes :: Int, emoji :: Array { emoji :: RawEmoji, count :: Int } }
   }
 
 type RawUserPage = { author :: RawAuthor, bio :: String, control :: Maybe Control, hidden :: Maybe Control, posts :: Array RawView }
@@ -282,11 +298,19 @@ toPost p =
   , repostCount: p.repostCount
   , repostedBy: map toAuthor p.repostedBy
   , inReplyToId: map unwrap p.inReplyToId
-  , quoted: p.quoted <#> \q -> Quoted { post: map toInnerPost q.post, hidden: q.hidden, restriction: q.restriction }
+  , quoted: p.quoted <#> \q -> Quoted { post: map toInnerPost q.post, restriction: q.restriction }
   }
 
 toView :: RawView -> PostView
-toView v = { id: unwrap v.id, post: map toPost v.post, hidden: v.hidden, restriction: v.restriction, operations: v.operations }
+toView v =
+  { id: unwrap v.id
+  , post: map toPost v.post
+  , hidden: v.hidden
+  , restriction: v.restriction
+  , operations: v.operations
+  , reactionCounts: v.reactionCounts <#> \counts ->
+      { likes: counts.likes, emoji: counts.emoji <#> \chip -> { emoji: toEmoji chip.emoji, count: chip.count } }
+  }
 
 toUserPage :: RawUserPage -> UserPage
 toUserPage p = { author: toAuthor p.author, bio: p.bio, control: p.control, hidden: p.hidden, posts: map toView p.posts }
@@ -358,10 +382,19 @@ createPost input =
 -- a response is applied only if that Profile is still the acting one.
 
 type EmojiSelection =
-  { kind :: Unit, value :: Unit, shortcode :: Unit, imageUrl :: Unit, available :: Unit, unavailableReason :: Unit }
+  { kind :: Unit
+  , value :: Unit
+  , shortcode :: Unit
+  , imageUrl :: Unit
+  , available :: Unit
+  , unavailableReason :: Unit
+  , origin :: Unit
+  , imageState :: Unit
+  , usage :: Unit
+  }
 
 emojiSelection :: EmojiSelection
-emojiSelection = { kind: unit, value: unit, shortcode: unit, imageUrl: unit, available: unit, unavailableReason: unit }
+emojiSelection = { kind: unit, value: unit, shortcode: unit, imageUrl: unit, available: unit, unavailableReason: unit, origin: unit, imageState: unit, usage: unit }
 
 type RawEmoji =
   { kind :: GqlEmojiKind.EmojiKind
@@ -370,6 +403,9 @@ type RawEmoji =
   , imageUrl :: Maybe String
   , available :: Boolean
   , unavailableReason :: Maybe GqlReason.EmojiUnavailableReason
+  , origin :: Maybe String
+  , imageState :: Maybe GqlImageState.EmojiImageState
+  , usage :: Maybe GqlUsage.EmojiUsage
   }
 
 toEmoji :: RawEmoji -> Emoji
@@ -384,6 +420,13 @@ toEmoji raw =
   , unavailableReason: raw.unavailableReason <#> case _ of
       GqlReason.DELETED -> Deleted
       GqlReason.DISABLED -> Disabled
+  , origin: raw.origin
+  , imageState: raw.imageState <#> case _ of
+      GqlImageState.PRESENT -> ImagePresent
+      GqlImageState.MISSING -> ImageMissing
+  , usage: raw.usage <#> case _ of
+      GqlUsage.ANYWHERE -> Anywhere
+      GqlUsage.EXISTING_REACTION_ONLY -> ExistingReactionOnly
   }
 
 emojiInput :: Emoji -> { kind :: GqlEmojiKind.EmojiKind, value :: String }

@@ -39,7 +39,7 @@ const controlOf = async (app: App, profile: string, domain: string) => {
   return list.find((control) => control.domain === domain);
 };
 
-const VIEW = "id post { id text author { handle displayName domain local actorUrl } quoted { post { id text } hidden { mode domain revision } restriction } } hidden { mode domain revision } restriction operations { reply { domain revision } quote { domain } repost { domain } like { domain } emojiReaction { domain } }";
+const VIEW = "id post { id text author { handle displayName domain local actorUrl } quoted { post { id text } restriction } } hidden { cause control { mode domain revision } } restriction operations { reply { domain revision } quote { domain } repost { domain } like { domain } emojiReaction { domain } }";
 
 describe("timeline (ui-spec 5-1, S8 surfaces)", () => {
   test("the default mock Profile's mute (noisy.social) and block (bot-farm.example) leave no trace", async () => {
@@ -102,12 +102,12 @@ describe("one post by its URL (ui-spec 3-1 … 3-4, S8 direct view)", () => {
     return [note.text, note.author.displayName, note.author.handle, note.author.actorUrl];
   };
 
-  test("a muted domain's post is hidden first: only mode, domain and revision; nothing of the post is sent", async () => {
+  test("a muted domain's post is hidden first: only cause, mode, domain and revision; nothing of the post is sent", async () => {
     const app = fresh();
     const result = await run(app, `{ postView(profile: "${A}", id: "post-nana-playlist") { ${VIEW} } }`);
     expect(result.errors).toBeUndefined();
     const control = await controlOf(app, A!, "noisy.social");
-    expect(result.data!.postView).toEqual({ id: "post-nana-playlist", post: null, hidden: { mode: "MUTE", domain: "noisy.social", revision: control!.revision }, restriction: null, operations: null });
+    expect(result.data!.postView).toEqual({ id: "post-nana-playlist", post: null, hidden: { cause: "DIRECT", control: { mode: "MUTE", domain: "noisy.social", revision: control!.revision } }, restriction: null, operations: null });
     for (const secret of SECRETS("post-nana-playlist")) expect(JSON.stringify(result)).not.toContain(secret);
   });
 
@@ -119,11 +119,11 @@ describe("one post by its URL (ui-spec 3-1 … 3-4, S8 direct view)", () => {
     // Mute adds no operation restriction.
     expect((revealed.data!.revealPost as { operations: Record<string, unknown> }).operations)
       .toEqual({ reply: null, quote: null, repost: null, like: null, emojiReaction: null });
-    const again = await run(app, `{ postView(profile: "${A}", id: "post-nana-playlist") { hidden { domain } post { id } } }`);
-    expect(again.data!.postView).toEqual({ hidden: { domain: "noisy.social" }, post: null });
+    const again = await run(app, `{ postView(profile: "${A}", id: "post-nana-playlist") { hidden { control { domain } } post { id } } }`);
+    expect(again.data!.postView).toEqual({ hidden: { control: { domain: "noisy.social" } }, post: null });
     // Another post of the same domain is still hidden; the E8 revision did not move.
-    const other = await run(app, `{ postView(profile: "${A}", id: "post-nana-reply") { hidden { domain } post { id } } }`);
-    expect(other.data!.postView).toEqual({ hidden: { domain: "noisy.social" }, post: null });
+    const other = await run(app, `{ postView(profile: "${A}", id: "post-nana-reply") { hidden { control { domain } } post { id } } }`);
+    expect(other.data!.postView).toEqual({ hidden: { control: { domain: "noisy.social" } }, post: null });
     expect(await controlOf(app, A!, "noisy.social")).toEqual(before);
   });
 
@@ -144,17 +144,17 @@ describe("one post by its URL (ui-spec 3-1 … 3-4, S8 direct view)", () => {
     for (const secret of SECRETS("post-deals-cw")) expect(JSON.stringify(revealed)).not.toContain(secret);
   });
 
-  test("a third-party quote of a muted post is hidden whole by the quoted domain; revealed, its target stays hidden and the quoter is actionable", async () => {
+  test("a third-party quote of a muted post is hidden whole because of the quote (cause QUOTE, the quoted source's domain); one reveal shows the quote with its target and the quoter is actionable", async () => {
     const app = fresh();
     const direct = await run(app, `{ postView(profile: "${A}", id: "post-ken-quote") { ${VIEW} } }`);
-    expect(direct.data!.postView).toMatchObject({ post: null, hidden: { mode: "MUTE", domain: "noisy.social" } });
+    expect(direct.data!.postView).toMatchObject({ post: null, hidden: { cause: "QUOTE", control: { mode: "MUTE", domain: "noisy.social" } } });
     for (const secret of [...SECRETS("post-ken-quote"), ...SECRETS("post-nana-playlist")]) expect(JSON.stringify(direct)).not.toContain(secret);
     const revealed = await run(app, `mutation { revealPost(profile: "${A}", id: "post-ken-quote") { ${VIEW} } }`);
     expect(revealed.data!.revealPost).toMatchObject({
-      post: { id: "post-ken-quote", text: "これめちゃくちゃ分かる", quoted: { post: null, hidden: { domain: "noisy.social" }, restriction: null } },
+      post: { id: "post-ken-quote", text: "これめちゃくちゃ分かる", quoted: { post: { id: "post-nana-playlist", text: mockNote("post-nana-playlist")!.text }, restriction: null } },
+      hidden: null,
       operations: { reply: null, quote: null, repost: null, like: null, emojiReaction: null },
     });
-    expect(JSON.stringify(revealed)).not.toContain(mockNote("post-nana-playlist")!.text);
   });
 
   test("a post that no control matches is simply visible, with nothing locked", async () => {
@@ -168,12 +168,12 @@ describe("replies (ui-spec 3-5) and user pages (3-6)", () => {
   test("replies from controlled domains come back hidden one by one, without content", async () => {
     const app = fresh();
     const result = await run(app, `{ replies(profile: "${A}", postId: "post-sora-zine") { ${VIEW} } }`);
-    const replies = result.data!.replies as { id: string; post: unknown; hidden: { mode: string; domain: string } | null }[];
-    expect(replies.map((reply) => [reply.id, reply.hidden?.mode ?? null, reply.hidden?.domain ?? null])).toEqual([
-      ["post-taro-reply", null, null],
-      ["post-nana-reply", "MUTE", "noisy.social"],
-      ["post-deals-reply", "BLOCK", "bot-farm.example"],
-      ["post-hina-reply", null, null],
+    const replies = result.data!.replies as { id: string; post: unknown; hidden: { cause: string; control: { mode: string; domain: string } } | null }[];
+    expect(replies.map((reply) => [reply.id, reply.hidden?.cause ?? null, reply.hidden?.control.mode ?? null, reply.hidden?.control.domain ?? null])).toEqual([
+      ["post-taro-reply", null, null, null],
+      ["post-nana-reply", "DIRECT", "MUTE", "noisy.social"],
+      ["post-deals-reply", "DIRECT", "BLOCK", "bot-farm.example"],
+      ["post-hina-reply", null, null, null],
     ]);
     for (const id of ["post-nana-reply", "post-deals-reply"]) {
       for (const secret of [mockNote(id)!.text, mockNote(id)!.author.handle]) expect(JSON.stringify(result)).not.toContain(secret);

@@ -58,5 +58,11 @@ export function interpretReply<T>(operation: QuickReactionOperation, reply: RawR
   if (status === 422 && errorBody?.code === "emoji_unavailable") {
     throw new ShuttlePubApiError("emoji_unavailable", errorBody.message, { status, ...withBody });
   }
+  if (status === 422 && errorBody?.code === "emoji_usage_not_allowed") {
+    throw new ShuttlePubApiError("emoji_usage_not_allowed", errorBody.message, { status, ...withBody });
+  }
+  if (status === 409 && operation === "putNoteReaction" && errorBody?.code === "conflict") {
+    throw new ShuttlePubApiError("conflict", errorBody.message, { status, ...withBody });
+  }
   throw new ShuttlePubApiError("upstream_error", errorBody?.message ?? `${label} answered HTTP ${status}`, { status, ...withBody });
 }

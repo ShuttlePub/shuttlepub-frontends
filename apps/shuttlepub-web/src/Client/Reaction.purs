@@ -718,6 +718,9 @@ update model = case _ of
                 (withReaction (dropFavoriteUndo settled) _ { settings = Loaded previous, settingsProblem = Just { error, retry: Just intended } })
             Left error@(EmojiUnavailable _) ->
               Tuple (withReaction (dropFavoriteUndo settled) _ { settings = Loaded previous, savingSettings = false, settingsProblem = Just { error, retry: Nothing } }) []
+            -- 422: an external emoji is never a favourite; retrying cannot succeed.
+            Left error@(EmojiUsageNotAllowed _) ->
+              Tuple (withReaction (dropFavoriteUndo settled) _ { settings = Loaded previous, savingSettings = false, settingsProblem = Just { error, retry: Nothing } }) []
             Left error ->
               Tuple (withReaction (dropFavoriteUndo settled) _ { settings = Loaded previous, savingSettings = false, settingsProblem = Just { error, retry: Just intended } }) []
 

@@ -86,6 +86,16 @@ const actorPolicyOut = (policy: ActorPolicy) => ({
   id: policy.id,
   mode: toGqlMode(policy.mode),
   actorUrl: policy.actorUrl,
+  targetActor: {
+    kind: policy.targetActor.kind.toUpperCase(),
+    actorUrl: policy.targetActor.actorUrl,
+    status: policy.targetActor.status.toUpperCase(),
+    displayName: policy.targetActor.displayName,
+    iconUrl: policy.targetActor.iconUrl,
+    acct: policy.targetActor.acct,
+    preferredUsername: policy.targetActor.preferredUsername,
+    profileId: policy.targetActor.profileId,
+  },
   createdAt: policy.createdAt,
 });
 

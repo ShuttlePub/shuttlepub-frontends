@@ -83,11 +83,37 @@ type ContentControl {
   revision: Int!
 }
 
-"""S8 EmbeddedNotePresentation of a quote's target: exactly one of post / hidden / restriction."""
+"""S8 HiddenCause: why a note is hidden on direct open. DIRECT = its own author's domain is controlled; QUOTE = it directly quotes a note of a controlled domain (the control is the quoted source's)."""
+enum HiddenCause {
+  DIRECT
+  QUOTE
+}
+
+"""S8 NotePresentation hidden: the cause and the control that caused it. Only a hidden note carries a cause (ContentControl elsewhere has none)."""
+type HiddenContent {
+  cause: HiddenCause!
+  control: ContentControl!
+}
+
+"""
+S8 EmbeddedNotePresentation of a revealed quote's target: exactly one of post / restriction.
+There is no hidden variant: a controlled target hides the whole quote (HiddenContent QUOTE).
+"""
 type QuotedPost {
   post: Post
-  hidden: ContentControl
   restriction: ContentRestriction
+}
+
+"""S8 EmojiReactionCount: a chip of the note's reactions. emoji carries the chip's view data (origin, image state, usage)."""
+type ReactionChip {
+  emoji: Emoji!
+  count: Int!
+}
+
+"""S8 ReactionCounts of a visible note: accepted historical counts (not reduced by a block)."""
+type ReactionCounts {
+  likes: Int!
+  emoji: [ReactionChip!]!
 }
 
 """S8 PostOperationAvailability (domain part only): null = not refused by a domain block; set = the block that refuses it."""
@@ -101,15 +127,17 @@ type PostOperations {
 
 """
 One post seen directly (S8 DirectNoteResponse), by its provisional id. Exactly one of post /
-hidden / restriction is set. hidden carries only the control (no text, author or quote).
-operations accompany a visible or restricted post; a reveal never clears a block.
+hidden / restriction is set. hidden carries only the cause and the control (no text, author
+or quote). operations accompany a visible or restricted post; a reveal never clears a block.
+reactionCounts accompany a visible post.
 """
 type PostView {
   id: ID!
   post: Post
-  hidden: ContentControl
+  hidden: HiddenContent
   restriction: ContentRestriction
   operations: PostOperations
+  reactionCounts: ReactionCounts
 }
 
 """PROVISIONAL. A person's page (ui-spec 3-6): the person is always shown, their posts are hidden while control is set."""
@@ -153,7 +181,9 @@ input CreatePostInput {
 # Profile's single reaction on a Note (GET/PUT/DELETE .../notes/{note_id}/reaction).
 # profileId is the acting Profile (it must be one of availableProfiles). A 409 is
 # extensions.code = REVISION_CONFLICT (with extensions.currentRevision), a 422 is
-# EMOJI_UNAVAILABLE, a 501 is NOT_IMPLEMENTED. ReactionGroup / Reactor and
+# EMOJI_UNAVAILABLE, a 422 emoji_usage_not_allowed (an external emoji without a chip on the
+# Note, or as a favourite) is EMOJI_USAGE_NOT_ALLOWED, a 409 conflict on the reaction PUT (an
+# external emoji while another reaction is selected) is CONFLICT, a 501 is NOT_IMPLEMENTED. ReactionGroup / Reactor and
 # customEmojis are PROVISIONAL: no endpoint exists, real mode answers NOT_IMPLEMENTED.
 
 """EmojiRef.type."""
@@ -168,6 +198,18 @@ enum EmojiUnavailableReason {
   DISABLED
 }
 
+"""EmojiImageState: whether the image of a custom emoji can be shown (independent of availability)."""
+enum EmojiImageState {
+  PRESENT
+  MISSING
+}
+
+"""EmojiUsage: where a custom emoji may be used. EXISTING_REACTION_ONLY is an external emoji."""
+enum EmojiUsage {
+  EXISTING_REACTION_ONLY
+  ANYWHERE
+}
+
 """Maps EmojiView. value is the Unicode sequence (UNICODE) or the stable custom emoji id (CUSTOM)."""
 type Emoji {
   kind: EmojiKind!
@@ -178,6 +220,12 @@ type Emoji {
   imageUrl: String
   available: Boolean!
   unavailableReason: EmojiUnavailableReason
+  """Originating domain of an external custom emoji; null for Unicode and this server's own emoji, so a value is the external mark."""
+  origin: String
+  """Custom emoji only (null for Unicode). PRESENT goes with imageUrl; MISSING means show :shortcode:."""
+  imageState: EmojiImageState
+  """Custom emoji only; null means ANYWHERE (Unicode). An external emoji is EXISTING_REACTION_ONLY."""
+  usage: EmojiUsage
 }
 
 """Maps EmojiRef."""
@@ -244,11 +292,46 @@ type DomainControl {
   createdAt: String!
 }
 
-"""Individual mute/block of the selected Profile. Emumet exposes only the target's canonical actor URL."""
+"""Emumet ProfileRelationActorKind: whether a target lives on this server or a remote one."""
+enum RelationActorKind {
+  LOCAL
+  REMOTE
+}
+
+"""Emumet ProfileRelationActorStatus: whether display information of a target is available."""
+enum RelationActorStatus {
+  RESOLVED
+  PENDING
+  UNAVAILABLE
+}
+
+"""
+Display information of the target of an individual mute/block (Emumet ProfileRelationActor),
+served from the Profile (local) or a server-side cache; the list never contacts a remote server.
+Absent fields are null and never derived from actorUrl: a PENDING (fetch started) or UNAVAILABLE
+target has no name/icon/acct and the UI falls back to actorUrl.
+"""
+type RelationActor {
+  kind: RelationActorKind!
+  """Canonical actor URL; always equal to the policy's actorUrl."""
+  actorUrl: String!
+  status: RelationActorStatus!
+  displayName: String
+  """Absolute http(s) URL of the avatar, loaded by the browser directly."""
+  iconUrl: String
+  """preferred_username@host without a leading @."""
+  acct: String
+  preferredUsername: String
+  """Profile nanoid; set only when kind is LOCAL."""
+  profileId: String
+}
+
+"""Individual mute/block of the selected Profile (list and create answers alike carry targetActor)."""
 type ActorPolicy {
   id: ID!
   mode: PolicyMode!
   actorUrl: String!
+  targetActor: RelationActor!
   createdAt: String!
 }
 

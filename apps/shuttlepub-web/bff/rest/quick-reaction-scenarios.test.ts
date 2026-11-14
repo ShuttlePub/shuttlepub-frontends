@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { violationsForResponse, violationsForSchema } from "../openapi/contract.ts";
 import { verifyLock } from "../openapi/lock.ts";
 import { SCENARIO_DIR, SCENARIO_LOCK_FILE, verifyScenarioLock } from "../openapi/scenario-lock.ts";
-import { OPERATIONS, QuickReactionStore, type CustomEmojiSetup, type EmojiRef, type QuickReactionOperation } from "./quick-reaction.ts";
+import { OPERATIONS, QuickReactionStore, type CustomEmojiSetup, type EmojiImageState, type EmojiRef, type EmojiUsage, type QuickReactionOperation } from "./quick-reaction.ts";
 
 // The identifiers the producer's own replay uses (server/tests/quick_reaction.rs).
 const PROFILE = "V1StGXR8_Z5jdHi6B-myT";
@@ -22,9 +22,19 @@ type Step =
 type Scenario = {
   name: string;
   setup: {
-    emoji: Record<string, { shortcode?: string; image_url?: string; availability: "available" | "unavailable"; reason?: "deleted" | "disabled" }>;
+    emoji: Record<string, {
+      shortcode?: string;
+      image_url?: string;
+      availability: "available" | "unavailable";
+      reason?: "deleted" | "disabled";
+      origin?: string;
+      image_state?: EmojiImageState;
+      usage?: EmojiUsage;
+    }>;
     settings: { revision: number; favorites: EmojiRef[] };
     reaction: EmojiRef | null;
+    /** Chips on the Note carried by other people (besides the Profile's own selection). */
+    chips?: EmojiRef[];
   };
   steps: Step[];
 };
@@ -47,6 +57,9 @@ function storeFor(scenario: Scenario): QuickReactionStore {
       ...(entry.shortcode === undefined ? {} : { shortcode: entry.shortcode }),
       ...(entry.image_url === undefined ? {} : { image_url: entry.image_url }),
       ...(entry.reason === undefined ? {} : { reason: entry.reason }),
+      ...(entry.origin === undefined ? {} : { origin: entry.origin }),
+      ...(entry.image_state === undefined ? {} : { image_state: entry.image_state }),
+      ...(entry.usage === undefined ? {} : { usage: entry.usage }),
     };
   }
   return new QuickReactionStore({
@@ -55,6 +68,7 @@ function storeFor(scenario: Scenario): QuickReactionStore {
     notes: [NOTE],
     settings: { [PROFILE]: scenario.setup.settings },
     reactions: scenario.setup.reaction === null ? [] : [{ profile: PROFILE, note: NOTE, emoji: scenario.setup.reaction }],
+    chips: (scenario.setup.chips ?? []).map((emoji) => ({ note: NOTE, emoji })),
   });
 }
 
@@ -62,7 +76,7 @@ describe("producer quick reaction scenarios", () => {
   test("are vendored verbatim from the pinned producer commit", async () => {
     const [schema, vendored] = await Promise.all([verifyLock(), verifyScenarioLock()]);
     expect(vendored.producer.commit).toBe(schema.producer.commit);
-    expect(vendored.files.length).toBeGreaterThanOrEqual(10);
+    expect(vendored.files.length).toBeGreaterThanOrEqual(21);
   });
 
   test("every request and expected answer conforms to the pinned OpenAPI schema", async () => {
@@ -84,7 +98,8 @@ describe("producer quick reaction scenarios", () => {
 
   test("the stateful mock answers every step exactly as the producer expects", async () => {
     const all = await scenarios();
-    expect(all.length).toBeGreaterThanOrEqual(10);
+    expect(all.length).toBeGreaterThanOrEqual(21);
+    expect(all.filter((scenario) => scenario.name.startsWith("remote_")).length).toBeGreaterThanOrEqual(9);
     for (const scenario of all) {
       const store = storeFor(scenario);
       scenario.steps.forEach((step, index) => {
