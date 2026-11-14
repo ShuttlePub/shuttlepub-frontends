@@ -11,7 +11,8 @@ import Prelude
 
 import App.MuteBlock.Api as Api
 import App.MuteBlock.Dom (focusLater, reloadPage)
-import App.MuteBlock.Types (ActorPolicy, Change(..), Dialog(..), DomainControl, Failure(..), Filter(..), InputProblem(..), Load(..), Message(..), Model, Origin, Scope, Undo(..), Write(..), actorLabel, blockReady, fromResult)
+import App.MuteBlock.Actor (actorName)
+import App.MuteBlock.Types (ActorPolicy, Change(..), Dialog(..), DomainControl, Failure(..), Filter(..), InputProblem(..), Load(..), Message(..), Model, Origin, Scope, Undo(..), Write(..), blockReady, fromResult)
 import Data.Maybe (isJust)
 import Data.Array (filter, find, snoc)
 import Data.Either (Either(..))
@@ -166,7 +167,7 @@ update model = case _ of
     | Just profile <- model.profile ->
         Tuple model { writing = true }
           [ effect (Api.removeActorPolicy profile policy.id MUTE)
-              (Written (fromRow profile) (UnmuteActorRow policy.actorUrl) (actorLabel policy.actorUrl) <<< map ActorRemoved)
+              (Written (fromRow profile) (UnmuteActorRow policy.actorUrl) (actorName policy) <<< map ActorRemoved)
           ]
     | otherwise -> noEffects model
   OpenActorUnblock opener policy ->
@@ -176,13 +177,13 @@ update model = case _ of
     Just (ConfirmActorUnblock state) | not state.pending, not model.writing, Just profile <- model.profile ->
       Tuple model { dialog = Just (ConfirmActorUnblock state { pending = true, failure = Nothing }), writing = true }
         [ effect (Api.removeActorPolicy profile state.policy.id BLOCK)
-            (Written (fromDialog profile) UnblockActor (actorLabel state.policy.actorUrl) <<< map ActorRemoved)
+            (Written (fromDialog profile) UnblockActor (actorName state.policy) <<< map ActorRemoved)
         ]
     _ -> noEffects model
   ActorUnblockToMute -> case model.dialog of
     Just (ConfirmActorUnblock state) | not state.pending, not model.writing, Just profile <- model.profile ->
       Tuple model { dialog = Just (ConfirmActorUnblock state { pending = true, failure = Nothing }), writing = true }
-        [ effect (actorToMute profile state.policy) (Written (fromDialog profile) ActorToMute (actorLabel state.policy.actorUrl)) ]
+        [ effect (actorToMute profile state.policy) (Written (fromDialog profile) ActorToMute (actorName state.policy)) ]
     _ -> noEffects model
 
   -- Post / profile menu (ui-spec 1-1 主導線). Mute is immediate with "元に戻す";
@@ -289,7 +290,7 @@ update model = case _ of
           [ effect (Api.setDomainControl owner.profile domain MUTE Nothing) (Written (fromRow owner.profile) UndoWrite domain <<< map DomainUpserted) ]
       RestoreActorMute actorUrl ->
         Tuple model { writing = true, toast = Nothing }
-          [ effect (Api.addActorPolicy owner.profile actorUrl MUTE) (Written (fromRow owner.profile) UndoWrite (actorLabel actorUrl) <<< map ActorAdded) ]
+          [ effect (Api.addActorPolicy owner.profile actorUrl MUTE) (Written (fromRow owner.profile) UndoWrite actorUrl <<< map ActorAdded) ]
       RemoveDomainMute domain -> case findDomain domain of
         Just control | control.mode == MUTE ->
           Tuple model { writing = true, toast = Nothing }
@@ -298,7 +299,7 @@ update model = case _ of
       RemoveActorMute actorUrl -> case findActor MUTE actorUrl of
         Just policy ->
           Tuple model { writing = true, toast = Nothing }
-            [ effect (Api.removeActorPolicy owner.profile policy.id MUTE) (Written (fromRow owner.profile) UndoWrite (actorLabel actorUrl) <<< map ActorRemoved) ]
+            [ effect (Api.removeActorPolicy owner.profile policy.id MUTE) (Written (fromRow owner.profile) UndoWrite (actorName policy) <<< map ActorRemoved) ]
         Nothing -> noEffects model { toast = Nothing }
     _ -> noEffects model
   ToastHold held -> case model.toast of

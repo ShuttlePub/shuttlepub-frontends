@@ -21,12 +21,13 @@ import App.MuteBlock.Types as MuteBlock
 import App.Post (PostView, TimelineTab, allTimelineTabs, timelineTabLabel, timelineTabValue)
 import App.Route (Route(..))
 import App.View.Common (AvatarSize(..), attr, avatar, emptySlot, errorNote, icon, routeLink, stateNote, testId)
-import App.View.Hidden (hiddenCard, revealButtonId, revealedBar, viewBody)
+import App.View.Hidden (hiddenCard, revealButtonId, revealedBar, sourceLine, viewBody)
 import App.View.PostCard (PostCardMode(..), controlLabel, postCard, postMenu)
 import App.View.Shell (isSignedIn)
 import Data.Array (any, elem, filter, find, length, null)
 import Data.Maybe (Maybe(..), fromMaybe, isJust, isNothing)
 import Generated.Schema.Gql.Enum.ApiMode (ApiMode(..))
+import Generated.Schema.Gql.Enum.HiddenCause (HiddenCause(..))
 import Generated.Schema.Gql.Enum.PolicyMode (PolicyMode(..))
 import Flame (Html)
 import Flame.Html.Attribute as HA
@@ -176,14 +177,14 @@ pendingReveal model id = any (\pending -> pending.id == id) model.content.reveal
 -- | of the post it quotes) is a hidden card of its own with this-page-only reveal.
 listedView :: Model -> PostView -> Html Message
 listedView model view = case view.hidden of
-  Just { control }
+  Just { cause, control }
     | revealed model view.id -> HE.section [ HA.class' "sp-revealed sp-revealed-item", attr "aria-label" "投稿", testId "revealed-item" ]
         [ revealedBar { key: view.id, control, hide: HidePost view.id }
         , viewBody model InTimeline (shownView model view)
         ]
     | otherwise -> hiddenCard model
         { key: view.id
-        , title: controlLabel control.mode <> "中のドメインの投稿です"
+        , cause
         , label: "この投稿だけ表示"
         , control
         , reveal: RevealPost view.id
@@ -208,14 +209,14 @@ revealErrorOf model id = case model.content.revealError of
 -- | The opened post itself: hidden card (3-1), revealed with its bar (3-2), or as is.
 directPost :: Model -> PostView -> Html Message
 directPost model base = case base.hidden of
-  Just { control }
+  Just { cause, control }
     | revealed model base.id -> HE.section [ HA.class' "sp-revealed", attr "aria-label" "投稿", testId "revealed-post" ]
         [ revealedBar { key: base.id, control, hide: HidePost base.id }
         , HE.div [ HA.class' "sp-tl-focused" ] [ viewBody model Focused (shownView model base) ]
         ]
     | otherwise -> hiddenCard model
         { key: base.id
-        , title: controlLabel control.mode <> "中のドメインの投稿です"
+        , cause
         , label: "この投稿だけ表示"
         , control
         , reveal: RevealPost base.id
@@ -253,13 +254,20 @@ repliesPanel model replies
       shown = filter (\reply -> isNothing reply.hidden) replies
       folded = filter (\reply -> isJust reply.hidden) replies
       hiddenReply reply = case reply.hidden of
-        Just { control }
+        Just { cause, control }
           | revealed model reply.id -> HE.div [ HA.class' "sp-revealed sp-revealed-reply", testId "revealed-reply" ]
               [ revealedBar { key: reply.id, control, hide: HidePost reply.id }
               , viewBody model InTimeline (shownView model reply)
               ]
           | otherwise -> HE.div [ HA.class' "sp-hidden-row", testId "hidden-reply", attr "data-domain" control.domain ]
-              [ HE.span [ HA.class' "sp-grow" ] [ HE.text (controlLabel control.mode <> "中のドメインの返信") ]
+              [ HE.span [ HA.class' "sp-grow" ]
+                  ( case cause of
+                      DIRECT -> [ HE.text (controlLabel control.mode <> "中のドメインの返信") ]
+                      QUOTE ->
+                        [ HE.text (controlLabel control.mode <> "中のドメインの投稿を引用しています")
+                        , HE.span [ HA.class' "sp-mono sp-hidden-domain", testId "hidden-source" ] [ HE.text (" · " <> sourceLine cause control.domain) ]
+                        ]
+                  )
               , HE.button
                   [ HA.type' "button"
                   , HA.id (revealButtonId reply.id)
@@ -316,7 +324,7 @@ userPage model handle = HE.div [ HA.class' "sp-page sp-page-user" ]
               ]
             Nothing, Just control -> hiddenCard model
               { key: "user"
-              , title: controlLabel control.mode <> "中のドメインの投稿です"
+              , cause: DIRECT
               , label: "投稿を表示"
               , control
               , reveal: RevealUserPosts

@@ -17,8 +17,9 @@ import Data.Either (Either(..))
 import Data.Generic.Rep (class Generic)
 import Data.Maybe (Maybe(..))
 import Data.Show.Generic (genericShow)
-import Data.String (Pattern(..), stripPrefix)
 import Generated.Schema.Gql.Enum.PolicyMode (PolicyMode)
+import Generated.Schema.Gql.Enum.RelationActorKind (RelationActorKind)
+import Generated.Schema.Gql.Enum.RelationActorStatus (RelationActorStatus)
 
 -- | Sub-pages of the settings page (ui-spec 1-2).
 data Tab = AccountsTab | DomainsTab
@@ -55,22 +56,31 @@ type DomainControl =
   , createdAt :: String
   }
 
--- | Emumet exposes only the canonical actor URL of an individual target.
+-- | Display information of an individual target (Emumet `target_actor`, via the BFF's
+-- | `ActorPolicy.targetActor`): what Emumet knows without contacting the remote server.
+-- | A missing field stays Nothing and is never made up from the actor URL; a PENDING or
+-- | UNAVAILABLE target may have none of them (see App.MuteBlock.Actor for how it is shown).
+-- | There is deliberately no icon URL: the screen never loads an avatar image (d09-q06),
+-- | so the BFF does not hand one to the browser at all.
+type TargetActor =
+  { kind :: RelationActorKind
+  , status :: RelationActorStatus
+  , displayName :: Maybe String
+  , acct :: Maybe String
+  , preferredUsername :: Maybe String
+  , profileId :: Maybe String
+  }
+
+-- | One individual mute/block. `id` (Emumet's policy id) is the only identity a row has:
+-- | what is removed, and what a row is found by. Names and accts can repeat (the same
+-- | person muted and blocked, two people with one display name).
 type ActorPolicy =
   { id :: String
   , mode :: PolicyMode
   , actorUrl :: String
   , createdAt :: String
+  , targetActor :: TargetActor
   }
-
--- | How an individual target is shown: Emumet gives no name, icon or acct, so
--- | the canonical actor URL without its scheme.
-actorLabel :: String -> String
-actorLabel url = case stripPrefix (Pattern "https://") url of
-  Just rest -> rest
-  Nothing -> case stripPrefix (Pattern "http://") url of
-    Just rest -> rest
-    Nothing -> url
 
 -- | Follows that a block of one exact domain detaches (canonical actor URLs).
 type Impact =

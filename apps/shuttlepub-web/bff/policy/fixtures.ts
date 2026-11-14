@@ -56,13 +56,31 @@ const relation = (id: string, kind: "mute" | "block", target: string, date: stri
   created_at: `${date}T09:00:00Z`,
 });
 
+/**
+ * A resolved remote target. Its avatar is another server's image: it is in the wire body (Emumet
+ * serves it) and in this seed so that the tests can prove the BFF never forwards it and the page
+ * never loads it (d09-q06).
+ */
 const resolved = (host: string, user: string, displayName: string): ProfileRelationActorResponse => ({
   kind: "remote",
   actor_url: actor(host, user),
   status: "resolved",
   display_name: displayName,
+  icon_url: `https://${host}/avatars/${user}.png`,
   acct: `${user}@${host}`,
   preferred_username: user,
+});
+
+/** A resolved target of this server (a Profile): the avatar is "stored for the Profile" and is not loaded either. */
+const local = (user: string, displayName: string, profileId: string): ProfileRelationActorResponse => ({
+  kind: "local",
+  actor_url: actor(MOCK_LOCAL_HOST, user),
+  status: "resolved",
+  display_name: displayName,
+  icon_url: `https://${MOCK_LOCAL_HOST}/media/${user}.png`,
+  acct: `${user}@${MOCK_LOCAL_HOST}`,
+  preferred_username: user,
+  profile_id: profileId,
 });
 
 const actor = (host: string, name: string) => `https://${host}/users/${name}`;
@@ -79,8 +97,11 @@ export function defaultPolicySeed(): Record<string, PolicySeed> {
       actorPolicies: [
         relation("rel-spam-bot", "block", actor("spam.example", "spam_bot"), "2025-12-18", resolved("spam.example", "spam_bot", "Spam Bot")),
         relation("rel-loud", "mute", actor("chat.example", "loud"), "2025-12-02", resolved("chat.example", "loud", "Loud")),
+        relation("rel-kei", "mute", actor(MOCK_LOCAL_HOST, "kei"), "2025-12-10", local("kei", "Kei", "author-kei")),
         relation("rel-ad-bot", "block", actor("ads.example", "ad_bot"), "2025-11-21"),
         relation("rel-spoiler", "mute", actor("anime.example", "spoiler"), "2025-11-03", { kind: "remote", actor_url: actor("anime.example", "spoiler"), status: "unavailable" }),
+        // Resolved but with the acct only (no display name, no preferred_username): the name falls back to "@acct".
+        relation("rel-quiet", "block", actor("small.example", "quiet"), "2025-10-28", { kind: "remote", actor_url: actor("small.example", "quiet"), status: "resolved", acct: "quiet@small.example" }),
       ],
       following: [
         actor("example.social", "alice"),

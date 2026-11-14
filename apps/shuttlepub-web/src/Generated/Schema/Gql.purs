@@ -221,9 +221,11 @@ newtype RelationActor = RelationActor
   , iconUrl ::
       {}
       ->
-      -- | Absolute http(s) URL of the avatar as stored. For a remote actor it points at another server,
-      -- | which the browser must not load directly (d09-q06: no ShuttlePub-side delivery route exists, so a
-      -- | placeholder icon is shown); how the screen uses it is decided by the D08 display unit.
+      -- | Always null (d09-q06, D08 display unit). The avatar of a remote actor lives on another server,
+      -- | which the browser must not load directly (no ShuttlePub-side delivery route exists), and the
+      -- | avatar of a local Profile is a free-form string the user set, with no guarantee that it is this
+      -- | server's own origin. The screen shows a placeholder icon (initial) for every target; a future
+      -- | ShuttlePub-side delivery route would fill this field.
       AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
   , actorUrl ::
       {}

@@ -91,7 +91,10 @@ const actorPolicyOut = (policy: ActorPolicy) => ({
     actorUrl: policy.targetActor.actorUrl,
     status: policy.targetActor.status.toUpperCase(),
     displayName: policy.targetActor.displayName,
-    iconUrl: policy.targetActor.iconUrl,
+    // The avatar never leaves the BFF (d09-q06): another server's image must not be loaded by the
+    // browser, and a local Profile's `icon_url` is a free-form string the user set (UpdateAccountRequest),
+    // so nothing says it is this server's own origin either. The page shows a placeholder icon.
+    iconUrl: null,
     acct: policy.targetActor.acct,
     preferredUsername: policy.targetActor.preferredUsername,
     profileId: policy.targetActor.profileId,
