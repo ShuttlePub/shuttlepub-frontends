@@ -11,7 +11,8 @@
 // Real mode never invents these values: every operation below is reported as
 // not_implemented (see real.ts) until the backend contract exists.
 
-import type { ContentRestriction, DomainControlRef } from "./content.ts";
+import type { ContentRestriction, DomainControlRef, HiddenCause } from "./content.ts";
+import type { EmojiView } from "./quick-reaction.ts";
 
 export type TimelineKind = "home" | "local" | "federated";
 
@@ -34,10 +35,12 @@ export type PostAuthor = {
   local: boolean;
 };
 
-/** S8 EmbeddedNotePresentation of a quote's target: exactly one field is set. */
+/**
+ * S8 EmbeddedNotePresentation of a revealed quote's target: exactly one field is set. It has
+ * no hidden variant: a controlled target hides the whole quote (HiddenContent, cause `quote`).
+ */
 export type QuotedPost = {
   post: Post | null;
-  hidden: ContentControl | null;
   restriction: ContentRestriction | null;
 };
 
@@ -65,6 +68,19 @@ export type Post = {
 /** What S8 says about a control on content: mode, exact domain, E8 revision (nothing else). */
 export type ContentControl = Pick<DomainControlRef, "mode" | "domain" | "revision">;
 
+/**
+ * S8 NotePresentation `hidden`: why the note is hidden (`direct`: its own author's domain,
+ * `quote`: the domain of the note it directly quotes) and the control that caused it. Only
+ * a hidden note carries a cause; ContentControl elsewhere (operations, badges) has none.
+ */
+export type HiddenContent = { cause: HiddenCause; control: ContentControl };
+
+/** One reaction chip of S8 ReactionCounts: the chip's emoji (view data included) and its count. */
+export type ReactionChip = { emoji: EmojiView; count: number };
+
+/** S8 ReactionCounts of a visible note: accepted historical counts. */
+export type PostReactionCounts = { likes: number; emoji: ReactionChip[] };
+
 /** S8 PostOperationAvailability: null = allowed, else the block that refuses it. */
 export type PostOperations = {
   reply: ContentControl | null;
@@ -77,14 +93,16 @@ export type PostOperations = {
 /**
  * One post seen directly (S8 DirectNoteResponse), addressed by its provisional id.
  * Exactly one of post / hidden / restriction is set; operations accompany a visible or
- * restricted post. hidden carries nothing but the control: no text, author or quote.
+ * restricted post, reactionCounts a visible one. hidden carries nothing but the cause and
+ * the control: no text, author or quote.
  */
 export type PostView = {
   id: string;
   post: Post | null;
-  hidden: ContentControl | null;
+  hidden: HiddenContent | null;
   restriction: ContentRestriction | null;
   operations: PostOperations | null;
+  reactionCounts: PostReactionCounts | null;
 };
 
 /**

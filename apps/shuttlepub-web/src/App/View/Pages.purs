@@ -176,7 +176,7 @@ pendingReveal model id = any (\pending -> pending.id == id) model.content.reveal
 -- | of the post it quotes) is a hidden card of its own with this-page-only reveal.
 listedView :: Model -> PostView -> Html Message
 listedView model view = case view.hidden of
-  Just control
+  Just { control }
     | revealed model view.id -> HE.section [ HA.class' "sp-revealed sp-revealed-item", attr "aria-label" "投稿", testId "revealed-item" ]
         [ revealedBar { key: view.id, control, hide: HidePost view.id }
         , viewBody model InTimeline (shownView model view)
@@ -208,7 +208,7 @@ revealErrorOf model id = case model.content.revealError of
 -- | The opened post itself: hidden card (3-1), revealed with its bar (3-2), or as is.
 directPost :: Model -> PostView -> Html Message
 directPost model base = case base.hidden of
-  Just control
+  Just { control }
     | revealed model base.id -> HE.section [ HA.class' "sp-revealed", attr "aria-label" "投稿", testId "revealed-post" ]
         [ revealedBar { key: base.id, control, hide: HidePost base.id }
         , HE.div [ HA.class' "sp-tl-focused" ] [ viewBody model Focused (shownView model base) ]
@@ -253,7 +253,7 @@ repliesPanel model replies
       shown = filter (\reply -> isNothing reply.hidden) replies
       folded = filter (\reply -> isJust reply.hidden) replies
       hiddenReply reply = case reply.hidden of
-        Just control
+        Just { control }
           | revealed model reply.id -> HE.div [ HA.class' "sp-revealed sp-revealed-reply", testId "revealed-reply" ]
               [ revealedBar { key: reply.id, control, hide: HidePost reply.id }
               , viewBody model InTimeline (shownView model reply)

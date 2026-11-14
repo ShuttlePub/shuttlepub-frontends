@@ -15,7 +15,7 @@
 // functions as the real adapter.
 
 import { actorDomain, canonicalDomain } from "./domain.ts";
-import { defaultPolicySeed, type PolicySeed } from "./fixtures.ts";
+import { defaultPolicySeed, targetActorFor, type PolicySeed } from "./fixtures.ts";
 import {
   PolicyError,
   toActorPolicy,
@@ -121,7 +121,7 @@ export function createMockProfilePolicy(options: MockPolicyOptions = {}): Profil
         throw new PolicyError("ALREADY_EXISTS", "Target already has this setting", 409);
       }
       sequence += 1;
-      const body: ProfileRelationResponse = { id: `rel-mock-${sequence}`, profile_id: profileId, kind: mode, target, created_at: now().toISOString() };
+      const body: ProfileRelationResponse = { id: `rel-mock-${sequence}`, profile_id: profileId, kind: mode, target, target_actor: targetActorFor(target), created_at: now().toISOString() };
       profile.relations.set(body.id, body);
       if (mode === "block") detach(profile, (url) => url === target);
       return toActorPolicy(body);

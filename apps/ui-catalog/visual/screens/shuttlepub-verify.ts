@@ -1142,15 +1142,15 @@ async function verifyDomainContent(page: Page, viewport: Viewport) {
   await expect(page.getByTestId("hidden-post")).toHaveAttribute("data-mode", "block");
   await expect(content).not.toContainText("期間限定セール");
 
-  // 3-4 (S8): a quote of a muted post is hidden by the quoted domain; revealed, its
-  // target stays hidden and the quoter can be acted on.
+  // 3-4 (S8): a quote of a muted post is hidden whole by the quoted domain (cause QUOTE);
+  // one reveal shows the quote together with its target, and the quoter can be acted on.
   await page.goto("/posts/post-ken-quote", { waitUntil: "networkidle" });
   await expect(page.getByTestId("hidden-post")).toContainText("noisy.social");
   await expect(content).not.toContainText("これめちゃくちゃ分かる");
   await page.getByRole("button", { name: "この投稿だけ表示" }).click();
   await expect(content).toContainText("これめちゃくちゃ分かる");
-  await expect(content.getByTestId("quote")).toHaveAttribute("data-state", "hidden");
-  await expect(content).not.toContainText("プレイリスト");
+  await expect(content.getByTestId("quote")).toContainText("プレイリスト");
+  await expect(content.getByTestId("quote")).not.toHaveAttribute("data-state", "hidden");
   await expect(content.locator("[data-locked]")).toHaveCount(0);
 
   // 3-5: replies of controlled domains fold, then show one by one.

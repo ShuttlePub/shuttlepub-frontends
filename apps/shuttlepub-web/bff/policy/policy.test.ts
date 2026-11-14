@@ -186,6 +186,44 @@ describe("real adapter against Emumet wire format", () => {
     expect(relations.following.length).toBeGreaterThan(0);
   });
 
+  test("target_actor (Emumet #106) is kept in full for the list and the create answer alike; nothing is derived or invented", async () => {
+    const full = { kind: "local", actor_url: "https://shuttle.example/users/ren", status: "resolved", display_name: "Ren", icon_url: "https://shuttle.example/i/ren.png", acct: "ren@shuttle.example", preferred_username: "ren", profile_id: "pf-ren" };
+    const sparse = { kind: "remote", actor_url: "https://far.example/users/x", status: "pending" };
+    const failed = { kind: "remote", actor_url: "https://gone.example/users/y", status: "unavailable", display_name: null, icon_url: null, acct: null };
+    const wire = (id: string, kind: string, target_actor: { actor_url: string }) =>
+      ({ id, profile_id: P, kind, target: target_actor.actor_url, created_at: "2025-01-01T00:00:00Z", target_actor });
+    const real = createRealProfilePolicy({
+      baseUrl: "https://emumet.example", session: session("t"),
+      fetch: (async (url: URL, init?: RequestInit) => {
+        if (init?.method === "POST") return Response.json(wire("created", "block", sparse), { status: 201 });
+        return url.pathname.endsWith("/blocks")
+          ? Response.json({ items: [wire("full", "block", full), wire("failed", "block", failed)] })
+          : Response.json({ items: [wire("sparse", "mute", sparse)] });
+      }) as never,
+    });
+    const list = await real.listActorPolicies(P);
+    const byId = (id: string) => list.find((item) => item.id === id)!;
+    expect(byId("full").targetActor).toEqual({
+      kind: "local", actorUrl: "https://shuttle.example/users/ren", status: "resolved", displayName: "Ren",
+      iconUrl: "https://shuttle.example/i/ren.png", acct: "ren@shuttle.example", preferredUsername: "ren", profileId: "pf-ren",
+    });
+    expect(byId("sparse").targetActor).toEqual({
+      kind: "remote", actorUrl: "https://far.example/users/x", status: "pending",
+      displayName: null, iconUrl: null, acct: null, preferredUsername: null, profileId: null,
+    });
+    expect(byId("failed").targetActor).toMatchObject({ status: "unavailable", displayName: null, acct: null });
+    const created = await real.createActorPolicy(P, "block", "https://far.example/users/x");
+    expect(created.targetActor).toEqual(byId("sparse").targetActor);
+  });
+
+  test("a relation answer without target_actor violates the pinned contract and is rejected", async () => {
+    const real = createRealProfilePolicy({
+      baseUrl: "https://emumet.example", session: session("t"),
+      fetch: (async () => Response.json({ items: [{ id: "a", profile_id: P, kind: "block", target: "https://x.example/users/a", created_at: "2025-01-01T00:00:00Z" }] })) as never,
+    });
+    await rejects(real.listActorPolicies(P), "INVALID_UPSTREAM_RESPONSE");
+  });
+
   test("Profile ownership is Emumet's: another owner's Profile is 403, never data", async () => {
     const { real } = setup();
     await rejects(real.listDomainControls("someone-else"), "FORBIDDEN");
@@ -225,7 +263,10 @@ describe("real adapter against Emumet wire format", () => {
   test("POST of an existing individual block is ALREADY_EXISTS; list pages are exhausted and cursor loops rejected", async () => {
     const conflict = createRealProfilePolicy({ baseUrl: "https://emumet.example", session: session("t"), fetch: (async () => new Response(null, { status: 409 })) as never });
     await rejects(conflict.createActorPolicy(P, "block", "https://x.example/users/a"), "ALREADY_EXISTS");
-    const relation = (id: string) => ({ id, profile_id: P, kind: "block", target: `https://x.example/users/${id}`, created_at: "2025-01-01T00:00:00Z" });
+    const relation = (id: string) => ({
+      id, profile_id: P, kind: "block", target: `https://x.example/users/${id}`, created_at: "2025-01-01T00:00:00Z",
+      target_actor: { kind: "remote", actor_url: `https://x.example/users/${id}`, status: "pending" },
+    });
     let loop = false;
     const cursors: (string | null)[] = [];
     const paged = createRealProfilePolicy({
@@ -337,12 +378,25 @@ describe("GraphQL policy API", () => {
     const list = async () => (await run("query($p: ID!) { actorPolicies(profile: $p) { id mode actorUrl } }", { p: "account-a" })).data!.actorPolicies as { id: string; mode: string; actorUrl: string }[];
     const before = await list();
     expect(before).toHaveLength(4);
+    // list and create answers both carry the target's display information (#106).
+    const TARGET = "targetActor { kind actorUrl status displayName iconUrl acct preferredUsername profileId }";
+    const listed = (await run(`query($p: ID!) { actorPolicies(profile: $p) { actorUrl ${TARGET} } }`, { p: "account-a" })).data!.actorPolicies as { actorUrl: string; targetActor: Record<string, unknown> }[];
+    expect(listed.find((item) => item.actorUrl.endsWith("/loud"))!.targetActor).toEqual({
+      kind: "REMOTE", actorUrl: "https://chat.example/users/loud", status: "RESOLVED", displayName: "Loud", iconUrl: null, acct: "loud@chat.example", preferredUsername: "loud", profileId: null,
+    });
+    expect(listed.find((item) => item.actorUrl.endsWith("/ad_bot"))!.targetActor).toMatchObject({ status: "PENDING", displayName: null, acct: null });
+    expect(listed.find((item) => item.actorUrl.endsWith("/spoiler"))!.targetActor).toMatchObject({ status: "UNAVAILABLE" });
+
     const loud = before.find((item) => item.actorUrl.endsWith("/loud"))!;
     expect((await run("mutation($p: ID!, $id: ID!) { removeActorPolicy(profile: $p, id: $id, mode: MUTE) { key } }", { p: "account-a", id: loud.id })).data).toEqual({ removeActorPolicy: { key: loud.id } });
     expect((await list()).some((item) => item.id === loud.id)).toBe(false);
     const undo = await run("mutation($p: ID!, $a: String!) { addActorPolicy(profile: $p, actorUrl: $a, mode: MUTE) { mode actorUrl } }", { p: "account-a", a: loud.actorUrl });
     expect(undo.data!.addActorPolicy).toEqual({ mode: "MUTE", actorUrl: loud.actorUrl });
     expect((await run("mutation($p: ID!, $a: String!) { addActorPolicy(profile: $p, actorUrl: $a, mode: MUTE) { mode } }", { p: "account-a", a: loud.actorUrl })).errors![0]!.extensions!.code).toBe("ALREADY_EXISTS");
+    const created = await run(`mutation($p: ID!, $a: String!) { addActorPolicy(profile: $p, actorUrl: $a, mode: BLOCK) { ${TARGET} } }`, { p: "account-a", a: "https://never-seen.example/users/z" });
+    expect(created.data!.addActorPolicy).toEqual({ targetActor: {
+      kind: "REMOTE", actorUrl: "https://never-seen.example/users/z", status: "PENDING", displayName: null, iconUrl: null, acct: null, preferredUsername: null, profileId: null,
+    } });
   });
 
   test("real mode errors keep their code through GraphQL", async () => {

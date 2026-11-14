@@ -6,6 +6,7 @@
 // the mock data and the live backend are held to the same pinned contract.
 
 import { Ajv2020, type ValidateFunction } from "ajv/dist/2020.js";
+import { parseRfc3339 } from "./rfc3339.ts";
 import emumetDocument from "../../openapi/emumet.json" with { type: "json" };
 import openapiDocument from "../../openapi/shuttlepub.json" with { type: "json" };
 
@@ -46,6 +47,8 @@ function createAjv(document: unknown, documentId: string): Ajv2020 {
   ajv.addFormat("float", { type: "number", validate: () => true });
   ajv.addFormat("double", { type: "number", validate: () => true });
   ajv.addFormat("uuid", /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
+  // RFC 3339 date-time (the search contract's created_at): a real calendar day and a time with an explicit offset.
+  ajv.addFormat("date-time", { type: "string", validate: (value: string) => parseRfc3339(value) !== null });
   ajv.addSchema(document as object, documentId);
   return ajv;
 }

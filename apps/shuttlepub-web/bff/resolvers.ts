@@ -5,7 +5,7 @@ import { PolicyError, type ProfilePolicySource } from "./policy/source.ts";
 import type { ProfileContextSource } from "./profile.ts";
 import { ShuttlePubApiError, type ShuttlePubApi, type ShuttlePubApiErrorKind, type ViewerAuth } from "./rest/client.ts";
 import type { DomainControlRef } from "./rest/content.ts";
-import type { ContentControl, ContentViewer, Post, PostOperations, PostView, PostVisibility, QuotedPost, TimelineKind, UserPage } from "./rest/posts.ts";
+import type { ContentControl, ContentViewer, HiddenContent, Post, PostOperations, PostReactionCounts, PostView, PostVisibility, QuotedPost, TimelineKind, UserPage } from "./rest/posts.ts";
 import type { EmojiRef, EmojiView } from "./rest/quick-reaction.ts";
 import type { ReactionGroup } from "./rest/reactions.ts";
 
@@ -25,6 +25,8 @@ export const ERROR_CODES: Record<ShuttlePubApiErrorKind, string> = {
   upstream_error: "UPSTREAM_ERROR",
   revision_conflict: "REVISION_CONFLICT",
   emoji_unavailable: "EMOJI_UNAVAILABLE",
+  emoji_usage_not_allowed: "EMOJI_USAGE_NOT_ALLOWED",
+  conflict: "CONFLICT",
   unavailable: "UPSTREAM_UNAVAILABLE",
   invalid_response: "INVALID_UPSTREAM_RESPONSE",
 };
@@ -86,7 +88,7 @@ function postOut(post: Post): unknown {
 }
 
 function quotedOut(quoted: QuotedPost): unknown {
-  return { post: quoted.post === null ? null : postOut(quoted.post), hidden: controlOut(quoted.hidden), restriction: restrictionOut(quoted.restriction) };
+  return { post: quoted.post === null ? null : postOut(quoted.post), restriction: restrictionOut(quoted.restriction) };
 }
 
 const operationsOut = (operations: PostOperations | null) => operations === null ? null : {
@@ -97,12 +99,19 @@ const operationsOut = (operations: PostOperations | null) => operations === null
   emojiReaction: controlOut(operations.emojiReaction),
 };
 
+const hiddenOut = (hidden: HiddenContent | null) =>
+  hidden === null ? null : { cause: hidden.cause.toUpperCase(), control: controlOut(hidden.control) };
+
+const reactionCountsOut = (counts: PostReactionCounts | null) =>
+  counts === null ? null : { likes: counts.likes, emoji: counts.emoji.map((chip) => ({ emoji: toEmoji(chip.emoji), count: chip.count })) };
+
 const viewOut = (view: PostView) => ({
   id: view.id,
   post: view.post === null ? null : postOut(view.post),
-  hidden: controlOut(view.hidden),
+  hidden: hiddenOut(view.hidden),
   restriction: restrictionOut(view.restriction),
   operations: operationsOut(view.operations),
+  reactionCounts: reactionCountsOut(view.reactionCounts),
 });
 
 const userPageOut = (page: UserPage) => ({
@@ -131,6 +140,9 @@ export const toEmoji = (view: EmojiView) => ({
   imageUrl: view.image_url ?? null,
   available: view.availability === "available",
   unavailableReason: view.unavailable_reason == null ? null : view.unavailable_reason.toUpperCase(),
+  origin: view.origin ?? null,
+  imageState: view.image_state == null ? null : view.image_state.toUpperCase(),
+  usage: view.usage == null ? null : view.usage.toUpperCase(),
 });
 
 const toGroup = (group: ReactionGroup) => ({ emoji: toEmoji(group.emoji), count: group.count, reactors: group.reactors });

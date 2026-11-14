@@ -40,7 +40,7 @@ is captured at 1280×900 and 390×844, at device scale 1, with a full-page scree
   D08 mute/block settings (domains, accounts, block confirmation) come from the BFF's stateful mock and
   require the `mute-block-settings` feature (marker on /settings/mute-block/domains).
   D08 second stage (`domain-*`: post menu, a muted domain's post opened by URL, a blocked one revealed with
-  locked operations and its 4-1 sheet, a revealed quote whose target stays hidden, folded replies opened,
+  locked operations and its 4-1 sheet, a revealed quote showing its target, folded replies opened,
   a blocked person's page hidden / revealed, a hidden quote in another person's list) requires the `domain-content` feature (marker on
   /users/deals%40bot-farm.example); `shuttlepub-verify.ts` drives the same screens by keyboard.
 - Booskiff: login, populated Drive, empty Drive, selected folder, file detail, 404.

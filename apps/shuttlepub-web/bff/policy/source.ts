@@ -14,7 +14,30 @@ export type ProfileRelationResponse = components["schemas"]["ProfileRelationResp
 export type ProfileRelationListResponse = components["schemas"]["ProfileRelationListResponse"];
 export type ProfileFollowListResponse = components["schemas"]["ProfileFollowListResponse"];
 export type ProfileFollowerListResponse = components["schemas"]["ProfileFollowerListResponse"];
+export type ProfileRelationActorResponse = components["schemas"]["ProfileRelationActor"];
 export type PolicyMode = "mute" | "block";
+
+/**
+ * Display information of the target of an individual mute/block (Emumet ProfileRelationActor),
+ * served from the Profile (local) or a server-side cache (remote); the list never contacts a
+ * remote server. Absent fields stay null: nothing is derived from the actor URL. A `pending`
+ * (fetch started) or `unavailable` (fetch failed) remote target has no name/icon/acct and the UI
+ * falls back to the actor URL; `resolved` may still lack some of them.
+ */
+export type TargetActor = {
+  kind: "local" | "remote";
+  /** Canonical actor URL; always equal to the policy's actorUrl. */
+  actorUrl: string;
+  status: "resolved" | "pending" | "unavailable";
+  displayName: string | null;
+  /** Absolute http(s) URL of the avatar, loaded by the browser directly. */
+  iconUrl: string | null;
+  /** preferred_username@host without a leading @. */
+  acct: string | null;
+  preferredUsername: string | null;
+  /** Profile nanoid; present only when kind is local. */
+  profileId: string | null;
+};
 
 export type DomainControl = {
   domain: string;
@@ -27,8 +50,10 @@ export type DomainControl = {
 export type ActorPolicy = {
   id: string;
   mode: PolicyMode;
-  /** Canonical actor URL of the target. Emumet exposes no name/icon/acct for it. */
+  /** Canonical actor URL of the target. */
   actorUrl: string;
+  /** Display information of the target (list and create answers alike). */
+  targetActor: TargetActor;
   createdAt: string;
 };
 
@@ -80,6 +105,19 @@ export function toDomainControl(body: DomainControlResponse): DomainControl {
   return { domain: body.domain, mode: body.mode, revision: body.revision, createdAt: body.created_at, updatedAt: body.updated_at };
 }
 
+export function toTargetActor(body: ProfileRelationActorResponse): TargetActor {
+  return {
+    kind: body.kind,
+    actorUrl: body.actor_url,
+    status: body.status,
+    displayName: body.display_name ?? null,
+    iconUrl: body.icon_url ?? null,
+    acct: body.acct ?? null,
+    preferredUsername: body.preferred_username ?? null,
+    profileId: body.profile_id ?? null,
+  };
+}
+
 export function toActorPolicy(body: ProfileRelationResponse): ActorPolicy {
-  return { id: body.id, mode: body.kind, actorUrl: body.target, createdAt: body.created_at };
+  return { id: body.id, mode: body.kind, actorUrl: body.target, targetActor: toTargetActor(body.target_actor), createdAt: body.created_at };
 }

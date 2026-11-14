@@ -54,6 +54,11 @@ export function fakeEmumetFetch(options: FakeEmumetOptions) {
         const mode: PolicyMode = resource === "blocks" ? "block" : "mute";
         const wire = (item: Awaited<ReturnType<ProfilePolicySource["createActorPolicy"]>>) => ({
           id: item.id, profile_id: profileId, kind: item.mode, target: item.actorUrl, created_at: item.createdAt,
+          target_actor: {
+            kind: item.targetActor.kind, actor_url: item.targetActor.actorUrl, status: item.targetActor.status,
+            display_name: item.targetActor.displayName, icon_url: item.targetActor.iconUrl, acct: item.targetActor.acct,
+            preferred_username: item.targetActor.preferredUsername, profile_id: item.targetActor.profileId,
+          },
         });
         if (key === undefined && method === "GET") {
           return Response.json({ items: (await policy.listActorPolicies(profileId)).filter((item) => item.mode === mode).map(wire), next_cursor: null });

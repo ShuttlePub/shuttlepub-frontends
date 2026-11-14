@@ -126,6 +126,7 @@ problemText :: ApiError -> String
 problemText = case _ of
   RevisionConflict _ -> "別の端末で変更されたため、保存されている内容を表示しています"
   EmojiUnavailable _ -> "利用できない絵文字は追加できません"
+  EmojiUsageNotAllowed _ -> "他サーバーの絵文字は常用絵文字に追加できません"
   error -> "保存できませんでした（" <> Error.describe error <> "）"
 
 -- Post card -----------------------------------------------------------------------

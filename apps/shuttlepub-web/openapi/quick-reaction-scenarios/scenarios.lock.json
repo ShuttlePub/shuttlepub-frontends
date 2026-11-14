@@ -1,7 +1,7 @@
 {
   "producer": {
     "repository": "ShuttlePub/ShuttlePub",
-    "commit": "60cb47d60da3c5b4ff3fc570fe3bc1796f983b3b",
+    "commit": "a00d234aedecb0223ba20dc8d7e9334cf9d39e83",
     "path": "server/tests/fixtures/quick_reaction/scenarios"
   },
   "files": [
@@ -24,6 +24,51 @@
       "file": "reaction_put_unavailable_keeps_previous.json",
       "sha256": "59d47cb102a9940b3b34fd6f79aebf69826ab4415295cf17df96accb6d63be4a",
       "bytes": 2182
+    },
+    {
+      "file": "remote_emoji_is_never_a_favorite.json",
+      "sha256": "6f958fdbf05584dfe12f256c5c3bdb6a42bf3b852dfb0edbb77c286306ea56c7",
+      "bytes": 3692
+    },
+    {
+      "file": "remote_reaction_checks_availability_first.json",
+      "sha256": "fc9ffc2bc34789312b5311d649887be22853e827fa9f7e1b5425a5e5f33456f7",
+      "bytes": 3534
+    },
+    {
+      "file": "remote_reaction_image_missing_is_still_sendable.json",
+      "sha256": "cfe0b83337f59c16709e063a8d23a0dc42385f53ad9fd9a57a0977e9635cdc64",
+      "bytes": 2965
+    },
+    {
+      "file": "remote_reaction_only_own_chip_disappears_after_delete.json",
+      "sha256": "24e530936be1dc12395d773423e59ec9ff4508bb590fbfc98b468fea53ea8c55",
+      "bytes": 2791
+    },
+    {
+      "file": "remote_reaction_piggyback_lifecycle.json",
+      "sha256": "3b91e916c960d864fcc810311ebc15bf14620f76208832cea99b08c64db68184",
+      "bytes": 5051
+    },
+    {
+      "file": "remote_reaction_repeat_precedes_chip_rule.json",
+      "sha256": "d5e6762db14b520026a92fe89ad8b46c82a0177f087161fa233517398e478abe",
+      "bytes": 3030
+    },
+    {
+      "file": "remote_reaction_while_reacted_is_a_conflict.json",
+      "sha256": "1e58d40aaa5f522252350d77bc7d055d97eccac520d762aa248acb2e976c44c1",
+      "bytes": 3700
+    },
+    {
+      "file": "remote_reaction_without_chip_is_refused.json",
+      "sha256": "a857f3d5caaba2b74a26c6a7304ca1d2380b1a4812f5dfb4bf8776557862024a",
+      "bytes": 2449
+    },
+    {
+      "file": "remote_rules_leave_local_replacement_alone.json",
+      "sha256": "e54cf08dc1890d68bcede5a9c971b2663229ff6766b85645bc04420741b0fd7c",
+      "bytes": 2824
     },
     {
       "file": "settings_clear_favorites.json",

@@ -1,6 +1,9 @@
 module App.Post
   ( Author
   , Control
+  , Hidden
+  , ReactionChip
+  , ReactionCounts
   , Operations
   , Post
   , PostView
@@ -31,7 +34,9 @@ import Data.Generic.Rep (class Generic)
 import Data.Maybe (Maybe(..))
 import Data.Newtype (class Newtype)
 import Data.Show.Generic (genericShow)
+import App.Emoji (Emoji)
 import Generated.Schema.Gql.Enum.ContentRestriction (ContentRestriction)
+import Generated.Schema.Gql.Enum.HiddenCause (HiddenCause)
 import Generated.Schema.Gql.Enum.PolicyMode (PolicyMode)
 
 -- | PROVISIONAL post shapes mirroring the app-owned SDL (bff/schema.graphql). What a
@@ -67,9 +72,21 @@ type Post =
 -- | revision). It says nothing else about the item it hides.
 type Control = { mode :: PolicyMode, domain :: String, revision :: Int }
 
--- | A quote's target (S8 EmbeddedNotePresentation): exactly one field is set. Revealing
--- | the quote never reveals a hidden target.
-newtype Quoted = Quoted { post :: Maybe Post, hidden :: Maybe Control, restriction :: Maybe ContentRestriction }
+-- | Why and by which control a post is hidden (S8 HiddenContent). DIRECT: its own author's
+-- | domain is controlled; QUOTE: it quotes a note of a controlled domain and the control is
+-- | the quoted source's. Specific to hidden posts: Control itself stays cause-free.
+type Hidden = { cause :: HiddenCause, control :: Control }
+
+-- | A chip of the note's reactions (S8 EmojiReactionCount): the emoji with its view data
+-- | (origin, image state, usage) and how many reacted.
+type ReactionChip = { emoji :: Emoji, count :: Int }
+
+-- | S8 ReactionCounts of a visible note: accepted historical counts.
+type ReactionCounts = { likes :: Int, emoji :: Array ReactionChip }
+
+-- | A revealed quote's target (S8 EmbeddedNotePresentation): exactly one field is set.
+-- | There is no hidden variant: a controlled target hides the whole quote (Hidden QUOTE).
+newtype Quoted = Quoted { post :: Maybe Post, restriction :: Maybe ContentRestriction }
 
 derive instance Newtype Quoted _
 -- Written out (eta-expanded): Post contains Quoted, so derived instances would refer
@@ -86,7 +103,7 @@ instance EncodeJson Quoted where
 instance DecodeJson Quoted where
   decodeJson json = Quoted <$> decodeJson json
 
-quotedOf :: Post -> Maybe { post :: Maybe Post, hidden :: Maybe Control, restriction :: Maybe ContentRestriction }
+quotedOf :: Post -> Maybe { post :: Maybe Post, restriction :: Maybe ContentRestriction }
 quotedOf post = map (\(Quoted q) -> q) post.quoted
 
 -- | S8 PostOperationAvailability: Nothing = not refused by a domain block, Just = the
@@ -107,9 +124,10 @@ allowedOperations = { reply: Nothing, quote: Nothing, repost: Nothing, like: Not
 type PostView =
   { id :: String
   , post :: Maybe Post
-  , hidden :: Maybe Control
+  , hidden :: Maybe Hidden
   , restriction :: Maybe ContentRestriction
   , operations :: Maybe Operations
+  , reactionCounts :: Maybe ReactionCounts
   }
 
 -- | A person's page (ui-spec 3-6). posts is empty while hidden is set.

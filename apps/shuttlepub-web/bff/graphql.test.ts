@@ -63,7 +63,7 @@ describe("mock mode", () => {
   });
 
   test("post detail returns the post and its replies, and null for an unknown id", async () => {
-    const detail = await run(app, `{ postView(profile: "${PROFILE}", id: "post-sora-zine") { id post { id text } } replies(profile: "${PROFILE}", postId: "post-sora-zine") { id post { inReplyToId } hidden { domain } } }`);
+    const detail = await run(app, `{ postView(profile: "${PROFILE}", id: "post-sora-zine") { id post { id text } } replies(profile: "${PROFILE}", postId: "post-sora-zine") { id post { inReplyToId } hidden { control { domain } } } }`);
     expect(detail.errors).toBeUndefined();
     expect((detail.data!.postView as { post: { id: string } }).post.id).toBe("post-sora-zine");
     expect((detail.data!.replies as { id: string }[]).map((reply) => reply.id))

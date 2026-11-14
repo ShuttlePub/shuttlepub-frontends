@@ -8,10 +8,15 @@ import Generated.Directives.Gql (Directives)
 import Generated.Schema.Gql.Enum.ApiMode (ApiMode)
 import Generated.Schema.Gql.Enum.ContentRestriction (ContentRestriction)
 import Generated.Schema.Gql.Enum.DomainInputError (DomainInputError)
+import Generated.Schema.Gql.Enum.EmojiImageState (EmojiImageState)
 import Generated.Schema.Gql.Enum.EmojiKind (EmojiKind)
 import Generated.Schema.Gql.Enum.EmojiUnavailableReason (EmojiUnavailableReason)
+import Generated.Schema.Gql.Enum.EmojiUsage (EmojiUsage)
+import Generated.Schema.Gql.Enum.HiddenCause (HiddenCause)
 import Generated.Schema.Gql.Enum.PolicyMode (PolicyMode)
 import Generated.Schema.Gql.Enum.PostVisibility (PostVisibility)
+import Generated.Schema.Gql.Enum.RelationActorKind (RelationActorKind)
+import Generated.Schema.Gql.Enum.RelationActorStatus (RelationActorStatus)
 import Generated.Schema.Gql.Enum.TimelineKind (TimelineKind)
 import GraphQL.Client.Args (NotNull)
 import GraphQL.Client.AsGql (AsGql)
@@ -204,6 +209,38 @@ newtype Profile = Profile
   }
 
 derive instance Data.Newtype.Newtype Profile _
+-- | Display information of the target of an individual mute/block (Emumet ProfileRelationActor),
+-- | served from the Profile (local) or a server-side cache; the list never contacts a remote server.
+-- | Absent fields are null and never derived from actorUrl: a PENDING (fetch started) or UNAVAILABLE
+-- | target has no name/icon/acct and the UI falls back to actorUrl.
+newtype RelationActor = RelationActor
+  { displayName :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , kind :: {} -> AsGql "RelationActorKind" RelationActorKind
+  , preferredUsername :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , status :: {} -> AsGql "RelationActorStatus" RelationActorStatus
+  , iconUrl ::
+      {}
+      ->
+      -- | Absolute http(s) URL of the avatar, loaded by the browser directly.
+      AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , actorUrl ::
+      {}
+      ->
+      -- | Canonical actor URL; always equal to the policy's actorUrl.
+      AsGql "String" String
+  , profileId ::
+      {}
+      ->
+      -- | Profile nanoid; set only when kind is LOCAL.
+      AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , acct ::
+      {}
+      ->
+      -- | preferred_username@host without a leading @.
+      AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  }
+
+derive instance Data.Newtype.Newtype RelationActor _
 -- | Exact-match domain control of the selected Profile (Emumet domain-controls). domain is
 -- | Emumet's normalized form; example.com does not cover sub.example.com.
 newtype DomainControl = DomainControl
@@ -226,12 +263,13 @@ newtype DomainBlockImpact = DomainBlockImpact
   }
 
 derive instance Data.Newtype.Newtype DomainBlockImpact _
--- | Individual mute/block of the selected Profile. Emumet exposes only the target's canonical actor URL.
+-- | Individual mute/block of the selected Profile (list and create answers alike carry targetActor).
 newtype ActorPolicy = ActorPolicy
   { actorUrl :: {} -> AsGql "String" String
   , createdAt :: {} -> AsGql "String" String
   , id :: {} -> AsGql "ID" GraphQL.Client.ID.ID
   , mode :: {} -> AsGql "PolicyMode" PolicyMode
+  , targetActor :: {} -> AsGql "RelationActor" RelationActor
   }
 
 derive instance Data.Newtype.Newtype ActorPolicy _
@@ -244,6 +282,11 @@ newtype Emoji = Emoji
       -> AsGql "EmojiUnavailableReason"
            (Data.Maybe.Maybe (AsGql "EmojiUnavailableReason" EmojiUnavailableReason))
   , value :: {} -> AsGql "String" String
+  , imageState ::
+      {}
+      ->
+      -- | Custom emoji only (null for Unicode). PRESENT goes with imageUrl; MISSING means show :shortcode:.
+      AsGql "EmojiImageState" (Data.Maybe.Maybe (AsGql "EmojiImageState" EmojiImageState))
   , imageUrl ::
       {}
       ->
@@ -253,6 +296,16 @@ newtype Emoji = Emoji
       {}
       ->
       -- | Custom emoji only, without colons.
+      AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , usage ::
+      {}
+      ->
+      -- | Custom emoji only; null means ANYWHERE (Unicode). An external emoji is EXISTING_REACTION_ONLY.
+      AsGql "EmojiUsage" (Data.Maybe.Maybe (AsGql "EmojiUsage" EmojiUsage))
+  , origin ::
+      {}
+      ->
+      -- | Originating domain of an external custom emoji; null for Unicode and this server's own emoji, so a value is the external mark.
       AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
   }
 
@@ -278,15 +331,17 @@ newtype NoteReaction = NoteReaction
 
 derive instance Data.Newtype.Newtype NoteReaction _
 -- | One post seen directly (S8 DirectNoteResponse), by its provisional id. Exactly one of post /
--- | hidden / restriction is set. hidden carries only the control (no text, author or quote).
--- | operations accompany a visible or restricted post; a reveal never clears a block.
+-- | hidden / restriction is set. hidden carries only the cause and the control (no text, author
+-- | or quote). operations accompany a visible or restricted post; a reveal never clears a block.
+-- | reactionCounts accompany a visible post.
 newtype PostView = PostView
-  { hidden ::
-      {} -> AsGql "ContentControl" (Data.Maybe.Maybe (AsGql "ContentControl" ContentControl))
+  { hidden :: {} -> AsGql "HiddenContent" (Data.Maybe.Maybe (AsGql "HiddenContent" HiddenContent))
   , id :: {} -> AsGql "ID" GraphQL.Client.ID.ID
   , operations ::
       {} -> AsGql "PostOperations" (Data.Maybe.Maybe (AsGql "PostOperations" PostOperations))
   , post :: {} -> AsGql "Post" (Data.Maybe.Maybe (AsGql "Post" Post))
+  , reactionCounts ::
+      {} -> AsGql "ReactionCounts" (Data.Maybe.Maybe (AsGql "ReactionCounts" ReactionCounts))
   , restriction ::
       {}
       -> AsGql "ContentRestriction" (Data.Maybe.Maybe (AsGql "ContentRestriction" ContentRestriction))
@@ -398,17 +453,28 @@ newtype DomainInputCheck = DomainInputCheck
   }
 
 derive instance Data.Newtype.Newtype DomainInputCheck _
--- | S8 EmbeddedNotePresentation of a quote's target: exactly one of post / hidden / restriction.
+-- | S8 EmbeddedNotePresentation of a revealed quote's target: exactly one of post / restriction.
+-- | There is no hidden variant: a controlled target hides the whole quote (HiddenContent QUOTE).
 newtype QuotedPost = QuotedPost
-  { hidden ::
-      {} -> AsGql "ContentControl" (Data.Maybe.Maybe (AsGql "ContentControl" ContentControl))
-  , post :: {} -> AsGql "Post" (Data.Maybe.Maybe (AsGql "Post" Post))
+  { post :: {} -> AsGql "Post" (Data.Maybe.Maybe (AsGql "Post" Post))
   , restriction ::
       {}
       -> AsGql "ContentRestriction" (Data.Maybe.Maybe (AsGql "ContentRestriction" ContentRestriction))
   }
 
 derive instance Data.Newtype.Newtype QuotedPost _
+-- | S8 EmojiReactionCount: a chip of the note's reactions. emoji carries the chip's view data (origin, image state, usage).
+newtype ReactionChip = ReactionChip
+  { count :: {} -> AsGql "Int" Int, emoji :: {} -> AsGql "Emoji" Emoji }
+
+derive instance Data.Newtype.Newtype ReactionChip _
+-- | S8 NotePresentation hidden: the cause and the control that caused it. Only a hidden note carries a cause (ContentControl elsewhere has none).
+newtype HiddenContent = HiddenContent
+  { cause :: {} -> AsGql "HiddenCause" HiddenCause
+  , control :: {} -> AsGql "ContentControl" ContentControl
+  }
+
+derive instance Data.Newtype.Newtype HiddenContent _
 -- | S8 PostOperationAvailability (domain part only): null = not refused by a domain block; set = the block that refuses it.
 newtype PostOperations = PostOperations
   { emojiReaction ::
@@ -421,6 +487,11 @@ newtype PostOperations = PostOperations
   }
 
 derive instance Data.Newtype.Newtype PostOperations _
+-- | S8 ReactionCounts of a visible note: accepted historical counts (not reduced by a block).
+newtype ReactionCounts = ReactionCounts
+  { emoji :: {} -> Array (AsGql "ReactionChip" ReactionChip), likes :: {} -> AsGql "Int" Int }
+
+derive instance Data.Newtype.Newtype ReactionCounts _
 -- | The Profile the viewer is currently acting as. Null when there is none.
 newtype ProfileContext = ProfileContext
   { activeProfile :: {} -> AsGql "Profile" (Data.Maybe.Maybe (AsGql "Profile" Profile)) }

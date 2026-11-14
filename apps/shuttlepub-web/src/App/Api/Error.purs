@@ -23,6 +23,11 @@ data ApiError
   | UpstreamError String
   | RevisionConflict String
   | EmojiUnavailable String
+  -- | 422 emoji_usage_not_allowed: an external emoji is only usable as an existing
+  -- | reaction (never a favourite, nor without the Note's chip of it).
+  | EmojiUsageNotAllowed String
+  -- | 409 conflict: an external emoji while the Profile already has a reaction on the Note.
+  | Conflict String
   | Unavailable String
   | InvalidResponse String
   | NetworkError String
@@ -50,6 +55,8 @@ fromGqlCode code message = case code of
   Just "UPSTREAM_ERROR" -> UpstreamError message
   Just "REVISION_CONFLICT" -> RevisionConflict message
   Just "EMOJI_UNAVAILABLE" -> EmojiUnavailable message
+  Just "EMOJI_USAGE_NOT_ALLOWED" -> EmojiUsageNotAllowed message
+  Just "CONFLICT" -> Conflict message
   Just "UPSTREAM_UNAVAILABLE" -> Unavailable message
   Just "INVALID_UPSTREAM_RESPONSE" -> InvalidResponse message
   _ -> Unexpected message
@@ -78,6 +85,8 @@ describe = case _ of
   UpstreamError message -> "Backend error: " <> message
   RevisionConflict _ -> "Changed on another device"
   EmojiUnavailable _ -> "Emoji is unavailable"
+  EmojiUsageNotAllowed _ -> "Emoji cannot be used this way"
+  Conflict _ -> "Conflicts with the current reaction"
   Unavailable message -> "Backend unavailable: " <> message
   InvalidResponse message -> "Invalid backend response: " <> message
   NetworkError message -> "Network error: " <> message
@@ -94,6 +103,8 @@ tag = case _ of
   UpstreamError _ -> "upstream_error"
   RevisionConflict _ -> "revision_conflict"
   EmojiUnavailable _ -> "emoji_unavailable"
+  EmojiUsageNotAllowed _ -> "emoji_usage_not_allowed"
+  Conflict _ -> "conflict"
   Unavailable _ -> "unavailable"
   InvalidResponse _ -> "invalid_response"
   NetworkError _ -> "network_error"

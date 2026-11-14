@@ -14,10 +14,16 @@
 //  - settings: ordered favourites, at most 5, pairwise distinct; never-saved = rev 0.
 //    PUT replaces the list; an equal list is an idempotent 200 whatever
 //    expected_revision is; otherwise a stale revision is 409 revision_conflict; an
-//    unavailable emoji may be kept but not newly added (422 emoji_unavailable).
-//  - reaction: one per Profile and Note. PUT checks availability first (422 even
-//    for the emoji already selected), then replaces. DELETE is always 200 with
-//    emoji null, also when the selected emoji has become unavailable.
+//    unavailable emoji may be kept but not newly added (422 emoji_unavailable);
+//    an external emoji (usage existing_reaction_only) is never a favourite (422
+//    emoji_usage_not_allowed, checked after availability).
+//  - reaction: one per Profile and Note. PUT applies, first match answering: 1 an
+//    unavailable emoji is 422 emoji_unavailable (even the one already selected); 2 the
+//    emoji is the current selection: 200 no-op; 3 an external emoji with no chip of the
+//    same emoji on the Note: 422 emoji_usage_not_allowed; 4 an external emoji while
+//    reacted with another emoji: 409 conflict (no replacement); 5 select/replace.
+//    DELETE is always 200 with emoji null, also when the selected emoji has become
+//    unavailable.
 
 import type { components } from "./generated/shuttlepub-api.ts";
 
@@ -25,6 +31,8 @@ export type EmojiRef = components["schemas"]["EmojiRef"];
 export type EmojiView = components["schemas"]["EmojiView"];
 export type EmojiAvailability = components["schemas"]["EmojiAvailability"];
 export type EmojiUnavailableReason = components["schemas"]["EmojiUnavailableReason"];
+export type EmojiImageState = components["schemas"]["EmojiImageState"];
+export type EmojiUsage = components["schemas"]["EmojiUsage"];
 export type QuickReactionSettings = components["schemas"]["QuickReactionSettings"];
 export type UpdateQuickReactionSettings = components["schemas"]["UpdateQuickReactionSettings"];
 export type ReactionState = components["schemas"]["ReactionState"];
@@ -63,6 +71,10 @@ export type CustomEmojiSetup = {
   image_url?: string;
   availability: EmojiAvailability;
   reason?: EmojiUnavailableReason;
+  /** Originating domain of an external emoji (absent for this server's own emoji). */
+  origin?: string;
+  image_state?: EmojiImageState;
+  usage?: EmojiUsage;
 };
 
 export type StoredSettings = { revision: number; favorites: EmojiRef[] };
@@ -78,6 +90,8 @@ export type QuickReactionSetup = {
   settings?: Record<string, StoredSettings>;
   /** Selected reaction per Profile and Note. */
   reactions?: readonly { profile: string; note: string; emoji: EmojiRef }[];
+  /** Chips on a Note carried by people outside the modelled Profiles (besides their selections). */
+  chips?: readonly { note: string; emoji: EmojiRef }[];
 };
 
 /** A REST answer: HTTP status and its JSON body. */
@@ -144,6 +158,15 @@ const unavailable = (fields: string[]): RestReply => ({
   ),
 });
 
+const usageNotAllowed = (fields: string[]): RestReply => ({
+  status: 422,
+  body: errorBody(
+    "emoji_usage_not_allowed",
+    "an external emoji can only be used from an existing reaction",
+    fields.map((field) => fieldViolation(field, "an external emoji can only be used from an existing reaction")),
+  ),
+});
+
 export function revisionConflict(currentRevision: number): RevisionConflictBody {
   return {
     code: "revision_conflict",
@@ -164,6 +187,7 @@ export class QuickReactionStore {
   private emoji = new Map<string, CustomEmojiSetup>();
   private settings = new Map<string, StoredSettings>();
   private reactions = new Map<string, { profile: string; note: string; emoji: EmojiRef }>();
+  private chips: { note: string; emoji: EmojiRef }[] = [];
   private profiles = new Set<string>();
   private notes = new Set<string>();
 
@@ -178,6 +202,7 @@ export class QuickReactionStore {
     this.emoji = new Map(Object.entries(setup.emoji));
     this.settings = new Map(Object.entries(setup.settings ?? {}));
     this.reactions = new Map((setup.reactions ?? []).map((entry) => [reactionKey(entry.profile, entry.note), entry]));
+    this.chips = [...(setup.chips ?? [])];
     this.profiles = new Set(setup.profiles);
     this.notes = new Set(setup.notes);
   }
@@ -188,8 +213,22 @@ export class QuickReactionStore {
     entry.availability = availability;
     if (reason) entry.reason = reason;
     else delete entry.reason;
-    if (availability === "unavailable" && reason === "deleted") delete entry.image_url;
+    if (availability === "unavailable" && reason === "deleted") {
+      delete entry.image_url;
+      if (entry.image_state !== undefined) entry.image_state = "missing";
+    }
     this.emoji.set(id, entry);
+  }
+
+  /** An external emoji: usable only through an existing chip of the Note (never a favourite). */
+  external(emoji: EmojiRef): boolean {
+    return emoji.type === "custom" && this.emoji.get(emoji.id)?.usage === "existing_reaction_only";
+  }
+
+  /** Whether the Note carries a chip of this emoji for reasons other than this Profile's own selection. */
+  private othersCarry(profile: string, note: string, emoji: EmojiRef): boolean {
+    return this.chips.some((chip) => chip.note === note && sameEmoji(chip.emoji, emoji)) ||
+      [...this.reactions.values()].some((entry) => entry.note === note && entry.profile !== profile && sameEmoji(entry.emoji, emoji));
   }
 
   available(emoji: EmojiRef): boolean {
@@ -206,6 +245,9 @@ export class QuickReactionStore {
     if (entry.reason !== undefined) view.unavailable_reason = entry.reason;
     if (entry.shortcode !== undefined) view.shortcode = entry.shortcode;
     if (entry.image_url !== undefined) view.image_url = entry.image_url;
+    if (entry.origin !== undefined) view.origin = entry.origin;
+    if (entry.image_state !== undefined) view.image_state = entry.image_state;
+    if (entry.usage !== undefined) view.usage = entry.usage;
     return view;
   }
 
@@ -285,6 +327,8 @@ export class QuickReactionStore {
       .filter(({ emoji }) => !stored.favorites.some((kept) => sameEmoji(kept, emoji)) && !this.available(emoji))
       .map(({ index }) => `/favorites/${index}`);
     if (refused.length > 0) return unavailable(refused);
+    const externals = favorites.flatMap((emoji, index) => this.external(emoji) ? [`/favorites/${index}`] : []);
+    if (externals.length > 0) return usageNotAllowed(externals);
     this.settings.set(profile, { revision: stored.revision + 1, favorites: structuredClone(favorites) });
     return { status: 200, body: this.settingsOf(profile) };
   }
@@ -299,7 +343,53 @@ export class QuickReactionStore {
     const emoji = request.emoji as EmojiRef;
     // Availability is checked before the repeat no-op rule (the selection stays).
     if (!this.available(emoji)) return unavailable(["/emoji"]);
+    const current = this.reactions.get(reactionKey(profile, note));
+    if (current !== undefined && sameEmoji(current.emoji, emoji)) return { status: 200, body: this.reactionState(profile, note) };
+    if (this.external(emoji)) {
+      if (!this.othersCarry(profile, note, emoji)) return usageNotAllowed(["/emoji"]);
+      if (current !== undefined) {
+        return {
+          status: 409,
+          body: errorBody("conflict", "remove the current reaction before reacting with an external emoji", [fieldViolation("/emoji", "remove the current reaction before reacting with an external emoji")]),
+        };
+      }
+    }
     this.reactions.set(reactionKey(profile, note), { profile, note, emoji: structuredClone(emoji) });
     return { status: 200, body: this.reactionState(profile, note) };
   }
+}
+
+/**
+ * The rules every EmojiView the server sends obeys (producer EmojiView::check_consistency):
+ * unavailable_reason goes with `unavailable` only; a Unicode emoji is always available
+ * and has no custom data; image_state agrees with image_url (a missing image keeps a
+ * shortcode to show as :name:); an emoji with an origin is existing_reaction_only.
+ * Returns the first violated rule, or null. A schema-valid body can still break them.
+ */
+export function emojiViewInconsistency(view: EmojiView): string | null {
+  if ((view.availability === "available") === (view.unavailable_reason != null)) {
+    return "unavailable_reason must be present exactly when unavailable";
+  }
+  if (view.emoji.type === "unicode") {
+    const customOnly = view.origin != null || view.image_state != null || view.shortcode != null ||
+      view.image_url != null || view.usage === "existing_reaction_only";
+    return customOnly || view.availability !== "available" ? "a Unicode emoji is always available and has no custom data" : null;
+  }
+  if (view.image_state === "present" && view.image_url == null) return "image_state present needs image_url";
+  if (view.image_state === "missing" && view.image_url != null) return "image_state missing must not carry image_url";
+  if (view.image_state === "missing" && (view.shortcode == null || view.shortcode === "")) {
+    return "image_state missing needs a shortcode to show as :name:";
+  }
+  if (view.origin != null && view.usage !== "existing_reaction_only") return "an external emoji must be existing_reaction_only";
+  return null;
+}
+
+/**
+ * The rules every reaction chip obeys (producer EmojiReactionCount::check_consistency):
+ * view agrees with the chip's emoji and is present for a custom emoji.
+ */
+export function chipInconsistency(chip: { emoji: EmojiRef; view?: EmojiView | null }): string | null {
+  if (chip.view == null) return chip.emoji.type === "custom" ? "a custom emoji chip must carry view" : null;
+  if (!sameEmoji(chip.view.emoji, chip.emoji)) return "view.emoji must equal the chip's emoji";
+  return emojiViewInconsistency(chip.view);
 }
