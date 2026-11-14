@@ -836,6 +836,44 @@ async function verifyRemoteEmoji(page: Page, viewport: Viewport) {
 }
 
 /**
+ * A failed image mark belongs to the image that is shown: Flame reuses the emoji wrapper when a
+ * favourite is replaced in place, so a mark left by the old emoji must not hide the new one,
+ * while drawing the same emoji again keeps its :name: (no flicker back to a broken image).
+ */
+async function verifyImageFailureFollowsEmoji(page: Page, viewport: Viewport) {
+  await page.goto("/settings", { waitUntil: "networkidle" });
+  const chips = page.getByTestId("favorites");
+  await expect(chips).toHaveAttribute("data-state", "loaded");
+  const chip = (index: number) => page.locator(`#sp-fav-chip-${index}`);
+  const wrapper = chip(4).locator(".sp-emo-custom");
+  await expect(wrapper).toHaveCount(1);
+  await chip(4).locator("img").evaluate((image) => { (image as HTMLImageElement).src = "data:image/png;base64,AAAA"; });
+  await expect(wrapper).toHaveAttribute("data-image-failed", "true");
+  await expect(chip(4).locator(".sp-emo-name")).toBeVisible();
+  // The same emoji drawn again (the menu opens and closes): still the name, never a broken image.
+  await chip(4).click();
+  const menu = page.getByTestId("favorite-menu");
+  await expect(menu.getByRole("menuitem").first()).toHaveText("入れ替え");
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveCount(0);
+  await expect(wrapper).toHaveAttribute("data-image-failed", "true");
+  await expect(chip(4).locator("img")).toBeHidden();
+  // Replaced in place by another custom emoji: its image shows, the mark is gone.
+  await chip(4).click();
+  await menu.getByRole("menuitem", { name: "入れ替え" }).click();
+  const picker = page.getByRole("dialog", { name: "常用絵文字を入れ替え" });
+  await picker.getByRole("tab", { name: "このサーバーのカスタム絵文字" }).click();
+  await picker.getByRole("button", { name: ":ok_sign:" }).click();
+  await expect(picker).toHaveCount(0);
+  await expect(chips).toHaveAttribute("aria-busy", "false");
+  await expect(chip(4)).toHaveAttribute("aria-label", ":ok_sign:");
+  await expect(chip(4).locator(".sp-emo-custom")).not.toHaveAttribute("data-image-failed", /.*/);
+  await expect(chip(4).locator("img")).toBeVisible();
+  await expect(chip(4).locator(".sp-emo-name")).toBeHidden();
+  console.info(`OK a failed emoji image does not hide the emoji that replaces it (favourites replaced in place) at ${viewport.name}`);
+}
+
+/**
  * Two sessions (devices) acting as the same Profile share its favourites and its
  * reactions through the stateful mock; the stale one gets 409 and can save again.
  */
@@ -1568,6 +1606,8 @@ async function verifyMock(browser: Browser, frontendRoot: string, coreURL: strin
         await verifyAmbiguousReactionRestore(page, viewport, server);
         await resetMock(server);
         await verifyRemoteEmoji(page, viewport);
+        await resetMock(server);
+        await verifyImageFailureFollowsEmoji(page, viewport);
         expect(errors, `mock ${viewport.name}: browser errors`).toEqual([]);
         console.info(`OK mock mode hydrates and keeps the shell's keyboard/focus rules at ${viewport.name} (${viewport.width}x${viewport.height})`);
       } finally {
