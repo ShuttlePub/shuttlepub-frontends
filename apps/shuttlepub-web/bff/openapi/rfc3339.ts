@@ -25,12 +25,14 @@ export function parseRfc3339(value: string): Instant | null {
   if (match === null) return null;
   const [year, month, day, hour, minute, second] = match.slice(1, 7).map(Number) as [number, number, number, number, number, number];
   if (month < 1 || month > 12 || day < 1 || day > daysInMonth(year, month)) return null;
-  // 60 is the leap second RFC 3339 allows.
   if (hour > 23 || minute > 59 || second > 60) return null;
   const offsetSign = match[8];
   const offsetHour = match[9] === undefined ? 0 : Number(match[9]);
   const offsetMinute = match[10] === undefined ? 0 : Number(match[10]);
   if (offsetHour > 23 || offsetMinute > 59) return null;
+  // Second 60 is the leap second, which can only be the last second of a UTC day.
+  const utcMinuteOfDay = (((hour * 60 + minute - (offsetHour * 60 + offsetMinute) * (offsetSign === "-" ? -1 : 1)) % 1440) + 1440) % 1440;
+  if (second === 60 && utcMinuteOfDay !== 23 * 60 + 59) return null;
   const date = new Date(0);
   date.setUTCFullYear(year, month - 1, day);
   date.setUTCHours(hour, minute, Math.min(second, 59), 0);
