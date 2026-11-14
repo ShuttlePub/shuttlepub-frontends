@@ -27,6 +27,7 @@
 //    CW/sensitive/deleted/visibility gate (restricted stays content-free).
 
 import type { components } from "./generated/shuttlepub-api.ts";
+import { compareInstants, parseRfc3339, type Instant } from "../openapi/rfc3339.ts";
 
 type Schemas = components["schemas"];
 export type DomainControlRef = Schemas["DomainControlRef"];
@@ -110,6 +111,12 @@ export type SearchCandidate = {
   quoted_author?: string;
 };
 
+function instantOf(createdAt: string): Instant {
+  const instant = parseRfc3339(createdAt);
+  if (instant === null) throw new Error(`created_at is not an RFC 3339 date-time: ${createdAt}`);
+  return instant;
+}
+
 function searchedNote(candidate: SearchCandidate): SearchedNote {
   // A content-warned note exposes its CW only, never the body (the UI keeps it folded).
   const body: SearchedNote["body"] = candidate.content_warning === undefined
@@ -118,9 +125,13 @@ function searchedNote(candidate: SearchCandidate): SearchedNote {
   return { note_id: candidate.note_id, author: candidate.author, created_at: candidate.created_at, body };
 }
 
-/** Newest first by the instant created_at denotes, then by note_id descending (the contract's order). */
+/**
+ * Newest first by the instant created_at denotes (fractional seconds in full, offset
+ * applied), then by note_id descending (the contract's order). Date.parse would cut the
+ * fraction to milliseconds and flip notes that differ below that.
+ */
 function searchOrder(a: SearchCandidate, b: SearchCandidate): number {
-  const delta = Date.parse(b.created_at) - Date.parse(a.created_at);
+  const delta = compareInstants(instantOf(b.created_at), instantOf(a.created_at));
   if (delta !== 0) return delta;
   return a.note_id < b.note_id ? 1 : a.note_id > b.note_id ? -1 : 0;
 }

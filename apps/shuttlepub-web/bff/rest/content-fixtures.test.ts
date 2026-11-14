@@ -232,6 +232,26 @@ describe("S8 post search (D04) replayed against the projection", () => {
     const actual = searchFor("pf", [], candidates).items.map((entry) => entry.note.note_id);
     expect(actual).toEqual(ordering.expected_order);
   });
+
+  test("order keeps the fractional seconds in full: notes within the same millisecond are not flipped or tied", () => {
+    const note = (id: string, createdAt: string): SearchCandidate => ({
+      note_id: id, author: "https://a.example/users/a", kind: "post", created_at: createdAt, content: id,
+    });
+    const order = (candidates: SearchCandidate[]) => searchFor("pf", [], candidates).items.map((entry) => entry.note.note_id);
+    // Same millisecond, different microseconds: …000900 is after …000100.
+    const later = note("00000000-0000-4000-8000-000000000001", "2026-11-14T03:00:00.000900Z");
+    const earlier = note("00000000-0000-4000-8000-000000000002", "2026-11-14T03:00:00.000100Z");
+    expect(order([earlier, later])).toEqual([later.note_id, earlier.note_id]);
+    expect(order([later, earlier])).toEqual([later.note_id, earlier.note_id]);
+    // Trailing zeros and a whole second denote the same instant, so the note_id breaks the tie (descending).
+    const a = note("00000000-0000-4000-8000-0000000000a1", "2026-11-14T03:00:00Z");
+    const b = note("00000000-0000-4000-8000-0000000000b1", "2026-11-14T03:00:00.000000Z");
+    expect(order([a, b])).toEqual([b.note_id, a.note_id]);
+    // A later offset-written instant wins over an earlier Z one, to the nanosecond.
+    const offset = note("00000000-0000-4000-8000-0000000000c1", "2026-11-14T12:00:00.000000001+09:00");
+    const zulu = note("00000000-0000-4000-8000-0000000000d1", "2026-11-14T03:00:00Z");
+    expect(order([zulu, offset])).toEqual([offset.note_id, zulu.note_id]);
+  });
 });
 
 describe("reaction chips with external emoji (D09) carry their view data", () => {
