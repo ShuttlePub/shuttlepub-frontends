@@ -139,6 +139,60 @@ describe("mock mode: stateful S3 mock", () => {
     expect(emojis.every((emoji) => emoji.imageUrl.startsWith("data:image/svg+xml,"))).toBe(true);
   });
 
+  test("another server's emoji (D09): marked as such, imageUrl never leaves the BFF, never in the catalogue", async () => {
+    app = createApp(loadConfig({}));
+    const AOI = NOTE_IDS["post-aoi-profiles"];
+    const chips = ((await gql(`query($p: ID!, $n: [ID!]!) { postReactions(profileId: $p, noteIds: $n) {
+      others { count emoji { kind value shortcode imageUrl available unavailableReason origin imageState usage } } } }`, { p: p1, n: [AOI] })).data!.postReactions as {
+      others: { count: number; emoji: Record<string, unknown> }[];
+    }[])[0]!.others;
+    const byValue = Object.fromEntries(chips.map((chip) => [chip.emoji.value as string, chip.emoji]));
+    // The same shortcode from two servers is two emoji with different stable ids.
+    expect(Object.keys(byValue).sort()).toEqual(["ghostcat@remote.example", "goneblob@remote.example", "kusa", "kusa@remote.example"]);
+    expect(byValue["kusa@remote.example"]).toEqual({
+      kind: "CUSTOM", value: "kusa@remote.example", shortcode: "kusa", imageUrl: null, available: true, unavailableReason: null,
+      origin: "remote.example", imageState: "PRESENT", usage: "EXISTING_REACTION_ONLY",
+    });
+    expect(byValue["ghostcat@remote.example"]).toMatchObject({ imageUrl: null, imageState: "MISSING", available: true, origin: "remote.example" });
+    expect(byValue["goneblob@remote.example"]).toMatchObject({ imageUrl: null, imageState: "MISSING", available: false, unavailableReason: "DELETED" });
+    // This server's own :kusa: keeps its image and has no origin.
+    expect(byValue["kusa"]).toMatchObject({ origin: null, usage: "ANYWHERE" });
+    expect(String(byValue["kusa"]!.imageUrl).startsWith("data:image/svg+xml,")).toBe(true);
+    // No external image URL is reachable through any query the page uses.
+    const everything = JSON.stringify(chips) + JSON.stringify((await gql("{ customEmojis { value imageUrl origin } }")).data);
+    expect(everything).not.toMatch(/https?:\/\/[^"]*(remote|other)\.example/);
+    const catalogue = (await gql("{ customEmojis { value origin usage } }")).data!.customEmojis as { value: string; origin: string | null }[];
+    expect(catalogue.some((emoji) => emoji.origin !== null || emoji.value.includes("@"))).toBe(false);
+  });
+
+  test("an external emoji is used through a chip only: direct mutations are refused with their own codes", async () => {
+    app = createApp(loadConfig({}));
+    const AOI = NOTE_IDS["post-aoi-profiles"];
+    const code = (response: GraphQLResponse) => response.errors?.[0]?.extensions?.code;
+    const ghost = custom("ghostcat@remote.example");
+    // Not a favourite, not even when saved by hand (422 emoji_usage_not_allowed).
+    expect(code(await gql(UPDATE, { p: p2, r: 0, f: [unicode("👍"), custom("kusa@remote.example")] }))).toBe("EMOJI_USAGE_NOT_ALLOWED");
+    expect(((await gql(SETTINGS, { p: p2 })).data!.quickReactionSettings as { revision: number }).revision).toBe(0);
+    // Without a chip of the same emoji on the Note: 422 emoji_usage_not_allowed, nothing saved.
+    expect(code(await gql(SET, { p: p1, n: MIKA, e: custom("kusa@remote.example") }))).toBe("EMOJI_USAGE_NOT_ALLOWED");
+    expect(((await gql(REACTIONS, { p: p1, n: [MIKA] })).data!.postReactions as { mine: unknown }[])[0]!.mine).toBeNull();
+    // Unavailable is checked first: a deleted one is EMOJI_UNAVAILABLE even with a chip.
+    expect(code(await gql(SET, { p: p1, n: AOI, e: custom("goneblob@remote.example") }))).toBe("EMOJI_UNAVAILABLE");
+    // A chip of the Note: allowed, and the same emoji again is a no-op 200.
+    const first = await gql(SET, { p: p1, n: AOI, e: ghost });
+    expect(first).toEqual({ data: { setNoteReaction: { noteId: AOI, emoji: { kind: "CUSTOM", value: "ghostcat@remote.example" } } } });
+    expect((await gql(SET, { p: p1, n: AOI, e: ghost })).errors).toBeUndefined();
+    // While reacted, an external emoji does not replace: 409 conflict; the repeat check comes first.
+    expect(code(await gql(SET, { p: p1, n: AOI, e: custom("kusa@remote.example") }))).toBe("CONFLICT");
+    const mine = ((await gql(REACTIONS, { p: p1, n: [AOI] })).data!.postReactions as { mine: { value: string } | null }[])[0]!.mine;
+    expect(mine?.value).toBe("ghostcat@remote.example");
+    // A local emoji still replaces an external reaction (rules leave the local replacement alone).
+    expect((await gql(SET, { p: p1, n: AOI, e: unicode("👍") })).errors).toBeUndefined();
+    // Remove, then the same chip again: the chip still exists (others carry it), so it works.
+    expect((await gql(REMOVE, { p: p1, n: AOI })).errors).toBeUndefined();
+    expect((await gql(SET, { p: p1, n: AOI, e: custom("kusa@remote.example") })).errors).toBeUndefined();
+  });
+
   test("only the viewer's own Profiles can act (PROFILE_UNAVAILABLE)", async () => {
     app = createApp(loadConfig({}));
     for (const [query, variables] of [

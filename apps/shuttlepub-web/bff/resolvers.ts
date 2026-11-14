@@ -133,11 +133,16 @@ type EmojiInput = { kind: "UNICODE" | "CUSTOM"; value: string };
 export const toEmojiRef = (input: EmojiInput): EmojiRef =>
   input.kind === "UNICODE" ? { type: "unicode", value: input.value } : { type: "custom", id: input.value };
 
+/**
+ * An external emoji's image_url points at its origin server (the contract has no media route of
+ * ShuttlePub's own), and a browser that loads it reveals itself to that server. It never leaves
+ * the BFF (d09-q06): the app shows `:shortcode:` for every external emoji, so imageUrl is null.
+ */
 export const toEmoji = (view: EmojiView) => ({
   kind: view.emoji.type === "unicode" ? "UNICODE" : "CUSTOM",
   value: view.emoji.type === "unicode" ? view.emoji.value : view.emoji.id,
   shortcode: view.shortcode ?? null,
-  imageUrl: view.image_url ?? null,
+  imageUrl: view.origin == null ? view.image_url ?? null : null,
   available: view.availability === "available",
   unavailableReason: view.unavailable_reason == null ? null : view.unavailable_reason.toUpperCase(),
   origin: view.origin ?? null,

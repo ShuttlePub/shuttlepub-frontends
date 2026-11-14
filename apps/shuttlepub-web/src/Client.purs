@@ -2,7 +2,7 @@ module Client where
 
 import Prelude
 
-import App.Dom (isMobileViewport, nowMillis, onViewportChange, trackFocus)
+import App.Dom (isMobileViewport, nowMillis, onViewportChange, trackFocus, trackImageFailures)
 import App.Message (Message(..))
 import App.Reaction (ReactionMsg(..))
 import App.ReactionDom (onPageRestored)
@@ -35,6 +35,7 @@ main = do
     }
 
   trackFocus
+  trackImageFailures
   now <- nowMillis
   isMobile <- isMobileViewport
   send appId (Hydrated now isMobile)

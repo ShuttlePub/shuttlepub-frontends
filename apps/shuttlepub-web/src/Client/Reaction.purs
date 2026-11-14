@@ -34,7 +34,7 @@ import Prelude
 import App.Api.Error (ApiError(..))
 import App.Api.GraphQL (fetchCustomEmojis, fetchPostReactions, fetchQuickSettings, removeNoteReaction, saveQuickSettings, setNoteReaction)
 import App.Dom (focusById, focusFirstIn, requestFocus)
-import App.Emoji (Emoji, sameEmoji)
+import App.Emoji (Emoji, isExternal, sameEmoji)
 import App.Extension.Reaction (chipMenuId, favoriteAddId, favoriteChipId, mineChipId, pickerId, pickerSearchId, pickerTabId)
 import App.Message (Message(..))
 import App.Model (Model, ReactionModel, RemoteData(..), activeProfile, fromEither, initialReactionModel)
@@ -373,17 +373,26 @@ mergePosts model reads fetched = accepted <> filter (\entry -> not (any (\new ->
 react :: PostRef -> Emoji -> Model -> Step
 react post emoji model = case model.reaction.profileId of
   Just profileId
-    | isNothing (mineOf model post.noteId) && not (busy model post.noteId) && emoji.available ->
+    | isNothing (mineOf model post.noteId) && not (busy model post.noteId) && (emoji.available || isExternal emoji) ->
         let
+          unsent = case model.reaction.pendingRemoval of
+            Just removal | removal.post.noteId == post.noteId -> Just removal
+            _ -> Nothing
+          -- Another server's emoji is never a replacement (S3: 409 conflict while the server still
+          -- holds a reaction), so the unsent removal is sent first and the PUT queues behind it
+          -- on the same lane. A removal of this very emoji stays unsent: the PUT repeats it (200).
+          flushFirst = case unsent of
+            Just removal -> isExternal emoji && not (sameEmoji removal.emoji emoji)
+            Nothing -> false
           -- Re-reacting while the removal is unsent: PUT replaces it on the server, so
           -- the removal is not sent now; it stays with the request and is sent after
           -- all if the PUT fails (the user's removal is never lost).
-          replacing = case model.reaction.pendingRemoval of
-            Just removal | removal.post.noteId == post.noteId -> Just removal
-            _ -> Nothing
-          Tuple cancelled cancelEffects = case replacing of
-            Just _ -> cancelPending (withReaction model _ { toast = Nothing })
-            Nothing -> Tuple model []
+          replacing = if flushFirst then Nothing else unsent
+          Tuple cancelled cancelEffects =
+            if flushFirst then setToast Nothing model
+            else case replacing of
+              Just _ -> cancelPending (withReaction model _ { toast = Nothing })
+              Nothing -> Tuple model []
           Tuple numbered request = nextRequest cancelled
           next = withReaction numbered \reaction -> reaction
             { posts = setMine post.noteId (Just emoji) reaction.posts
@@ -536,6 +545,9 @@ update model = case _ of
     Nothing -> Tuple model []
 
   PickerCategory category -> selectCategory model category false
+
+  -- Another server's emoji is only used through its chip (ReactWithChip), never picked.
+  Pick emoji | isExternal emoji -> Tuple model []
 
   Pick emoji -> case model.reaction.picker of
     Just { target: ReactTo post } -> react post emoji model

@@ -11,6 +11,22 @@
   font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
 }
 .sp-app img.sp-emo { object-fit: contain; }
+.sp-app .sp-emo-img { width: 100%; height: 100%; object-fit: contain; }
+/* Image of this server's emoji: when it cannot be loaded (data-image-failed, set by
+   App.Dom.trackImageFailures) the :name: takes its place; no broken image stays. */
+.sp-app .sp-emo-custom .sp-emo-name { display: none; }
+.sp-app .sp-emo-custom[data-image-failed="true"] { width: auto; max-width: 14em; }
+.sp-app .sp-emo-custom[data-image-failed="true"] .sp-emo-img { display: none; }
+.sp-app .sp-emo-custom[data-image-failed="true"] .sp-emo-name,
+.sp-app .sp-emo-label {
+  display: inline; font-size: .78em; line-height: 1.2; font-family: inherit;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+/* :name: of another server's emoji (always shown as text, d09-q06), or of one without an image. */
+.sp-app .sp-emo-label { width: auto; max-width: 14em; display: inline-block; }
+/* External mark (U5=c): a small globe after the emoji and before the count. */
+.sp-app .sp-origin { display: inline-flex; align-items: center; color: var(--color-text-muted); }
+.sp-app .sp-origin .sp-icon { width: 11px; height: 11px; }
 .sp-app .sp-emo-missing {
   border: 1px dashed currentColor; border-radius: 4px; font-size: 10px !important; opacity: .6;
 }
@@ -204,3 +220,6 @@
   .sp-app .sp-reactors .sp-rhint { padding: 8px 12px; }
   .sp-app .sp-reactor-list { border-left: 0; border-right: 0; border-radius: 0; }
 }
+
+/* :name: text keeps one size wherever the emoji appears (chips, toggles, reactor rows). */
+.sp-app .sp-emo.sp-emo-label { font-size: 12px; }

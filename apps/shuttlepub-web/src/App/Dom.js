@@ -37,6 +37,24 @@ export const trackFocus = () => {
   focusTracked = true;
 };
 
+// A custom emoji image that cannot be loaded is replaced by its :name: (D09 d09-q02): the
+// wrapper gets data-image-failed, which hides the image and shows the name (reaction.css), so
+// a broken image is never left on screen. The attribute is not part of the view, so Flame's
+// patches keep it. Errors before hydration are caught by the scan of images that already
+// failed; later ones by the capturing listener (error does not bubble).
+let imageFailuresTracked = false;
+export const trackImageFailures = () => {
+  if (imageFailuresTracked || typeof document === "undefined") return;
+  const failed = (image) => image.parentElement?.setAttribute("data-image-failed", "true");
+  document.addEventListener("error", (event) => {
+    if (event.target instanceof HTMLImageElement && event.target.classList.contains("sp-emo-img")) failed(event.target);
+  }, true);
+  for (const image of document.querySelectorAll("img.sp-emo-img")) {
+    if (image.complete && image.naturalWidth === 0) failed(image);
+  }
+  imageFailuresTracked = true;
+};
+
 const visibleFocusTarget = (element) =>
   element !== null && element.isConnected && !element.disabled &&
   !element.closest("[inert]") && element.getClientRects().length > 0 &&

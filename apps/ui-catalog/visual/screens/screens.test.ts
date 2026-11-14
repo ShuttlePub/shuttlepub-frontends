@@ -22,7 +22,7 @@ test("screen inventory covers every app and state at desktop/mobile sizes with s
   const names = SCREEN_CASES.map((item) => item.filename);
   // Then
   expect(new Set(names).size).toBe(SCREEN_CASES.length);
-  expect(SCREEN_CASES).toHaveLength(160);
+  expect(SCREEN_CASES).toHaveLength(164);
   for (const item of SCREEN_CASES) {
     expect(item.filename).toMatch(/^(Booskiff|Emumet|ShuttlePub)-[A-Za-z0-9-]+\.png$/);
     expect(item.path).toMatch(/^\/(?!\/)/);
@@ -70,7 +70,7 @@ test("ShuttlePub cases cover the SNS shell, quick reactions and login at both wi
     "home", "home-session-expired", "home-signed-out",
     "login", "login-denied", "login-failed", "mute-block-accounts", "mute-block-block-dialog", "mute-block-domains",
     "not-found", "post-detail", "profile-menu",
-    "reaction-detail", "reaction-picker", "reaction-picker-no-favorites", "reaction-settings-menu", "reaction-undo", "settings",
+    "reaction-detail", "reaction-picker", "reaction-picker-no-favorites", "reaction-remote", "reaction-remote-picker", "reaction-settings-menu", "reaction-undo", "settings",
   ]);
   expect(cases.every((item) => !item.authenticated)).toBe(true);
   for (const item of cases) {
@@ -108,9 +108,9 @@ test("only the baseline side may skip cases whose screen feature is missing", ()
   expect(baseline.skipped).toHaveLength(shuttlePub.length - 4);
   // Feature combinations must not silently drop either concurrent UI's cases.
   const shellOnly = selectCases(shuttlePub, featuresInShuttlePubHtml(shellHtml), "baseline");
-  expect(shellOnly.skipped).toHaveLength(44);
+  expect(shellOnly.skipped).toHaveLength(48);
   expect(selectCases(shuttlePub, withLogin, "baseline").skipped.every((item) => item.id.startsWith("reaction-"))).toBe(true);
-  expect(selectCases(shuttlePub, withLogin, "baseline").skipped).toHaveLength(10);
+  expect(selectCases(shuttlePub, withLogin, "baseline").skipped).toHaveLength(14);
   expect(selectCases(shuttlePub, withReaction, "baseline").skipped.every((item) => "requires" in item && item.requires === "sns-login")).toBe(true);
   expect(selectCases(shuttlePub, withReaction, "baseline").skipped).toHaveLength(10);
   expect(() => selectCases(shuttlePub, featuresInShuttlePubHtml(placeholderHtml), "branch")).toThrow(/sns-shell/);

@@ -256,6 +256,14 @@ export class QuickReactionStore {
     return [...this.emoji.keys()].sort().map((id) => this.view({ type: "custom", id }));
   }
 
+  /**
+   * The picker's catalogue: this server's own custom emoji only. An external emoji is never
+   * offered (D09 d09-q01), whatever else the server knows about it.
+   */
+  catalogueEmojis(): EmojiView[] {
+    return this.customEmojis().filter((view) => view.origin == null && view.usage !== "existing_reaction_only");
+  }
+
   /** Every selected reaction on a Note (all Profiles). Used by the provisional aggregate. */
   reactionsOn(note: string): { profile: string; emoji: EmojiRef }[] {
     return [...this.reactions.values()].filter((entry) => entry.note === note)

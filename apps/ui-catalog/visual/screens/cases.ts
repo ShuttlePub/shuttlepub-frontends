@@ -116,6 +116,10 @@ const routes = [
   { app: "ShuttlePub", id: "reaction-picker-no-favorites", path: "/", authenticated: false, data: "populated", requires: "quick-reaction" },
   { app: "ShuttlePub", id: "reaction-undo", path: "/", authenticated: false, data: "populated", requires: "quick-reaction" },
   { app: "ShuttlePub", id: "reaction-detail", path: "/posts/post-kei-release", authenticated: false, data: "populated", requires: "quick-reaction" },
+  // D09: another server's emoji chips (globe + :name:, image missing / deleted look the same) and the
+  // picker, which never offers them.
+  { app: "ShuttlePub", id: "reaction-remote", path: "/", authenticated: false, data: "populated", requires: "quick-reaction" },
+  { app: "ShuttlePub", id: "reaction-remote-picker", path: "/", authenticated: false, data: "populated", requires: "quick-reaction" },
   { app: "ShuttlePub", id: "reaction-settings-menu", path: "/settings", authenticated: false, data: "populated", requires: "quick-reaction" },
   { app: "ShuttlePub", id: "not-found", path: "/visual-route-not-found", authenticated: false, data: "populated" },
   // FA login UI (no ui-spec entry; built from the shell's parts): the login screen,

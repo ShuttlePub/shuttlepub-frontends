@@ -56,7 +56,7 @@ export function createMockApi(): MockApi {
       return noteIds.map((note) => mockReactionSummary(store, profile, note));
     },
     async getCustomEmojis(): Promise<EmojiView[]> {
-      return store.customEmojis();
+      return store.catalogueEmojis();
     },
   };
 }
