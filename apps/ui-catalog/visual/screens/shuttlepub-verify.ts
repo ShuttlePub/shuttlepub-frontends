@@ -207,12 +207,24 @@ async function expectScrollLocked(page: Page, locked: boolean) {
   await expect.poll(() => page.evaluate(() => document.documentElement.classList.contains("sp-scroll-locked"))).toBe(locked);
 }
 
+/** The modal owns the focus (it moves in after the dialog is drawn): wait for it before sending keys. */
+async function expectFocusInside(layer: Locator) {
+  await expect.poll(() => layer.evaluate((element) => element.contains(document.activeElement)), { message: "initial focus is inside the modal" }).toBe(true);
+}
+
 /** Tab and Shift+Tab cycle within an aria-modal layer (ui-spec 実装上の注意 6). */
 async function expectTabStaysInside(page: Page, layer: Locator) {
+  // Waiting for the initial focus keeps a slow runner from testing a focus that has not moved in yet.
+  await expectFocusInside(layer);
+  const where = () => layer.evaluate((element) => {
+    const active = document.activeElement;
+    return { inside: element.contains(active), active: active ? `${active.tagName.toLowerCase()}#${active.id}[${active.getAttribute("data-testid") ?? ""}] ${(active.textContent ?? "").slice(0, 24)}` : "none" };
+  });
   for (const key of ["Tab", "Shift+Tab"]) {
     for (let i = 0; i < 8; i++) {
       await page.keyboard.press(key);
-      expect(await layer.evaluate((element) => element.contains(document.activeElement)), `${key} #${i + 1} left the modal`).toBe(true);
+      const state = await where();
+      expect(state.inside, `${key} #${i + 1} left the modal; active element: ${state.active}`).toBe(true);
     }
   }
 }
@@ -1263,19 +1275,34 @@ async function verifyMuteBlockAccounts(page: Page, viewport: Viewport) {
   await expectRow("https://small.example/users/quiet", "@quiet@small.example", null, "Q", "ブロック解除（@quiet@small.example）", "ブロック解除");
   await expect(panel.locator("img")).toHaveCount(0);
   // Unmute: its name in the toast, 元に戻す brings the same person back.
+  const removed: string[] = [];
+  page.on("request", (request) => {
+    if (!request.url().endsWith("/graphql") || request.method() !== "POST") return;
+    const body = request.postData() ?? "";
+    if (/removeActorPolicy/.test(body)) removed.push(body);
+  });
+  const loudPolicy = await row("https://chat.example/users/loud").getAttribute("data-policy");
+  expect(loudPolicy, "the row carries its policy id").toBeTruthy();
   await row("https://chat.example/users/loud").getByRole("button", { name: "ミュート解除（Loud）" }).click();
   await expect(page.getByTestId("toast")).toContainText("Loud のミュートを解除しました");
   await expect(row("https://chat.example/users/loud")).toHaveCount(0);
+  expect(removed, "one removal was sent").toHaveLength(1);
+  expect(removed[0], "the unmute sent the row's own policy id").toContain(loudPolicy!);
+  for (const other of await panel.locator("li[data-policy]").evaluateAll((items) => items.map((item) => item.getAttribute("data-policy")))) {
+    if (other !== loudPolicy) expect(removed[0], "and no other row's id").not.toContain(other!);
+  }
   await page.getByRole("button", { name: "元に戻す" }).click();
   await expect(row("https://chat.example/users/loud")).toHaveCount(1);
   // Unblock: the dialog calls a pending target by its fallback name and a resolved one by its display name.
   await row("https://ads.example/users/ad_bot").getByRole("button", { name: /ブロック解除/ }).click();
   const dialog = page.getByTestId("unblock-dialog");
   await expect(dialog).toContainText("https://ads.example/users/ad_bot のブロックを解除しますか？");
+  await expectFocusInside(dialog);
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await row("https://spam.example/users/spam_bot").getByRole("button", { name: /ブロック解除/ }).click();
   await expect(dialog).toContainText("Spam Bot のブロックを解除しますか？");
+  await expectFocusInside(dialog);
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   // The filter shows the same rows by kind.

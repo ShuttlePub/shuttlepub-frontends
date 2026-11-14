@@ -391,6 +391,24 @@ describe("GraphQL policy API", () => {
     expect(created.data!.addActorPolicy).toMatchObject({ targetActor: { iconUrl: null } });
   });
 
+  test("the same person muted and blocked (same name, same acct): removing one policy id leaves the other", async () => {
+    const seeded = createMockProfilePolicy({ seed: { [P]: { ...defaultPolicySeed()[MOCK_PROFILE_ID]!, actorPolicies: defaultPolicySeed()[MOCK_PROFILE_ID]!.actorPolicies.map((item) => ({ ...item, profile_id: P })) } } });
+    const { run } = app({ policy: seeded });
+    const loud = "https://chat.example/users/loud";
+    const block = await run("mutation($p: ID!, $a: String!) { addActorPolicy(profile: $p, actorUrl: $a, mode: BLOCK) { id mode targetActor { displayName acct } } }", { p: "account-a", a: loud });
+    const twin = block.data!.addActorPolicy as { id: string; targetActor: { displayName: string; acct: string } };
+    expect(twin.targetActor).toEqual({ displayName: "Loud", acct: "loud@chat.example" });
+    const rows = async () => ((await run("query($p: ID!) { actorPolicies(profile: $p) { id mode actorUrl } }", { p: "account-a" })).data!.actorPolicies as { id: string; mode: string; actorUrl: string }[]).filter((item) => item.actorUrl === loud);
+    const both = await rows();
+    expect(both.map((item) => item.mode).sort()).toEqual(["BLOCK", "MUTE"]);
+    const mute = both.find((item) => item.mode === "MUTE")!;
+    expect(mute.id).not.toBe(twin.id);
+    // Removing the mute by its own id leaves the block; a block removal with the mute's id is not found.
+    expect((await run("mutation($p: ID!, $id: ID!) { removeActorPolicy(profile: $p, id: $id, mode: BLOCK) { key } }", { p: "account-a", id: mute.id })).errors![0]!.extensions!.code).toBe("NOT_FOUND");
+    expect((await run("mutation($p: ID!, $id: ID!) { removeActorPolicy(profile: $p, id: $id, mode: MUTE) { key } }", { p: "account-a", id: mute.id })).data).toEqual({ removeActorPolicy: { key: mute.id } });
+    expect((await rows()).map((item) => item.id)).toEqual([twin.id]);
+  });
+
   test("individual mutes/blocks: list, remove and re-add (undo)", async () => {
     const seeded = createMockProfilePolicy({ seed: { [P]: { ...defaultPolicySeed()[MOCK_PROFILE_ID]!, actorPolicies: defaultPolicySeed()[MOCK_PROFILE_ID]!.actorPolicies.map((item) => ({ ...item, profile_id: P })) } } });
     const { run } = app({ policy: seeded });
