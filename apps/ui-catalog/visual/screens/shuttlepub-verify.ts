@@ -724,7 +724,7 @@ async function verifyRemoteEmoji(page: Page, viewport: Viewport) {
   await expect(kusaLocal.locator("img")).toHaveCount(1);
   await expect(kusaLocal.getByTestId("origin-mark")).toHaveCount(0);
   await expect(kusaLocal).not.toHaveClass(/is-external/);
-  // Image missing at the origin, and deleted at the origin: the same look, still pressable.
+  // Image missing, and deleted at the origin (still available): the same look, still pressable.
   for (const id of ["ghostcat@remote.example", "goneblob@remote.example"]) {
     await expect(chip(id)).toHaveClass(/is-external/);
     await expect(chip(id).getByTestId("origin-mark")).toHaveCount(1);
@@ -812,10 +812,32 @@ async function verifyRemoteEmoji(page: Page, viewport: Viewport) {
   await expect(toast).toHaveCount(0, { timeout: 10_000 });
   await expect(mine).toHaveCount(0);
 
-  // A deleted one is pressed like the others; the backend refuses and nothing is shown as saved.
+  // Deleted at its origin (d09-q07): still available, only the image is gone. Its chip is pressed like
+  // the others and the reaction is saved (200), shown as :name:.
   await chip("goneblob@remote.example").click();
-  await expect(toast).toHaveAttribute("data-error", "emoji_unavailable");
-  await expect(toast).not.toContainText("取り消しました");
+  await expect(mine).toHaveAttribute("data-emoji", "c:goneblob@remote.example");
+  await expect(mine).not.toHaveAttribute("aria-busy", "true");
+  await expect(mine.locator(".sp-emo-label")).toHaveText(":goneblob:");
+  await expect(mine.getByTestId("origin-mark")).toHaveCount(1);
+  await expect(page.locator(".sp-toast[data-error]")).toHaveCount(0);
+  await mine.click();
+  await expect(toast).toContainText("取り消しました");
+  await page.mouse.move(0, 0);
+  await expect(toast).toHaveCount(0, { timeout: 10_000 });
+  await expect(mine).toHaveCount(0);
+
+  // Disabled by this server (the only unavailable external emoji): the same :name: + globe, but not
+  // pressable, and nothing is sent.
+  const off = chip("offblob@remote.example");
+  await expect(off).toHaveClass(/is-unavailable/);
+  await expect(off.getByTestId("origin-mark")).toHaveCount(1);
+  await expect(off.locator(".sp-emo-label")).toHaveText(":offblob:");
+  await expect(off.locator("img")).toHaveCount(0);
+  expect(await off.evaluate((element) => element.tagName)).toBe("SPAN");
+  const setsDisabled = operations("SetNoteReaction");
+  await off.click({ force: true });
+  await page.waitForTimeout(300);
+  expect(operations("SetNoteReaction"), "a disabled external emoji sends nothing").toBe(setsDisabled);
   await expect(mine).toHaveCount(0);
   await expect(page.locator("#react-post-aoi-profiles")).toBeVisible();
 

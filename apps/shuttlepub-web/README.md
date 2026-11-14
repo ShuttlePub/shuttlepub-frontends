@@ -52,7 +52,7 @@ mock / real 切替、SSR + hydration、Profile context の型・fixture、visual
 ### 投稿表示面と「…」メニュー (D08 第2段 / personal-domain-controls-web-ui)
 
 ui-spec v5 の 1-1 (主導線)・3-1〜3-6・4-1〜4-5・5-1 を、ShuttlePub の S8 契約 (`openapi/shuttlepub.json`、
-producer commit `a00d234aedecb0223ba20dc8d7e9334cf9d39e83`) どおりに表示します。
+producer commit `bd997e6cb64b7f96ce454673f0a278f47db1dcf8`) どおりに表示します。
 
 - 投稿カードとユーザーページの「…」: 「@user をミュート／ブロック」「〈ドメイン〉 をミュート／ブロック」(自サーバーの
   人にはドメイン項目なし)。設定済みなら「…のミュートを解除」「…のブロックを解除…」。ミュートは即時で「元に戻す」付き
@@ -114,8 +114,13 @@ commit から `bun run openapi:sync-scenarios` で取込) を投影に再生し�
 読み込めなかった場合も `App.Dom.trackImageFailures` が `:name:` に切り替えます)。自サーバー経由の配信 (プロキシ) は別 unit です。
 `RelationActor.iconUrl` も同じ方針で、表示の変更は D08 unit が行います。
 
-反応の規則 (S3): 422 `emoji_unavailable` → 同一絵文字の再送は 200 の no-op → 422 `emoji_usage_not_allowed` → 409 `conflict`
-の順です。`EMOJI_USAGE_NOT_ALLOWED` は `EMOJI_UNAVAILABLE` と別の失敗として扱い、422 / 501 では成功トーストも保存済みの
+元サーバーで削除・期限切れになった外部絵文字は、契約 (ShuttlePub bd997e6、d09-q07) では `availability=available` + `image_state=missing`
+(`unavailable_reason` なし) で、チップが残っていれば押して反応できます (200)。外部絵文字が `unavailable` になるのは自サーバーが
+無効化した (`disabled`) ときだけで、その場合は押せない見た目になり、送れば 422 `emoji_unavailable` です (`unavailable` + `deleted`
+の外部絵文字は契約外で、BFF は不正な応答として扱います)。
+
+反応の規則 (S3): 422 `emoji_unavailable` (自サーバーの利用不可と外部の `disabled`) → 同一絵文字の再送は 200 の no-op →
+422 `emoji_usage_not_allowed` (チップの無い外部絵文字。削除済みも同じ) → 409 `conflict` (外部絵文字で別の反応中) → 200 の順です。`EMOJI_USAGE_NOT_ALLOWED` は `EMOJI_UNAVAILABLE` と別の失敗として扱い、422 / 501 では成功トーストも保存済みの
 状態も作りません。反応済みの間は他サーバーの絵文字へ直接置き換えられない (409) ため、未送信の解除があるときは先にそれを送ってから
 PUT します (`Client.Reaction.flushFirst`)。
 

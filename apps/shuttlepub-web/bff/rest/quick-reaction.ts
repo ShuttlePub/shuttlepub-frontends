@@ -18,12 +18,15 @@
 //    an external emoji (usage existing_reaction_only) is never a favourite (422
 //    emoji_usage_not_allowed, checked after availability).
 //  - reaction: one per Profile and Note. PUT applies, first match answering: 1 an
-//    unavailable emoji is 422 emoji_unavailable (even the one already selected); 2 the
-//    emoji is the current selection: 200 no-op; 3 an external emoji with no chip of the
-//    same emoji on the Note: 422 emoji_usage_not_allowed; 4 an external emoji while
-//    reacted with another emoji: 409 conflict (no replacement); 5 select/replace.
-//    DELETE is always 200 with emoji null, also when the selected emoji has become
-//    unavailable.
+//    unavailable emoji is 422 emoji_unavailable (an unavailable local custom emoji or an
+//    external emoji this server disabled; even the one already selected; NOT an external
+//    emoji merely deleted at its origin: that stays available with image_state missing);
+//    2 the emoji is the current selection: 200 no-op; 3 an external emoji with no chip of
+//    the same emoji on the Note: 422 emoji_usage_not_allowed (also one deleted at its
+//    origin); 4 an external emoji while reacted with another emoji: 409 conflict (no
+//    replacement); 5 select/replace (so an origin-deleted external emoji whose chip is
+//    still on the Note is selected with 200). DELETE is always 200 with emoji null, also
+//    when the selected emoji has become unavailable.
 
 import type { components } from "./generated/shuttlepub-api.ts";
 
@@ -220,6 +223,20 @@ export class QuickReactionStore {
     this.emoji.set(id, entry);
   }
 
+  /**
+   * The origin deletes an external emoji (and the local copy expires): it stays available, only
+   * its image is gone (image_state missing, no image_url, no unavailable_reason). The producer
+   * never reports an external emoji as unavailable because of a deletion (d09-q07).
+   */
+  originDeleted(id: string): void {
+    const entry = this.emoji.get(id);
+    if (entry === undefined) return;
+    delete entry.image_url;
+    delete entry.reason;
+    entry.availability = "available";
+    entry.image_state = "missing";
+  }
+
   /** An external emoji: usable only through an existing chip of the Note (never a favourite). */
   external(emoji: EmojiRef): boolean {
     return emoji.type === "custom" && this.emoji.get(emoji.id)?.usage === "existing_reaction_only";
@@ -371,7 +388,9 @@ export class QuickReactionStore {
  * The rules every EmojiView the server sends obeys (producer EmojiView::check_consistency):
  * unavailable_reason goes with `unavailable` only; a Unicode emoji is always available
  * and has no custom data; image_state agrees with image_url (a missing image keeps a
- * shortcode to show as :name:); an emoji with an origin is existing_reaction_only.
+ * shortcode to show as :name:); an emoji with an origin is existing_reaction_only and is
+ * never unavailable because it was deleted (only disabled by this server; deletion at the origin
+ * is image_state missing while available).
  * Returns the first violated rule, or null. A schema-valid body can still break them.
  */
 export function emojiViewInconsistency(view: EmojiView): string | null {
@@ -389,6 +408,9 @@ export function emojiViewInconsistency(view: EmojiView): string | null {
     return "image_state missing needs a shortcode to show as :name:";
   }
   if (view.origin != null && view.usage !== "existing_reaction_only") return "an external emoji must be existing_reaction_only";
+  if ((view.origin != null || view.usage === "existing_reaction_only") && view.unavailable_reason === "deleted") {
+    return "an external emoji is never unavailable because it was deleted (deletion at the origin is image_state missing)";
+  }
   return null;
 }
 

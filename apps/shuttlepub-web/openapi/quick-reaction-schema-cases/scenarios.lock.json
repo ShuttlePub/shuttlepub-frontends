@@ -1,0 +1,14 @@
+{
+  "producer": {
+    "repository": "ShuttlePub/ShuttlePub",
+    "commit": "bd997e6cb64b7f96ce454673f0a278f47db1dcf8",
+    "path": "server/tests/fixtures/quick_reaction"
+  },
+  "files": [
+    {
+      "file": "schema_cases.json",
+      "sha256": "e1c219242d997ef15aaa834adb55223c24352d7afb5d2a466ce585745de01385",
+      "bytes": 29410
+    }
+  ]
+}

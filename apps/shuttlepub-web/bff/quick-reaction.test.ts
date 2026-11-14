@@ -148,13 +148,16 @@ describe("mock mode: stateful S3 mock", () => {
     }[])[0]!.others;
     const byValue = Object.fromEntries(chips.map((chip) => [chip.emoji.value as string, chip.emoji]));
     // The same shortcode from two servers is two emoji with different stable ids.
-    expect(Object.keys(byValue).sort()).toEqual(["ghostcat@remote.example", "goneblob@remote.example", "kusa", "kusa@remote.example"]);
+    expect(Object.keys(byValue).sort()).toEqual(["ghostcat@remote.example", "goneblob@remote.example", "kusa", "kusa@remote.example", "offblob@remote.example"]);
     expect(byValue["kusa@remote.example"]).toEqual({
       kind: "CUSTOM", value: "kusa@remote.example", shortcode: "kusa", imageUrl: null, available: true, unavailableReason: null,
       origin: "remote.example", imageState: "PRESENT", usage: "EXISTING_REACTION_ONLY",
     });
     expect(byValue["ghostcat@remote.example"]).toMatchObject({ imageUrl: null, imageState: "MISSING", available: true, origin: "remote.example" });
-    expect(byValue["goneblob@remote.example"]).toMatchObject({ imageUrl: null, imageState: "MISSING", available: false, unavailableReason: "DELETED" });
+    // Deleted at its origin (d09-q07): still available, only the image is gone (the same look as ghostcat).
+    expect(byValue["goneblob@remote.example"]).toMatchObject({ imageUrl: null, imageState: "MISSING", available: true, unavailableReason: null, origin: "remote.example" });
+    // The only unavailable external emoji is one this server disabled; its origin URL is never passed on either.
+    expect(byValue["offblob@remote.example"]).toMatchObject({ imageUrl: null, imageState: "PRESENT", available: false, unavailableReason: "DISABLED", origin: "remote.example" });
     // This server's own :kusa: keeps its image and has no origin.
     expect(byValue["kusa"]).toMatchObject({ origin: null, usage: "ANYWHERE" });
     expect(String(byValue["kusa"]!.imageUrl).startsWith("data:image/svg+xml,")).toBe(true);
@@ -176,8 +179,25 @@ describe("mock mode: stateful S3 mock", () => {
     // Without a chip of the same emoji on the Note: 422 emoji_usage_not_allowed, nothing saved.
     expect(code(await gql(SET, { p: p1, n: MIKA, e: custom("kusa@remote.example") }))).toBe("EMOJI_USAGE_NOT_ALLOWED");
     expect(((await gql(REACTIONS, { p: p1, n: [MIKA] })).data!.postReactions as { mine: unknown }[])[0]!.mine).toBeNull();
-    // Unavailable is checked first: a deleted one is EMOJI_UNAVAILABLE even with a chip.
-    expect(code(await gql(SET, { p: p1, n: AOI, e: custom("goneblob@remote.example") }))).toBe("EMOJI_UNAVAILABLE");
+    // Availability is checked first: an external emoji this server disabled is EMOJI_UNAVAILABLE, chip or not.
+    expect(code(await gql(SET, { p: p1, n: AOI, e: custom("offblob@remote.example") }))).toBe("EMOJI_UNAVAILABLE");
+    expect(code(await gql(SET, { p: p1, n: MIKA, e: custom("offblob@remote.example") }))).toBe("EMOJI_UNAVAILABLE");
+    // Deleted at its origin: not unavailable, so without a chip it is the usage refusal (never EMOJI_UNAVAILABLE)...
+    expect(code(await gql(SET, { p: p1, n: MIKA, e: custom("goneblob@remote.example") }))).toBe("EMOJI_USAGE_NOT_ALLOWED");
+    // ...and not as a favourite either.
+    expect(code(await gql(UPDATE, { p: p2, r: 0, f: [unicode("👍"), custom("goneblob@remote.example")] }))).toBe("EMOJI_USAGE_NOT_ALLOWED");
+    // With its chip still on the Note it is selected (200), repeating it is the no-op, and it can be removed.
+    const gone = custom("goneblob@remote.example");
+    expect(await gql(SET, { p: p1, n: AOI, e: gone })).toEqual({ data: { setNoteReaction: { noteId: AOI, emoji: { kind: "CUSTOM", value: "goneblob@remote.example" } } } });
+    expect((await gql(SET, { p: p1, n: AOI, e: gone })).errors).toBeUndefined();
+    expect(((await gql(REACTIONS, { p: p1, n: [AOI] })).data!.postReactions as { mine: { value: string; available: boolean } | null }[])[0]!.mine).toMatchObject({ value: "goneblob@remote.example", available: true });
+    expect((await gql(REMOVE, { p: p1, n: AOI })).errors).toBeUndefined();
+    // The origin deletes the emoji the Profile selected: still available, the repeat is the 200 no-op.
+    const ghostSelected = await gql(SET, { p: p1, n: AOI, e: ghost });
+    expect(ghostSelected.errors).toBeUndefined();
+    (app.api as unknown as { quickReaction: { originDeleted: (id: string) => void } }).quickReaction.originDeleted("ghostcat@remote.example");
+    expect((await gql(SET, { p: p1, n: AOI, e: ghost })).errors).toBeUndefined();
+    expect((await gql(REMOVE, { p: p1, n: AOI })).errors).toBeUndefined();
     // A chip of the Note: allowed, and the same emoji again is a no-op 200.
     const first = await gql(SET, { p: p1, n: AOI, e: ghost });
     expect(first).toEqual({ data: { setNoteReaction: { noteId: AOI, emoji: { kind: "CUSTOM", value: "ghostcat@remote.example" } } } });

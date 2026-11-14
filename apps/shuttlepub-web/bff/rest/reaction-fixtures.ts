@@ -34,18 +34,19 @@ export const MOCK_CUSTOM_EMOJI: Record<string, CustomEmojiSetup> = Object.fromEn
  * stay different emoji. They are existing_reaction_only: usable only through a chip of the Note.
  * The image_url of a present one points at the origin server, as the producer's fixtures do:
  * the browser must never load it (d09-q06), which is why the app shows :name: for every one.
- * `ghostcat` has no image (image_state missing) but stays selectable; `goneblob` was deleted at
- * its origin (unavailable: the server answers 422 emoji_unavailable if it is pressed).
+ * `ghostcat` has no image (image_state missing) but stays selectable; `goneblob` was deleted at its
+ * origin (d09-q07): still available, only the image is gone (the same look as ghostcat, and its chip
+ * can be pressed); `offblob` is disabled by this server, the only unavailable external emoji.
  */
-const external = (shortcode: string, origin: string, state: "present" | "missing" | "deleted"): [string, CustomEmojiSetup] => [
+const external = (shortcode: string, origin: string, state: "present" | "missing" | "deleted" | "disabled"): [string, CustomEmojiSetup] => [
   `${shortcode}@${origin}`,
   {
     shortcode,
-    ...(state === "present" ? { image_url: `https://${origin}/emoji/${shortcode}.png` } : {}),
-    availability: state === "deleted" ? "unavailable" : "available",
-    ...(state === "deleted" ? { reason: "deleted" as const } : {}),
+    ...(state === "present" || state === "disabled" ? { image_url: `https://${origin}/emoji/${shortcode}.png` } : {}),
+    availability: state === "disabled" ? "unavailable" : "available",
+    ...(state === "disabled" ? { reason: "disabled" as const } : {}),
     origin,
-    image_state: state === "present" ? "present" : "missing",
+    image_state: state === "present" || state === "disabled" ? "present" : "missing",
     usage: "existing_reaction_only",
   },
 ];
@@ -57,6 +58,7 @@ export const MOCK_EXTERNAL_EMOJI: Record<string, CustomEmojiSetup> = Object.from
   external("partycat", "other.example", "present"),
   external("ghostcat", "remote.example", "missing"),
   external("goneblob", "remote.example", "deleted"),
+  external("offblob", "remote.example", "disabled"),
 ]);
 
 const u = (value: string): EmojiRef => ({ type: "unicode", value });
@@ -79,9 +81,11 @@ const OTHERS: Record<string, readonly [EmojiRef, number][]> = {
   [NOTE_IDS["post-sora-zine"]]: [[u("🎉"), 4], [u("✨"), 2], [u("💜"), 1]],
   [NOTE_IDS["post-nekota-coffee"]]: [[u("☕"), 4], [u("👍"), 1]],
   // D09: this server's :kusa: beside another server's :kusa: (same shortcode, different emoji), an
-  // external emoji whose image is gone (still selectable) and one deleted at its origin.
+  // external emoji whose image is gone (still selectable), one deleted at its origin (the same look,
+  // also selectable) and one this server disabled (not selectable).
   [NOTE_IDS["post-aoi-profiles"]]: [
     [c("kusa@remote.example"), 3], [c("kusa"), 2], [c("ghostcat@remote.example"), 1], [c("goneblob@remote.example"), 1],
+    [c("offblob@remote.example"), 1],
   ],
   [NOTE_IDS["post-kei-release"]]: [
     [c("kusa"), 6], [u("😂"), 3], [u("👀"), 2], [c("shuttle"), 2], [u("🙏"), 1],

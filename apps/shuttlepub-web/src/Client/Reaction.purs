@@ -373,7 +373,7 @@ mergePosts model reads fetched = accepted <> filter (\entry -> not (any (\new ->
 react :: PostRef -> Emoji -> Model -> Step
 react post emoji model = case model.reaction.profileId of
   Just profileId
-    | isNothing (mineOf model post.noteId) && not (busy model post.noteId) && (emoji.available || isExternal emoji) ->
+    | isNothing (mineOf model post.noteId) && not (busy model post.noteId) && emoji.available ->
         let
           unsent = case model.reaction.pendingRemoval of
             Just removal | removal.post.noteId == post.noteId -> Just removal

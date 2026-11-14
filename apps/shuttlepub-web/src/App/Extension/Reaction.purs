@@ -179,7 +179,7 @@ summary model post = case reactionsOf model post of
       tip = tooltipOf entry
       label = emojiLabel entry.emoji
       classes = "sp-rchip" <> (if entry.mine then " is-mine" else "") <> (if isExternal entry.emoji then " is-external" else "")
-        <> (if entry.emoji.available || isExternal entry.emoji then "" else " is-unavailable")
+        <> (if entry.emoji.available then "" else " is-unavailable")
       inner = [ glyph entry.emoji, originMark entry.emoji, HE.span [ HA.class' "sp-rchip-count" ] [ HE.text (show entry.count) ] ]
     in
       if entry.mine then
@@ -195,7 +195,7 @@ summary model post = case reactionsOf model post of
             ] <> busyOr (reaction (RemoveMine (refOf post)))
           )
           inner
-      else if not reacted && (entry.emoji.available || isExternal entry.emoji) && isJust (activeProfile model) then
+      else if not reacted && entry.emoji.available && isJust (activeProfile model) then
         HE.button
           ( [ HA.type' "button"
             , attr "data-emoji" (emojiKey entry.emoji)

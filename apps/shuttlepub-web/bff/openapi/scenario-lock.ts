@@ -8,7 +8,7 @@
 // examples, not to a reading of the contract made here. The lock records the producer
 // commit (the same commit as producer.lock.json) and the SHA-256 of every file.
 // Update only through `bun run openapi:sync-scenarios` (scripts/sync-reaction-scenarios.ts),
-// which also vendors the S8 fixture set below.
+// which also vendors the S8 fixture set and the S3 schema cases below.
 
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -24,10 +24,17 @@ export const PRODUCER_SCENARIO_PATH = "server/tests/fixtures/quick_reaction/scen
 export const PERSONAL_DOMAIN_DIR = join(OPENAPI_DIR, "personal-domain-fixtures");
 export const PRODUCER_PERSONAL_DOMAIN_PATH = "server/tests/fixtures/personal_domain";
 
+// The producer's S3 schema cases (quick_reaction/schema_cases.json): requests and responses of the
+// quick reaction operations, each valid or invalid against the OpenAPI as the producer says
+// (replayed by bff/rest/quick-reaction-schema-cases.test.ts).
+export const QUICK_REACTION_SCHEMA_CASES_DIR = join(OPENAPI_DIR, "quick-reaction-schema-cases");
+export const PRODUCER_QUICK_REACTION_PATH = "server/tests/fixtures/quick_reaction";
+
 /** Every vendored fixture set (scripts/sync-reaction-scenarios.ts, scripts/verify-openapi.ts). */
 export const PRODUCER_FIXTURE_SETS = [
   { label: "quick reaction scenarios", directory: SCENARIO_DIR, producerPath: PRODUCER_SCENARIO_PATH },
   { label: "personal domain content fixtures", directory: PERSONAL_DOMAIN_DIR, producerPath: PRODUCER_PERSONAL_DOMAIN_PATH },
+  { label: "quick reaction schema cases", directory: QUICK_REACTION_SCHEMA_CASES_DIR, producerPath: PRODUCER_QUICK_REACTION_PATH },
 ] as const;
 
 export type ScenarioLock = {

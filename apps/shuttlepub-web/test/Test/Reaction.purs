@@ -761,21 +761,26 @@ localKusa = { kind: CustomEmoji, value: "kusa", shortcode: Just "kusa", imageUrl
 remoteKusa :: Emoji
 remoteKusa = localKusa { value = "kusa@remote.example", imageUrl = Nothing, origin = Just "remote.example", usage = Just ExistingReactionOnly }
 
--- | Deleted at its origin: unavailable, no image.
+-- | Deleted at its origin (and its local copy expired): still available, only the image is gone
+-- | (image_state missing, no unavailable_reason); the chip can still be pressed.
 remoteGone :: Emoji
-remoteGone = remoteKusa { value = "goneblob@remote.example", shortcode = Just "goneblob", available = false, unavailableReason = Just Deleted, imageState = Just ImageMissing }
+remoteGone = remoteKusa { value = "goneblob@remote.example", shortcode = Just "goneblob", imageState = Just ImageMissing }
+
+-- | Disabled by this server: the only way an external emoji is unavailable (never "deleted").
+remoteOff :: Emoji
+remoteOff = remoteKusa { value = "offblob@remote.example", shortcode = Just "offblob", available = false, unavailableReason = Just Disabled }
 
 aoi :: { postId :: String, noteId :: String }
 aoi = { postId: "post-aoi-profiles", noteId: "note-aoi" }
 
--- | A Note carrying this server's :kusa:, another server's :kusa: and one deleted at its origin.
+-- | A Note carrying this server's :kusa:, another server's :kusa:, one deleted at its origin and one this server disabled.
 withRemoteChips :: Model
 withRemoteChips = ready
   { reaction = ready.reaction
       { posts = reactions <>
           [ { noteId: aoi.noteId
             , mine: Nothing
-            , others: [ { emoji: remoteKusa, count: 3, reactors: [] }, { emoji: localKusa, count: 2, reactors: [] }, { emoji: remoteGone, count: 1, reactors: [] } ]
+            , others: [ { emoji: remoteKusa, count: 3, reactors: [] }, { emoji: localKusa, count: 2, reactors: [] }, { emoji: remoteGone, count: 1, reactors: [] }, { emoji: remoteOff, count: 1, reactors: [] } ]
             }
           ]
       }
@@ -812,7 +817,7 @@ testRemoteEmoji = do
   let
     replacing = step withRemoteChips (OpenPicker (ReplaceFavorite 0) "sp-fav-0")
   assertTrue "nor does it replace one" (Array.null (step replacing (Pick remoteKusa)).reactionWrites.settings)
-  -- The chip: reacts when not reacted; a deleted one is pressed too (the server decides).
+  -- The chip: reacts when not reacted; one deleted at its origin is pressed like any other.
   let
     reacted = step withRemoteChips (ReactWithChip aoi remoteKusa)
   assertEqual "the chip reacts with the same emoji" (mineOn reacted aoi.noteId) (Just remoteKusa)
@@ -830,14 +835,27 @@ testRemoteEmoji = do
   assertEqual "removal shows at once" (mineOn removed aoi.noteId) Nothing
   assertEqual "undo restores the external reaction" (mineOn undone aoi.noteId) (Just remoteKusa)
   assertTrue "undo sends nothing" (Array.null undone.reactionWrites.notes && isNothing undone.reaction.pendingRemoval)
-  -- Pressing a deleted external emoji sends it; 422 emoji_unavailable saves nothing.
+  -- Deleted at its origin: the chip is still there, so pressing it reacts (200); repeating it is a no-op.
   let
     gone = step withRemoteChips (ReactWithChip aoi remoteGone)
-    refusedGone = saved gone aoi (Left (EmojiUnavailable "deleted"))
-  assertTrue "a deleted external emoji is pressable" (busyOn gone aoi.noteId)
-  assertEqual "422 emoji_unavailable keeps no reaction" (mineOn refusedGone aoi.noteId) Nothing
-  assertEqual "422 emoji_unavailable is shown as such" (failureOf refusedGone) (Just (EmojiUnavailable "deleted"))
+    goneSaved = saved gone aoi (Right (Just remoteGone))
+  assertTrue "an external emoji deleted at its origin is pressable" (busyOn gone aoi.noteId)
+  assertEqual "it is the reaction once the server answers 200" (mineOn goneSaved aoi.noteId) (Just remoteGone)
+  assertTrue "success shows no toast and nothing failed" (isNothing goneSaved.reaction.toast && isNothing (failureOf goneSaved))
+  assertEqual "removing it works like any other reaction" (mineOn (step goneSaved (RemoveMine aoi)) aoi.noteId) Nothing
+  -- Without its chip the server answers 422 emoji_usage_not_allowed (also when deleted at its origin).
+  let
+    noChip = saved gone aoi (Left (EmojiUsageNotAllowed "no chip"))
+  assertEqual "422 emoji_usage_not_allowed keeps no reaction" (mineOn noChip aoi.noteId) Nothing
+  assertEqual "and is shown as itself, not as unavailable" (failureOf noChip) (Just (EmojiUsageNotAllowed "no chip"))
+  -- Disabled by this server (the only unavailable external emoji): not pressable, nothing is sent.
+  assertTrue "a disabled external emoji is not sent" (Array.null (step withRemoteChips (ReactWithChip aoi remoteOff)).reactionWrites.notes)
   assertTrue "an unavailable emoji of this server is still not sent" (Array.null (step withRemoteChips (ReactWithChip aoi oldBlob)).reactionWrites.notes)
+  -- If it is pressed anyway (stale view), the server's 422 emoji_unavailable saves nothing.
+  let
+    staleOff = saved (step withRemoteChips (ReactWithChip aoi remoteGone)) aoi (Left (EmojiUnavailable "disabled"))
+  assertEqual "422 emoji_unavailable keeps no reaction" (mineOn staleOff aoi.noteId) Nothing
+  assertEqual "422 emoji_unavailable is shown as such" (failureOf staleOff) (Just (EmojiUnavailable "disabled"))
   -- Every refusal is told apart, and none leaves a saved reaction or a success toast.
   for_ [ EmojiUsageNotAllowed "no chip", Conflict "reacted", NotImplemented "501", EmojiUnavailable "gone", UpstreamError "500" ] \error -> do
     let

@@ -504,8 +504,8 @@ async function prepareQuickReaction(page: Page, item: ScreenCase) {
   } else if (item.id === "reaction-remote" || item.id === "reaction-remote-picker") {
     // D09: the post with another server's chips (globe + :name:); the picker never offers them.
     const chips = page.locator("#content article").nth(3).getByTestId("reactions");
-    await expect(chips.locator(".sp-rchip.is-external")).toHaveCount(3);
-    await expect(chips.getByTestId("origin-mark")).toHaveCount(3);
+    await expect(chips.locator(".sp-rchip.is-external")).toHaveCount(4);
+    await expect(chips.getByTestId("origin-mark")).toHaveCount(4);
     await expect(chips.locator(".sp-rchip.is-external img")).toHaveCount(0);
     if (item.id === "reaction-remote-picker") {
       await page.locator("#react-post-aoi-profiles").click();
