@@ -10,13 +10,13 @@ module App.MuteBlock.View (view, overlay, tabPath) where
 
 import Prelude
 
+import App.MuteBlock.Actor (actorAcct, actorInitial, actorName)
 import App.MuteBlock.Dom (localDate)
-import App.MuteBlock.Types (ActorPolicy, Dialog(..), DomainControl, Failure(..), Filter(..), Impact, InputProblem(..), Load(..), Message(..), Model, Tab(..), Toast, Undo, actorLabel, blockReady)
+import App.MuteBlock.Types (ActorPolicy, Dialog(..), DomainControl, Failure(..), Filter(..), Impact, InputProblem(..), Load(..), Message(..), Model, Tab(..), Toast, Undo, blockReady)
 import Data.Array (filter, length, nub, null)
 import Data.Array as Array
 import Data.Maybe (Maybe(..), isJust)
-import Data.String (Pattern(..), split, toUpper)
-import Data.String as String
+import Data.String (Pattern(..), stripPrefix)
 import Data.Tuple (Tuple(..))
 import Effect (Effect)
 import Flame (Html)
@@ -203,15 +203,32 @@ domainRow model control =
         )
     ]
 
+-- | A person in the "what a block detaches" list: Emumet gives only canonical actor URLs
+-- | there (no display information), shown without their scheme.
+urlLabel :: String -> String
+urlLabel url = case stripPrefix (Pattern "https://") url of
+  Just rest -> rest
+  Nothing -> case stripPrefix (Pattern "http://") url of
+    Just rest -> rest
+    Nothing -> url
+
+-- | ui-spec 1-6 / d08-q18 / d08-q20: icon, name and acct, then the unmute/unblock text
+-- | button. No badge, no date, no state text: a PENDING or UNAVAILABLE target looks like
+-- | the rest with whatever name it has, and can always be released. The icon is always
+-- | the placeholder (initial): the avatar image of another server is never loaded
+-- | (d09-q06), and a local one is not either (see README). The row is keyed by the
+-- | policy id (`data-policy`), never by the name or the acct.
 actorRow :: Model -> ActorPolicy -> Html Message
 actorRow model policy =
-  HE.li [ HA.class' entryClass, HA.createAttribute "data-actor" policy.actorUrl ]
-    [ HE.span [ HA.class' ("flex-none inline-grid place-items-center w-7 h-7 text-xs font-bold bg-accent " <> T.roundedTheme <> " text-bg-primary"), HA.createAttribute "aria-hidden" "true" ]
-        [ HE.text (initial policy.actorUrl) ]
+  HE.li [ HA.class' entryClass, HA.createAttribute "data-actor" policy.actorUrl, HA.createAttribute "data-policy" policy.id, HA.createAttribute "data-testid" "actor-row" ]
+    [ HE.span [ HA.class' ("flex-none inline-grid place-items-center w-7 h-7 text-xs font-bold bg-accent " <> T.roundedTheme <> " text-bg-primary"), HA.createAttribute "aria-hidden" "true", HA.createAttribute "data-testid" "actor-icon" ]
+        [ HE.text (actorInitial policy) ]
     , HE.div [ HA.class' "flex-1 min-w-0" ]
-        [ HE.div [ HA.class' ("font-mono font-semibold break-all " <> T.textHeading) ] [ HE.text label ]
-        , HE.div [ HA.class' ("text-xs " <> T.textMuted) ] [ HE.text (localDate policy.createdAt) ]
-        ]
+        ( [ HE.div [ HA.class' ("font-semibold break-all " <> T.textHeading), HA.createAttribute "data-testid" "actor-name" ] [ HE.text label ] ]
+            <> case actorAcct policy of
+              Just acct -> [ HE.div [ HA.class' ("text-xs font-mono break-all " <> T.textMuted), HA.createAttribute "data-testid" "actor-acct" ] [ HE.text acct ] ]
+              Nothing -> []
+        )
     , rowButton model ("mb-actor-" <> policy.id) policy.mode label
         ( case policy.mode of
             MUTE -> UnmuteActor policy
@@ -219,7 +236,7 @@ actorRow model policy =
         )
     ]
   where
-  label = actorLabel policy.actorUrl
+  label = actorName policy
 
 -- | ui-spec 1-6: no badge; the button's wording and text colour carry the kind.
 rowButton :: Model -> String -> PolicyMode -> String -> Message -> Html Message
@@ -240,11 +257,6 @@ modeLabel :: PolicyMode -> String
 modeLabel = case _ of
   MUTE -> "ミュート"
   BLOCK -> "ブロック"
-
-initial :: String -> String
-initial url = case Array.last (filter (_ /= "") (split (Pattern "/") (actorLabel url))) of
-  Just segment -> toUpper (String.take 1 segment)
-  Nothing -> "?"
 
 -- ---------------------------------------------------------------------------
 -- Dialogs (ui-spec 1-5, 2-1 … 2-5). Mobile: bottom sheet.
@@ -397,12 +409,12 @@ dialogView busy = case _ of
       ]
   ConfirmActorUnblock state ->
     let
-      label = actorLabel state.policy.actorUrl
+      label = actorName state.policy
     in
       dialogBox "unblock-dialog"
-        [ dialogHead [ mono label, HE.text " のブロックを解除しますか？" ] false Nothing
+        [ dialogHead [ HE.text (label <> " のブロックを解除しますか？") ] false Nothing
         , dialogBody
-            ( [ HE.p [ HA.class' "m-0" ] [ mono label, HE.text " とフォローできるようになります。" ] ]
+            ( [ HE.p [ HA.class' "m-0" ] [ HE.text (label <> " とフォローできるようになります。") ] ]
                 <> failureLine state.failure
             )
         , dialogFoot
@@ -461,7 +473,7 @@ impactView retry load acknowledged pending = case load of
         people = nub (impact.following <> impact.followers)
         person url =
           HE.li [ HA.class' "flex items-center gap-2 text-xs" ]
-            [ HE.span [ HA.class' "flex-1 min-w-0 font-mono break-all" ] [ HE.text (actorLabel url) ]
+            [ HE.span [ HA.class' "flex-1 min-w-0 font-mono break-all" ] [ HE.text (urlLabel url) ]
             , HE.span [ HA.class' ("text-[11px] font-semibold px-2 py-0.5 bg-text-muted/20 " <> T.roundedTheme <> " " <> T.textSecondary) ]
                 [ HE.text (relationLabel url) ]
             ]

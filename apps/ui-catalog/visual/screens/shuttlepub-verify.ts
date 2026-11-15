@@ -207,12 +207,24 @@ async function expectScrollLocked(page: Page, locked: boolean) {
   await expect.poll(() => page.evaluate(() => document.documentElement.classList.contains("sp-scroll-locked"))).toBe(locked);
 }
 
+/** The modal owns the focus (it moves in after the dialog is drawn): wait for it before sending keys. */
+async function expectFocusInside(layer: Locator) {
+  await expect.poll(() => layer.evaluate((element) => element.contains(document.activeElement)), { message: "initial focus is inside the modal" }).toBe(true);
+}
+
 /** Tab and Shift+Tab cycle within an aria-modal layer (ui-spec 実装上の注意 6). */
 async function expectTabStaysInside(page: Page, layer: Locator) {
+  // Waiting for the initial focus keeps a slow runner from testing a focus that has not moved in yet.
+  await expectFocusInside(layer);
+  const where = () => layer.evaluate((element) => {
+    const active = document.activeElement;
+    return { inside: element.contains(active), active: active ? `${active.tagName.toLowerCase()}#${active.id}[${active.getAttribute("data-testid") ?? ""}] ${(active.textContent ?? "").slice(0, 24)}` : "none" };
+  });
   for (const key of ["Tab", "Shift+Tab"]) {
     for (let i = 0; i < 8; i++) {
       await page.keyboard.press(key);
-      expect(await layer.evaluate((element) => element.contains(document.activeElement)), `${key} #${i + 1} left the modal`).toBe(true);
+      const state = await where();
+      expect(state.inside, `${key} #${i + 1} left the modal; active element: ${state.active}`).toBe(true);
     }
   }
 }
@@ -1223,6 +1235,86 @@ async function verifyMuteBlock(page: Page, viewport: Viewport) {
 }
 
 /**
+ * D08 account list (ui-spec 1-6, d08-q18 / d08-q20, d09-q06): icon, name and acct from
+ * target_actor for local / remote and resolved / pending / unavailable / sparse targets, an
+ * avatar URL is never requested (the seed has avatars on a remote and on a local target), and
+ * unmuting / unblocking names the person as the list does. The seeded rows are put back.
+ */
+async function verifyMuteBlockAccounts(page: Page, viewport: Viewport) {
+  const external: string[] = [];
+  const images: string[] = [];
+  page.on("request", (request) => {
+    const { hostname } = new URL(request.url());
+    if (hostname !== "127.0.0.1" && hostname !== "localhost" && request.url().startsWith("http")) external.push(request.url());
+    if (request.resourceType() === "image") images.push(request.url());
+  });
+  await page.goto("/settings/mute-block/accounts", { waitUntil: "networkidle" });
+  const panel = page.getByTestId("account-panel");
+  await expect(panel.locator("section")).toHaveAttribute("data-state", "loaded");
+  const row = (actorUrl: string) => panel.locator(`li[data-actor="${actorUrl}"]`);
+  const expectRow = async (actorUrl: string, name: string, acct: string | null, initial: string, label: string, action: string) => {
+    const item = row(actorUrl);
+    await expect(item).toHaveCount(1);
+    await expect(item.getByTestId("actor-name")).toHaveText(name);
+    if (acct === null) await expect(item.getByTestId("actor-acct")).toHaveCount(0);
+    else await expect(item.getByTestId("actor-acct")).toHaveText(acct);
+    await expect(item.getByTestId("actor-icon")).toHaveText(initial);
+    await expect(item.getByRole("button", { name: label })).toHaveCount(1);
+    // No badge, no state text, no date: icon, name, acct and the button text are all of it.
+    const text = (await item.innerText()).replace(/\s+/g, " ").trim();
+    expect(text).toBe([initial, name, acct, action].filter((part) => part !== null).join(" "));
+  };
+  // remote resolved with an avatar URL on another server; local resolved with an avatar on this server.
+  await expectRow("https://spam.example/users/spam_bot", "Spam Bot", "@spam_bot@spam.example", "S", "ブロック解除（Spam Bot）", "ブロック解除");
+  await expectRow("https://chat.example/users/loud", "Loud", "@loud@chat.example", "L", "ミュート解除（Loud）", "ミュート解除");
+  await expectRow("https://shuttlepub.example/users/kei", "Kei", "@kei@shuttlepub.example", "K", "ミュート解除（Kei）", "ミュート解除");
+  // pending / unavailable: the actor URL stands in for the name, nothing else is said.
+  await expectRow("https://ads.example/users/ad_bot", "https://ads.example/users/ad_bot", null, "A", "ブロック解除（https://ads.example/users/ad_bot）", "ブロック解除");
+  await expectRow("https://anime.example/users/spoiler", "https://anime.example/users/spoiler", null, "S", "ミュート解除（https://anime.example/users/spoiler）", "ミュート解除");
+  // resolved with the acct only: "@acct" is the name, with no second line repeating it.
+  await expectRow("https://small.example/users/quiet", "@quiet@small.example", null, "Q", "ブロック解除（@quiet@small.example）", "ブロック解除");
+  await expect(panel.locator("img")).toHaveCount(0);
+  // Unmute: its name in the toast, 元に戻す brings the same person back.
+  const removed: string[] = [];
+  page.on("request", (request) => {
+    if (!request.url().endsWith("/graphql") || request.method() !== "POST") return;
+    const body = request.postData() ?? "";
+    if (/removeActorPolicy/.test(body)) removed.push(body);
+  });
+  const loudPolicy = await row("https://chat.example/users/loud").getAttribute("data-policy");
+  expect(loudPolicy, "the row carries its policy id").toBeTruthy();
+  await row("https://chat.example/users/loud").getByRole("button", { name: "ミュート解除（Loud）" }).click();
+  await expect(page.getByTestId("toast")).toContainText("Loud のミュートを解除しました");
+  await expect(row("https://chat.example/users/loud")).toHaveCount(0);
+  expect(removed, "one removal was sent").toHaveLength(1);
+  expect(removed[0], "the unmute sent the row's own policy id").toContain(loudPolicy!);
+  for (const other of await panel.locator("li[data-policy]").evaluateAll((items) => items.map((item) => item.getAttribute("data-policy")))) {
+    if (other !== loudPolicy) expect(removed[0], "and no other row's id").not.toContain(other!);
+  }
+  await page.getByRole("button", { name: "元に戻す" }).click();
+  await expect(row("https://chat.example/users/loud")).toHaveCount(1);
+  // Unblock: the dialog calls a pending target by its fallback name and a resolved one by its display name.
+  await row("https://ads.example/users/ad_bot").getByRole("button", { name: /ブロック解除/ }).click();
+  const dialog = page.getByTestId("unblock-dialog");
+  await expect(dialog).toContainText("https://ads.example/users/ad_bot のブロックを解除しますか？");
+  await expectFocusInside(dialog);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  await row("https://spam.example/users/spam_bot").getByRole("button", { name: /ブロック解除/ }).click();
+  await expect(dialog).toContainText("Spam Bot のブロックを解除しますか？");
+  await expectFocusInside(dialog);
+  await page.keyboard.press("Escape");
+  await expect(dialog).toHaveCount(0);
+  // The filter shows the same rows by kind.
+  await panel.getByRole("button", { name: "ブロック", exact: true }).click();
+  await expect(panel.locator("li")).toHaveCount(3);
+  await panel.getByRole("button", { name: "すべて", exact: true }).click();
+  await expect(panel.locator("li")).toHaveCount(6);
+  expect(external, "no request to another origin (no avatar of any server is loaded)").toEqual([]);
+  expect(images.filter((url) => /avatars|\/media\//.test(url)), `no avatar image at ${viewport.name}`).toEqual([]);
+}
+
+/**
  * D08 second stage (host personal-domain-controls-ui ui-spec v5 1-1 主導線, 3-x, 4-1, 5-1;
  * S8 contract in the mock): the post menu by keyboard, immediate mute with 元に戻す, the
  * block confirmation over an inert shell, hidden / revealed direct views (reveal is
@@ -1361,8 +1453,16 @@ async function verifyDomainContent(page: Page, viewport: Viewport) {
   // 3-4 (S8): a quote of a muted post is hidden whole by the quoted domain (cause QUOTE);
   // one reveal shows the quote together with its target, and the quoter can be acted on.
   await page.goto("/posts/post-ken-quote", { waitUntil: "networkidle" });
-  await expect(page.getByTestId("hidden-post")).toContainText("noisy.social");
+  // d08-q19: it says it is a quote and names the quoted source; nothing of the quoter or the quoted post.
+  const quoteHidden = page.getByTestId("hidden-post");
+  await expect(quoteHidden).toHaveAttribute("data-cause", "quote");
+  await expect(quoteHidden).toContainText("ミュート中のドメインの投稿を引用しています");
+  await expect(page.getByTestId("hidden-source")).toHaveText("引用元: noisy.social");
+  await expect(quoteHidden).not.toContainText("ミュート中のドメインの投稿です");
   await expect(content).not.toContainText("これめちゃくちゃ分かる");
+  await expect(content).not.toContainText("Ken");
+  await expect(content).not.toContainText("プレイリスト");
+  await expect(content.getByTestId("quote")).toHaveCount(0);
   await page.getByRole("button", { name: "この投稿だけ表示" }).click();
   await expect(content).toContainText("これめちゃくちゃ分かる");
   await expect(content.getByTestId("quote")).toContainText("プレイリスト");
@@ -1645,6 +1745,16 @@ async function verifyMock(browser: Browser, frontendRoot: string, coreURL: strin
         console.info(`OK mute/block settings: keyboard, modal, reaction toast behind it, own server, Profile switch at ${viewport.name}`);
       } finally {
         await muteBlock.context.close();
+      }
+      // D08 account list: icon / name / acct from target_actor, no avatar request, unmute / unblock naming.
+      await resetMock(server);
+      const accounts = await openPage(browser, server, viewport);
+      try {
+        await verifyMuteBlockAccounts(accounts.page, viewport);
+        expect(accounts.errors, `mute/block accounts ${viewport.name}: browser errors`).toEqual([]);
+        console.info(`OK account list: names, accts, placeholders, no avatar request, unmute/unblock naming at ${viewport.name}`);
+      } finally {
+        await accounts.context.close();
       }
       // D08 second stage: posts of muted / blocked domains, the post menu and the 4-1 sheet.
       await resetMock(server);

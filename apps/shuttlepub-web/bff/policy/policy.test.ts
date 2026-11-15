@@ -372,12 +372,49 @@ describe("GraphQL policy API", () => {
     expect((await unconfigured.run(SET, { p: "account-a", d: "example.social", m: "MUTE" })).errors![0]!.extensions!.code).toBe("INSTANCE_HOST_NOT_CONFIGURED");
   });
 
+  test("an avatar URL never reaches the browser, local or remote (d08-q18 / d09-q06): the source keeps it, GraphQL answers null", async () => {
+    const seeded = createMockProfilePolicy({ seed: { [P]: { ...defaultPolicySeed()[MOCK_PROFILE_ID]!, actorPolicies: defaultPolicySeed()[MOCK_PROFILE_ID]!.actorPolicies.map((item) => ({ ...item, profile_id: P })) } } });
+    const stored = await seeded.listActorPolicies(P);
+    // The seed has an avatar on a remote and on a local target, so the check below is not vacuous.
+    expect(stored.find((item) => item.actorUrl === "https://spam.example/users/spam_bot")!.targetActor.iconUrl).toBe("https://spam.example/avatars/spam_bot.png");
+    expect(stored.find((item) => item.targetActor.kind === "local")!.targetActor.iconUrl).toMatch(/^https:\/\/shuttlepub\.example\/media\//);
+    const { run } = app({ policy: seeded });
+    const answer = await run("query($p: ID!) { actorPolicies(profile: $p) { targetActor { kind iconUrl } } }", { p: "account-a" });
+    const targets = (answer.data!.actorPolicies as { targetActor: { kind: string; iconUrl: string | null } }[]).map((item) => item.targetActor);
+    expect(targets.map((target) => target.kind)).toContain("LOCAL");
+    expect(targets.map((target) => target.kind)).toContain("REMOTE");
+    expect(targets.every((target) => target.iconUrl === null)).toBe(true);
+    expect(JSON.stringify(answer)).not.toContain("avatars/");
+    expect(JSON.stringify(answer)).not.toContain("/media/");
+    // A created target's answer is the same.
+    const created = await run("mutation($p: ID!) { addActorPolicy(profile: $p, actorUrl: \"https://shuttlepub.example/users/sora\", mode: BLOCK) { targetActor { kind iconUrl } } }", { p: "account-a" });
+    expect(created.data!.addActorPolicy).toMatchObject({ targetActor: { iconUrl: null } });
+  });
+
+  test("the same person muted and blocked (same name, same acct): removing one policy id leaves the other", async () => {
+    const seeded = createMockProfilePolicy({ seed: { [P]: { ...defaultPolicySeed()[MOCK_PROFILE_ID]!, actorPolicies: defaultPolicySeed()[MOCK_PROFILE_ID]!.actorPolicies.map((item) => ({ ...item, profile_id: P })) } } });
+    const { run } = app({ policy: seeded });
+    const loud = "https://chat.example/users/loud";
+    const block = await run("mutation($p: ID!, $a: String!) { addActorPolicy(profile: $p, actorUrl: $a, mode: BLOCK) { id mode targetActor { displayName acct } } }", { p: "account-a", a: loud });
+    const twin = block.data!.addActorPolicy as { id: string; targetActor: { displayName: string; acct: string } };
+    expect(twin.targetActor).toEqual({ displayName: "Loud", acct: "loud@chat.example" });
+    const rows = async () => ((await run("query($p: ID!) { actorPolicies(profile: $p) { id mode actorUrl } }", { p: "account-a" })).data!.actorPolicies as { id: string; mode: string; actorUrl: string }[]).filter((item) => item.actorUrl === loud);
+    const both = await rows();
+    expect(both.map((item) => item.mode).sort()).toEqual(["BLOCK", "MUTE"]);
+    const mute = both.find((item) => item.mode === "MUTE")!;
+    expect(mute.id).not.toBe(twin.id);
+    // Removing the mute by its own id leaves the block; a block removal with the mute's id is not found.
+    expect((await run("mutation($p: ID!, $id: ID!) { removeActorPolicy(profile: $p, id: $id, mode: BLOCK) { key } }", { p: "account-a", id: mute.id })).errors![0]!.extensions!.code).toBe("NOT_FOUND");
+    expect((await run("mutation($p: ID!, $id: ID!) { removeActorPolicy(profile: $p, id: $id, mode: MUTE) { key } }", { p: "account-a", id: mute.id })).data).toEqual({ removeActorPolicy: { key: mute.id } });
+    expect((await rows()).map((item) => item.id)).toEqual([twin.id]);
+  });
+
   test("individual mutes/blocks: list, remove and re-add (undo)", async () => {
     const seeded = createMockProfilePolicy({ seed: { [P]: { ...defaultPolicySeed()[MOCK_PROFILE_ID]!, actorPolicies: defaultPolicySeed()[MOCK_PROFILE_ID]!.actorPolicies.map((item) => ({ ...item, profile_id: P })) } } });
     const { run } = app({ policy: seeded });
     const list = async () => (await run("query($p: ID!) { actorPolicies(profile: $p) { id mode actorUrl } }", { p: "account-a" })).data!.actorPolicies as { id: string; mode: string; actorUrl: string }[];
     const before = await list();
-    expect(before).toHaveLength(4);
+    expect(before).toHaveLength(6);
     // list and create answers both carry the target's display information (#106).
     const TARGET = "targetActor { kind actorUrl status displayName iconUrl acct preferredUsername profileId }";
     const listed = (await run(`query($p: ID!) { actorPolicies(profile: $p) { actorUrl ${TARGET} } }`, { p: "account-a" })).data!.actorPolicies as { actorUrl: string; targetActor: Record<string, unknown> }[];
@@ -392,6 +429,9 @@ describe("GraphQL policy API", () => {
     expect((await list()).some((item) => item.id === loud.id)).toBe(false);
     const undo = await run("mutation($p: ID!, $a: String!) { addActorPolicy(profile: $p, actorUrl: $a, mode: MUTE) { mode actorUrl } }", { p: "account-a", a: loud.actorUrl });
     expect(undo.data!.addActorPolicy).toEqual({ mode: "MUTE", actorUrl: loud.actorUrl });
+    // The undo brings the same display information back (the server-side cache remembers the target).
+    const again = (await run(`query($p: ID!) { actorPolicies(profile: $p) { actorUrl ${TARGET} } }`, { p: "account-a" })).data!.actorPolicies as { actorUrl: string; targetActor: Record<string, unknown> }[];
+    expect(again.find((item) => item.actorUrl === loud.actorUrl)!.targetActor).toEqual(listed.find((item) => item.actorUrl === loud.actorUrl)!.targetActor);
     expect((await run("mutation($p: ID!, $a: String!) { addActorPolicy(profile: $p, actorUrl: $a, mode: MUTE) { mode } }", { p: "account-a", a: loud.actorUrl })).errors![0]!.extensions!.code).toBe("ALREADY_EXISTS");
     const created = await run(`mutation($p: ID!, $a: String!) { addActorPolicy(profile: $p, actorUrl: $a, mode: BLOCK) { ${TARGET} } }`, { p: "account-a", a: "https://never-seen.example/users/z" });
     expect(created.data!.addActorPolicy).toEqual({ targetActor: {

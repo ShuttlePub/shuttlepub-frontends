@@ -22,7 +22,7 @@ test("screen inventory covers every app and state at desktop/mobile sizes with s
   const names = SCREEN_CASES.map((item) => item.filename);
   // Then
   expect(new Set(names).size).toBe(SCREEN_CASES.length);
-  expect(SCREEN_CASES).toHaveLength(164);
+  expect(SCREEN_CASES).toHaveLength(168);
   for (const item of SCREEN_CASES) {
     expect(item.filename).toMatch(/^(Booskiff|Emumet|ShuttlePub)-[A-Za-z0-9-]+\.png$/);
     expect(item.path).toMatch(/^\/(?!\/)/);
@@ -65,10 +65,10 @@ test("ShuttlePub cases cover the SNS shell, quick reactions and login at both wi
   const cases = SCREEN_CASES.filter((item) => item.app === "ShuttlePub");
   expect([...new Set(cases.map((item) => item.id))].sort()).toEqual([
     "compose", "compose-visibility",
-    "domain-blocked-sheet", "domain-post-hidden", "domain-post-menu", "domain-post-revealed-block", "domain-quote-revealed",
+    "domain-blocked-sheet", "domain-post-hidden", "domain-post-menu", "domain-post-revealed-block", "domain-quote-hidden", "domain-quote-revealed",
     "domain-replies", "domain-user-hidden", "domain-user-list-hidden", "domain-user-revealed",
     "home", "home-session-expired", "home-signed-out",
-    "login", "login-denied", "login-failed", "mute-block-accounts", "mute-block-block-dialog", "mute-block-domains",
+    "login", "login-denied", "login-failed", "mute-block-account-unblock", "mute-block-accounts", "mute-block-block-dialog", "mute-block-domains",
     "not-found", "post-detail", "profile-menu",
     "reaction-detail", "reaction-picker", "reaction-picker-no-favorites", "reaction-remote", "reaction-remote-picker", "reaction-settings-menu", "reaction-undo", "settings",
   ]);
@@ -114,7 +114,7 @@ test("only the baseline side may skip cases whose screen feature is missing", ()
   expect(baseline.skipped).toHaveLength(shuttlePub.length - 4);
   // Feature combinations must not silently drop either concurrent UI's cases.
   const shellOnly = selectCases(shuttlePub, featuresInShuttlePubHtml(shellHtml), "baseline");
-  expect(shellOnly.skipped).toHaveLength(48);
+  expect(shellOnly.skipped).toHaveLength(52);
   expect(selectCases(shuttlePub, withLogin, "baseline").skipped.every((item) => item.id.startsWith("reaction-"))).toBe(true);
   expect(selectCases(shuttlePub, withLogin, "baseline").skipped).toHaveLength(14);
   expect(selectCases(shuttlePub, withReaction, "baseline").skipped.every((item) => "requires" in item && item.requires === "sns-login")).toBe(true);
@@ -123,15 +123,15 @@ test("only the baseline side may skip cases whose screen feature is missing", ()
   expect(() => selectCases(shuttlePub, withLogin, "branch")).toThrow(/quick-reaction/);
   expect(() => selectCases(shuttlePub, withReaction, "branch")).toThrow(/sns-login/);
   expect(selectCases(shuttlePub, allFeatures, "branch")).toEqual({ capture: shuttlePub, skipped: [] });
-  // A baseline without the mute/block page skips exactly its 6 cases; the branch must have it.
+  // A baseline without the mute/block page skips exactly its 8 cases; the branch must have it.
   const noMuteBlock = selectCases(shuttlePub, withoutMuteBlock, "baseline").skipped;
   expect(noMuteBlock.map((item) => item.id).every((id) => id.startsWith("mute-block-"))).toBe(true);
-  expect(noMuteBlock).toHaveLength(6);
+  expect(noMuteBlock).toHaveLength(8);
   expect(() => selectCases(shuttlePub, withoutMuteBlock, "branch")).toThrow(/mute-block-settings/);
-  // A baseline without the D08 post screens (main before this change) skips exactly their 18.
+  // A baseline without the D08 post screens (main before this change) skips exactly their 20.
   const noDomain = selectCases(shuttlePub, withoutDomain, "baseline").skipped;
   expect(noDomain.map((item) => item.id).every((id) => id.startsWith("domain-"))).toBe(true);
-  expect(noDomain).toHaveLength(18);
+  expect(noDomain).toHaveLength(20);
   expect(() => selectCases(shuttlePub, withoutDomain, "branch")).toThrow(/domain-content/);
   expect(captureSide(undefined)).toBe("branch");
   expect(captureSide("baseline")).toBe("baseline");

@@ -8,6 +8,8 @@ module App.View.Hidden
   ( hiddenCard
   , revealedBar
   , restrictionNotice
+  , hiddenTitle
+  , sourceLine
   , viewBody
   , revealButtonId
   , hideButtonId
@@ -27,6 +29,7 @@ import Flame (Html)
 import Flame.Html.Attribute as HA
 import Flame.Html.Element as HE
 import Generated.Schema.Gql.Enum.ContentRestriction (ContentRestriction(..))
+import Generated.Schema.Gql.Enum.HiddenCause (HiddenCause(..))
 import Generated.Schema.Gql.Enum.PolicyMode (PolicyMode(..))
 
 revealButtonId :: String -> String
@@ -40,19 +43,36 @@ modeIcon = case _ of
   MUTE -> "eyeoff"
   BLOCK -> "block"
 
--- | ui-spec 3-1 / 3-6: kind and domain only, and one button. key identifies the reveal
--- | (a post id, or "user" for a person's posts); label is the button text.
-hiddenCard :: Model -> { key :: String, title :: String, label :: String, control :: Control, reveal :: Message, pending :: Boolean, error :: Maybe Error.ApiError } -> Html Message
+-- | The card's one sentence (ui-spec 3-1 / 3-4): DIRECT, the post's own domain is the
+-- | controlled one; QUOTE, the post quotes a note of the controlled domain.
+hiddenTitle :: HiddenCause -> PolicyMode -> String
+hiddenTitle cause mode = case cause of
+  DIRECT -> controlLabel mode <> "中のドメインの投稿です"
+  QUOTE -> controlLabel mode <> "中のドメインの投稿を引用しています"
+
+-- | The domain line under it: for a quote it names the quoted source ("引用元: <domain>",
+-- | the control's domain, ui-spec 3-4); otherwise the domain alone. Nothing of the quoted
+-- | post (text, author) is known before the reveal.
+sourceLine :: HiddenCause -> String -> String
+sourceLine cause domain = case cause of
+  DIRECT -> domain
+  QUOTE -> "引用元: " <> domain
+
+-- | ui-spec 3-1 / 3-4 / 3-6: kind and domain only (a quote also says it is one), and one
+-- | button. key identifies the reveal (a post id, or "user" for a person's posts); label
+-- | is the button text.
+hiddenCard :: Model -> { key :: String, cause :: HiddenCause, label :: String, control :: Control, reveal :: Message, pending :: Boolean, error :: Maybe Error.ApiError } -> Html Message
 hiddenCard _ card = HE.section
   [ HA.class' "sp-hidden-card"
   , attr "aria-labelledby" titleId
   , testId "hidden-post"
   , attr "data-mode" (if card.control.mode == BLOCK then "block" else "mute")
   , attr "data-domain" card.control.domain
+  , attr "data-cause" (causeName card.cause)
   ]
   [ HE.span [ HA.class' "sp-hidden-icon" ] [ icon (modeIcon card.control.mode) ]
-  , HE.h2 [ HA.id titleId, HA.class' "sp-hidden-title" ] [ HE.text card.title ]
-  , HE.p [ HA.class' "sp-mono sp-hidden-domain" ] [ HE.text card.control.domain ]
+  , HE.h2 [ HA.id titleId, HA.class' "sp-hidden-title" ] [ HE.text (hiddenTitle card.cause card.control.mode) ]
+  , HE.p [ HA.class' "sp-mono sp-hidden-domain", testId "hidden-source" ] [ HE.text (sourceLine card.cause card.control.domain) ]
   , HE.button
       [ HA.type' "button"
       , HA.id (revealButtonId card.key)
@@ -68,6 +88,11 @@ hiddenCard _ card = HE.section
   ]
   where
   titleId = "sp-hidden-title-" <> card.key
+
+causeName :: HiddenCause -> String
+causeName = case _ of
+  DIRECT -> "direct"
+  QUOTE -> "quote"
 
 -- | ui-spec 3-2: while revealed, the kind and domain stay visible above it with [隠す].
 revealedBar :: { key :: String, control :: Control, hide :: Message } -> Html Message

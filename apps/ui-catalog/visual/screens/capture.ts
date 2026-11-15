@@ -388,10 +388,15 @@ async function prepareShuttlePubShell(page: Page, item: ScreenCase) {
     await prepareDomainContent(page, item);
   } else if (item.id.startsWith("mute-block-")) {
     // Rows come from the BFF's stateful mock through GraphQL after hydration.
-    const panel = item.id === "mute-block-accounts" ? "account-panel" : "domain-panel";
+    const panel = item.id === "mute-block-accounts" || item.id === "mute-block-account-unblock" ? "account-panel" : "domain-panel";
     await expect(page.getByTestId(panel).locator("section")).toHaveAttribute("data-state", "loaded");
-    if (item.id === "mute-block-accounts") {
+    if (item.id === "mute-block-accounts" || item.id === "mute-block-account-unblock") {
       await expect(page.locator('li[data-actor="https://spam.example/users/spam_bot"]')).toBeVisible();
+      if (item.id === "mute-block-account-unblock") {
+        // The unblock dialog of an individual block (ui-spec 2-5), opened from the row's red text button.
+        await page.locator('li[data-actor="https://spam.example/users/spam_bot"]').getByRole("button", { name: /ブロック解除/ }).click();
+        await expect(page.getByTestId("unblock-dialog")).toBeVisible();
+      }
     } else {
       await expect(page.locator('li[data-domain="bot-farm.example"]')).toBeVisible();
     }
@@ -434,6 +439,11 @@ async function prepareDomainContent(page: Page, item: ScreenCase) {
     } else {
       await expect(page.getByRole("button", { name: "隠す" })).toBeFocused();
     }
+  } else if (item.id === "domain-quote-hidden") {
+    // The baseline (main) capture runs this same script: only assert what holds on both sides
+    // (a hidden card for the muted domain). The quote wording and its source line are verified
+    // by shuttlepub-verify.ts and the screenshot comparison reports the change.
+    await expect(page.getByTestId("hidden-post")).toHaveAttribute("data-domain", "noisy.social");
   } else if (item.id === "domain-quote-revealed") {
     await reveal();
     // The baseline (main) capture runs this same script: only assert what holds on both

@@ -23,6 +23,7 @@ import {
   type DomainControlResponse,
   type PolicyMode,
   type ProfilePolicySource,
+  type ProfileRelationActorResponse,
   type ProfileRelationResponse,
 } from "./source.ts";
 
@@ -44,6 +45,11 @@ export function createMockProfilePolicy(options: MockPolicyOptions = {}): Profil
   const now = options.now ?? (() => new Date());
   const profiles = new Map<string, ProfileState>();
   let sequence = 0;
+  // What the server-side cache knows of the targets it has met (Emumet keeps the remote actor
+  // document it fetched): setting the same target again answers with the same display
+  // information instead of starting from scratch (so "元に戻す" brings the same name back).
+  const cache = new Map<string, ProfileRelationActorResponse>();
+  for (const initial of Object.values(seed)) for (const item of initial.actorPolicies) cache.set(item.target, item.target_actor);
 
   function state(profileId: string): ProfileState {
     let current = profiles.get(profileId);
@@ -121,7 +127,7 @@ export function createMockProfilePolicy(options: MockPolicyOptions = {}): Profil
         throw new PolicyError("ALREADY_EXISTS", "Target already has this setting", 409);
       }
       sequence += 1;
-      const body: ProfileRelationResponse = { id: `rel-mock-${sequence}`, profile_id: profileId, kind: mode, target, target_actor: targetActorFor(target), created_at: now().toISOString() };
+      const body: ProfileRelationResponse = { id: `rel-mock-${sequence}`, profile_id: profileId, kind: mode, target, target_actor: structuredClone(cache.get(target) ?? targetActorFor(target)), created_at: now().toISOString() };
       profile.relations.set(body.id, body);
       if (mode === "block") detach(profile, (url) => url === target);
       return toActorPolicy(body);

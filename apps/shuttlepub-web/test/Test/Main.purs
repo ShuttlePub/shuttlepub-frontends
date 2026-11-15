@@ -6,11 +6,14 @@ import App.Api.Error (ApiError(..), describe, fromGqlCode, isSignedOut, tag, wit
 import App.Dom (fullDateTime, relativeTime)
 import App.Model (DetailTab(..), Model, RemoteData(..), emptyCompose, fromEither, initialModel)
 import App.Model as AppModel
+import App.MuteBlock.Actor (actorAcct, actorInitial, actorName)
 import App.MuteBlock.Types as MuteBlock
 import App.MuteBlock.Types (Change(..), Dialog(..), Failure(..), InputProblem(..), Message(..), Undo(..), Write(..))
 import App.MuteBlock.Update as MuteBlockUpdate
 import Generated.Schema.Gql.Enum.HiddenCause (HiddenCause(..))
 import Generated.Schema.Gql.Enum.PolicyMode (PolicyMode(..))
+import Generated.Schema.Gql.Enum.RelationActorKind (RelationActorKind(..))
+import Generated.Schema.Gql.Enum.RelationActorStatus (RelationActorStatus(..))
 import App.Post (Post, PostView, Quoted(..), TimelineTab(..), Visibility(..), allowedOperations, allTimelineTabs, timelineTabFromValue, timelineTabValue)
 import App.Reaction (ToastKind(..))
 import App.Route (Route(..), routeCodec)
@@ -375,6 +378,111 @@ testMuteBlock = do
     ownDone = step (ready { writing = true, dialog = Just pendingDialog }) (Written fromDialog MuteDomain "calm.example" (Right (DomainUpserted { domain: "calm.example", mode: MUTE, revision: 1, createdAt: "2026-01-01T00:00:00Z" })))
   assertEqual "the dialog's own completion closes it" ownDone.next.dialog Nothing
 
+  -- d08-q18 / d08-q20: the account list shows icon, name and acct from target_actor, never from the actor URL.
+  let
+    target kind status = { kind, status, displayName: Nothing, acct: Nothing, preferredUsername: Nothing, profileId: Nothing }
+    policyOf id mode url targetActor = { id, mode, actorUrl: url, createdAt: "2026-01-01T09:00:00Z", targetActor }
+    full = policyOf "p-full" MUTE "https://remote.example/users/alice" ((target REMOTE RESOLVED) { displayName = Just "Alice A", acct = Just "alice@remote.example", preferredUsername = Just "alice" })
+    localFull = policyOf "p-local" BLOCK "https://shuttlepub.example/users/kei" ((target LOCAL RESOLVED) { displayName = Just "Kei", acct = Just "kei@shuttlepub.example", preferredUsername = Just "kei", profileId = Just "author-kei" })
+    noName = policyOf "p-no-name" MUTE "https://remote.example/users/bob" ((target REMOTE RESOLVED) { acct = Just "bob@remote.example", preferredUsername = Just "bob" })
+    acctOnly = policyOf "p-acct" BLOCK "https://small.example/users/quiet" ((target REMOTE RESOLVED) { acct = Just "quiet@small.example" })
+    pending = policyOf "p-pending" BLOCK "https://ads.example/users/ad_bot" (target REMOTE PENDING)
+    unavailable = policyOf "p-unavailable" MUTE "https://anime.example/users/spoiler" (target REMOTE UNAVAILABLE)
+    localPending = policyOf "p-local-pending" MUTE "https://shuttlepub.example/users/ren" (target LOCAL PENDING)
+    blanks = policyOf "p-blank" MUTE "https://blank.example/users/z" ((target REMOTE UNAVAILABLE) { displayName = Just "  ", acct = Just "", preferredUsername = Just "" })
+  assertEqual "name: display_name first" (actorName full) "Alice A"
+  assertEqual "acct line: @ only for display" (actorAcct full) (Just "@alice@remote.example")
+  assertEqual "name: preferred_username without display_name" (actorName noName) "bob"
+  assertEqual "acct line under it" (actorAcct noName) (Just "@bob@remote.example")
+  assertEqual "name: acct (with @) without display_name and preferred_username" (actorName acctOnly) "@quiet@small.example"
+  assertEqual "no second line that only repeats the name" (actorAcct acctOnly) Nothing
+  assertEqual "name: the actor URL when nothing else is known (pending)" (actorName pending) "https://ads.example/users/ad_bot"
+  assertEqual "nothing is made up for pending: no acct line" (actorAcct pending) Nothing
+  assertEqual "nor for unavailable" (Tuple (actorName unavailable) (actorAcct unavailable)) (Tuple "https://anime.example/users/spoiler" Nothing)
+  assertEqual "blank fields count as missing" (Tuple (actorName blanks) (actorAcct blanks)) (Tuple "https://blank.example/users/z" Nothing)
+  assertEqual "icon placeholder: initial of the name" (actorInitial full) "A"
+  assertEqual "icon placeholder: acct without its @" (actorInitial acctOnly) "Q"
+  assertEqual "icon placeholder: last URL segment as the last resort" (actorInitial pending) "A"
+  assertEqual "icon placeholder: a code point is never cut" (actorInitial (full { targetActor = full.targetActor { displayName = Just "🐱cat" } })) "🐱"
+  let
+    mbWith list = ready { actors = MuteBlock.Ready list }
+    withActors list m = m { muteBlock = mbWith list }
+    allKinds = [ full, localFull, noName, acctOnly, pending, unavailable, localPending, blanks ]
+  list <- renderAfter (Just MuteBlockAccounts) (withActors allKinds)
+  for_ allKinds \p -> do
+    assertContains ("row of " <> p.id) list ("data-policy=\"" <> p.id <> "\"")
+    assertContains ("every row can be released: " <> p.id) list ("id=\"mb-actor-" <> p.id <> "\"")
+  assertContains "display name" list ">Alice A</div>"
+  assertContains "acct with @" list ">@alice@remote.example</div>"
+  assertContains "preferred username as name" list ">bob</div>"
+  assertContains "pending: the actor URL is the name" list ">https://ads.example/users/ad_bot</div>"
+  assertContains "unmute is blue text, unblock is red text" list "ミュート解除"
+  assertContains "unblock text" list "ブロック解除"
+  -- No badge, no state sentence, no date, no image of any server.
+  assertNotContains "no pending state text" list "取得中"
+  assertNotContains "no unavailable state text" list "取得できません"
+  assertNotContains "no resolved/pending words" list "PENDING"
+  assertNotContains "no avatar image" list "<img"
+  assertNotContains "no image source at all" list "src="
+  assertNotContains "no date on an account row" list "2026"
+  assertNotContains "no actor URL made into a name or acct" list ">alice@remote.example<"
+  -- The same name and acct on two rows (muted and blocked): each row has its own policy id.
+  let
+    twinMute = full { id = "p-twin-mute", mode = MUTE }
+    twinBlock = full { id = "p-twin-block", mode = BLOCK }
+    twinsMb = mbWith [ twinMute, twinBlock ]
+  twinHtml <- renderAfter (Just MuteBlockAccounts) (withActors [ twinMute, twinBlock ])
+  assertContains "twin mute row" twinHtml "id=\"mb-actor-p-twin-mute\""
+  assertContains "twin block row" twinHtml "id=\"mb-actor-p-twin-block\""
+  let
+    twinRow = { profile: "acc-1", epoch: 0, dialog: false }
+    removeTwin message = case MuteBlockUpdate.update twinsMb message of
+      Tuple next effects -> { next, effects: length effects }
+  assertEqual "unmute of a twin goes for its own id (one write)" (removeTwin (UnmuteActor twinMute)).effects 1
+  assertEqual "unblock of a twin opens its own dialog"
+    ( map
+        ( case _ of
+            ConfirmActorUnblock state -> state.policy.id
+            _ -> ""
+        )
+        (removeTwin (OpenActorUnblock "mb-actor-p-twin-block" twinBlock)).next.dialog
+    )
+    (Just "p-twin-block")
+  let
+    afterTwin = step (twinsMb { writing = true }) (Written twinRow (UnmuteActorRow full.actorUrl) (actorName twinMute) (Right (ActorRemoved "p-twin-mute")))
+  assertEqual "only the released twin leaves the list" afterTwin.next.actors (MuteBlock.Ready [ twinBlock ])
+  assertEqual "the toast calls it by its name, as the list does" (map _.subject afterTwin.next.toast) (Just "Alice A")
+  assertEqual "元に戻す restores its mute" (map _.undo afterTwin.next.toast) (Just (Just (RestoreActorMute full.actorUrl)))
+  -- The unblock dialog calls the person what the list does, also for a pending target.
+  let dialogOn p m = m { muteBlock = ready { actors = MuteBlock.Ready [ p ], dialog = Just (ConfirmActorUnblock { policy: p, pending: false, failure: Nothing }) } }
+  dialogNamed <- renderAfter (Just MuteBlockAccounts) (dialogOn localFull)
+  assertContains "dialog uses the display name" dialogNamed "Kei のブロックを解除しますか？"
+  dialogPending <- renderAfter (Just MuteBlockAccounts) (dialogOn pending)
+  assertContains "dialog of a pending target uses the fallback name" dialogPending "https://ads.example/users/ad_bot のブロックを解除しますか？"
+  -- A failed unmute / unblock is never a success: the row stays, no success toast, the dialog shows the failure.
+  let
+    failedRow = step ((mbWith [ full ]) { writing = true }) (Written twinRow (UnmuteActorRow full.actorUrl) (actorName full) (Left (Failure "UPSTREAM_UNAVAILABLE")))
+  assertEqual "a failed unmute keeps the row" failedRow.next.actors (MuteBlock.Ready [ full ])
+  assertEqual "it is a failure toast without undo, never a success" (map (\t -> Tuple t.failure t.undo) failedRow.next.toast) (Just (Tuple (Just (Failure "UPSTREAM_UNAVAILABLE")) Nothing))
+  let
+    unblocking = (mbWith [ localFull ]) { writing = true, dialog = Just (ConfirmActorUnblock { policy: localFull, pending: true, failure: Nothing }) }
+    failedUnblock = step unblocking (Written { profile: "acc-1", epoch: 0, dialog: true } UnblockActor (actorName localFull) (Left (Failure "NOT_IMPLEMENTED")))
+  assertEqual "a failed unblock keeps the row" failedUnblock.next.actors (MuteBlock.Ready [ localFull ])
+  case failedUnblock.next.dialog of
+    Just (ConfirmActorUnblock state) -> assertEqual "and shows the failure in its dialog" state.failure (Just (Failure "NOT_IMPLEMENTED"))
+    _ -> throw "the unblock dialog must stay open on failure"
+  -- A list that could not be read is an error with its code, not an empty list (501 included).
+  let failedList failure m = m { muteBlock = ready { actors = MuteBlock.Failed failure } }
+  notImplemented <- renderAfter (Just MuteBlockAccounts) (failedList (Failure "NOT_IMPLEMENTED"))
+  assertContains "501 is an error" notImplemented "data-error=\"NOT_IMPLEMENTED\""
+  assertContains "501 text" notImplemented "サーバーが未対応です"
+  assertNotContains "501 is not an empty list" notImplemented "ありません"
+  assertEqual "a 501 from the list endpoint is kept as a failure" (step (ready { actors = MuteBlock.Loading }) (ActorsLoaded { profile: "acc-1", epoch: 0 } (Left (Failure "NOT_IMPLEMENTED")))).next.actors (MuteBlock.Failed (Failure "NOT_IMPLEMENTED"))
+  -- A late list of another Profile, or of an earlier selection, is dropped.
+  assertEqual "another Profile's actor list is dropped" (step (ready { actors = MuteBlock.Ready [ full ] }) (ActorsLoaded { profile: "acc-2", epoch: 0 } (Right [ localFull ]))).next.actors (MuteBlock.Ready [ full ])
+  assertEqual "an earlier selection's actor list is dropped" (step (ready { epoch = 2, actors = MuteBlock.Ready [ full ] }) (ActorsLoaded { profile: "acc-1", epoch: 1 } (Right [ localFull ]))).next.actors (MuteBlock.Ready [ full ])
+  roundTrip "model with actors" (ready { actors = MuteBlock.Ready allKinds })
+
   -- Integration with quick reaction: its toast moves behind an open mute/block dialog and is inert.
   let
     reactionToast = { id: 1, kind: ReactionFailed "リアクションできませんでした" (NotImplemented "later"), holds: { hover: false, touch: false, focus: false }, armed: 1 }
@@ -528,6 +636,36 @@ testPostDisplay = do
   assertNotContains "no hidden variant of a quote" quoted "sp-quote-hidden"
   quoteHidden <- renderAfter (Just (PostDetail "post-quote-hidden")) (detailWith quoteHiddenView [])
   assertContains "quote-caused hidden card" quoteHidden "data-testid=\"hidden-post\" data-mode=\"mute\" data-domain=\"noisy.social\""
+  -- d08-q19 / ui-spec 3-4: a quote says it is one and names the quoted source; a direct one keeps its wording.
+  assertContains "quote cause" quoteHidden "data-cause=\"quote\""
+  assertContains "quote title (mute)" quoteHidden "ミュート中のドメインの投稿を引用しています"
+  assertContains "quoted source" quoteHidden "引用元: noisy.social"
+  assertContains "quote reveal button" quoteHidden "この投稿だけ表示"
+  assertNotContains "a quote is not worded as the post of that domain" quoteHidden "ミュート中のドメインの投稿です"
+  assertContains "direct cause" hidden "data-cause=\"direct\""
+  assertNotContains "a direct post has no quoted source" hidden "引用元"
+  assertNotContains "a direct post is not a quote" hidden "を引用しています"
+  let
+    blockQuoteView = quoteHiddenView { hidden = Just { cause: QUOTE, control: { mode: BLOCK, domain: "bot-farm.example", revision: 2 } } }
+  blockQuote <- renderAfter (Just (PostDetail "post-quote-hidden")) (detailWith blockQuoteView [])
+  assertContains "quote title (block)" blockQuote "ブロック中のドメインの投稿を引用しています"
+  assertContains "quote source (block)" blockQuote "引用元: bot-farm.example"
+  -- Nothing of the quoter or the quoted post is known while hidden.
+  assertNotContains "quote card shows no post" quoteHidden "sp-quote"
+  assertNotContains "quote card shows no text" quoteHidden "quoted text"
+  -- A reveal shows the quoter with the quoted target together; the bar keeps kind + domain.
+  quoteRevealed <- renderAfter (Just (PostDetail "post-quote-hidden")) (\m -> (detailWith quoteHiddenView [] m) { content = m.content { reveals = [ visibleView { id = "post-quote-hidden", post = Just quotePost } ] } })
+  assertContains "revealed quote bar" quoteRevealed "data-testid=\"revealed-bar\" data-domain=\"noisy.social\""
+  assertContains "revealed quote shows its target" quoteRevealed "quoted text"
+  assertContains "and can be hidden again" quoteRevealed ">隠す</button>"
+  assertNotContains "no reveal button once shown" quoteRevealed "この投稿だけ表示"
+  -- Folded replies and a person's list use the same cause wording.
+  quoteReply <- renderAfter (Just (PostDetail "post-1")) (detailWith visibleView { operations = Nothing } [ visibleView, quoteHiddenView ])
+  assertContains "hidden quote reply row" quoteReply "ミュート中のドメインの投稿を引用しています"
+  assertContains "its source" quoteReply "引用元: noisy.social"
+  quoteListed <- renderAfter (Just (UserProfile "ken@other.example")) (\m -> (signedIn m) { content = m.content { user = Loaded (Just { author: samplePost.author, bio: "bio", control: Nothing, hidden: Nothing, posts: [ quoteHiddenView ] }) } })
+  assertContains "a hidden quote in a person's list" quoteListed "data-cause=\"quote\""
+  assertContains "with its source" quoteListed "引用元: noisy.social"
   -- 1-1: the menu reflects the Profile's settings; this server's people get no domain items.
   let
     mbReady = MuteBlock.init { profile = Just "p1", profileKnown = true, domains = MuteBlock.Ready [ { domain: "misskey.example", mode: MUTE, revision: 2, createdAt: "" } ], actors = MuteBlock.Ready [] }

@@ -15,7 +15,7 @@ module App.MuteBlock.Api
 
 import Prelude
 
-import App.MuteBlock.Types (ActorPolicy, DomainControl, Failure(..), Impact)
+import App.MuteBlock.Types (ActorPolicy, DomainControl, Failure(..), Impact, TargetActor)
 import Data.Argonaut.Decode (decodeJson)
 import Data.Array (head)
 import Data.Either (Either(..))
@@ -72,11 +72,32 @@ run convert request = do
 controlFields :: { domain :: Unit, mode :: Unit, revision :: Unit, createdAt :: Unit }
 controlFields = { domain: unit, mode: unit, revision: unit, createdAt: unit }
 
-actorFields :: { id :: Unit, mode :: Unit, actorUrl :: Unit, createdAt :: Unit }
-actorFields = { id: unit, mode: unit, actorUrl: unit, createdAt: unit }
+-- | The target's display information (d08-q18). No iconUrl: the screen never loads an
+-- | avatar image (d09-q06), so it does not even ask for one.
+actorFields
+  :: { id :: Unit
+     , mode :: Unit
+     , actorUrl :: Unit
+     , createdAt :: Unit
+     , targetActor :: { kind :: Unit, status :: Unit, displayName :: Unit, acct :: Unit, preferredUsername :: Unit, profileId :: Unit }
+     }
+actorFields =
+  { id: unit
+  , mode: unit
+  , actorUrl: unit
+  , createdAt: unit
+  , targetActor: { kind: unit, status: unit, displayName: unit, acct: unit, preferredUsername: unit, profileId: unit }
+  }
 
-toActor :: { id :: ID, mode :: PolicyMode, actorUrl :: String, createdAt :: String } -> ActorPolicy
-toActor raw = { id: unwrap raw.id, mode: raw.mode, actorUrl: raw.actorUrl, createdAt: raw.createdAt }
+toActor
+  :: { id :: ID
+     , mode :: PolicyMode
+     , actorUrl :: String
+     , createdAt :: String
+     , targetActor :: TargetActor
+     }
+  -> ActorPolicy
+toActor raw = { id: unwrap raw.id, mode: raw.mode, actorUrl: raw.actorUrl, createdAt: raw.createdAt, targetActor: raw.targetActor }
 
 fetchDomainControls :: String -> Aff (Either Failure (Array DomainControl))
 fetchDomainControls profile = run _.domainControls $ queryFullRes decodeJson identity queryClient "DomainControls"

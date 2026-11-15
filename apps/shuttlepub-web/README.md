@@ -49,6 +49,24 @@ mock / real 切替、SSR + hydration、Profile context の型・fixture、visual
 自サーバーのドメインは `EMUMET_PUBLIC_HOST` (Emumet の `PUBLIC_BASE_URL` の host。real で必須、未設定なら追加できない)
 で判定し、入力・保存のどちらでも拒否する。
 
+**アカウントタブの行 (D08 画面手直し / ui-spec 1-6・d08-q18・d08-q20)**: アイコン・名前・acct と行末の
+［ミュート解除］(青文字)／［ブロック解除］(赤文字) だけ。種別バッジ・状態文・日付は置きません。表示は
+`GET /graphql actorPolicies` の `targetActor` (Emumet `target_actor`) だけから作り、actor URL から名前・acct を
+推測しません (`App.MuteBlock.Actor`)。
+
+- 名前: `display_name` → `preferred_username` → `acct` (表示時にだけ先頭へ `@` を付ける) → actor URL (そのまま)。
+  空・空白だけの項目は欠落として扱う。`pending`/`unavailable`/`resolved` の別、`local`/`remote` の別で表示は変えず、
+  状態の説明も出さない。解除は常にできる。2 行目の `@acct` は名前がそれと同じ (acct が名前になった) ときは出さない。
+- アイコン: **常に代替アイコン (名前の頭文字、名前が actor URL なら URL の最後の区間の頭文字、無ければ ?)**。
+  remote の `icon_url` は他サーバーの画像でブラウザから直接読まない (d09-q06。自サーバー経由の安全な配信経路は契約に無い)。
+  local の `icon_url` も読まない: Emumet の `icon_url` は利用者が設定する自由な文字列 (`UpdateAccountRequest.icon_url`) で、
+  `kind=local` はアクターが自サーバーのものというだけで、画像が自サーバーのオリジンにある保証がない (BFF にも判定材料が無い)。
+  BFF は `RelationActor.iconUrl` を常に null で返し (`bff/policy/resolvers.ts`)、画面は `iconUrl` を問い合わせもしません。
+  自サーバー経由の画像配信が契約に入ったら、その時にこの field を埋めて local から表示できます。
+- 解除の識別子は Emumet の policy ID (行の `data-policy`)。同じ名前・同じ acct の行 (同じ人をミュートとブロックの両方に
+  入れた場合など) でも、押した行の ID だけを解除します。解除後のトースト・確認ダイアログは一覧と同じ名前で呼びます。
+  一覧取得の失敗 (501 `NOT_IMPLEMENTED` を含む) は空の一覧にせずエラー表示 (コード付き)、解除の失敗は行を残して失敗表示にします。
+
 ### 投稿表示面と「…」メニュー (D08 第2段 / personal-domain-controls-web-ui)
 
 ui-spec v5 の 1-1 (主導線)・3-1〜3-6・4-1〜4-5・5-1 を、ShuttlePub の S8 契約 (`openapi/shuttlepub.json`、
@@ -68,9 +86,15 @@ producer commit `bd997e6cb64b7f96ce454673f0a278f47db1dcf8`) どおりに表示�
   CW・センシティブ・削除・閲覧権は reveal しても解除せず、本文を出しません。
 - 引用 (ui-spec 3-4): S8 の hidden 応答は `cause` (`direct`: 投稿者自身のドメイン / `quote`: 引用元のドメイン) と
   control (種別・ドメイン・revision) を持ちます。BFF の GraphQL `PostView.hidden` は `HiddenContent { cause, control }`
-  で保持し (汎用の `ContentControl` には cause を足さない)、画面の隠し表示の文言はこの unit では従来のまま (cause 別の
-  文言は後続 unit)。引用先 (`QuotedPost`) に hidden は無く (S8 EmbeddedNotePresentation)、引用先が制御対象なら引用した
-  投稿全体が `quote` として隠れ、[この投稿だけ表示] の reveal で引用先も一緒に表示されます。
+  で保持し (汎用の `ContentControl` には cause を足さない)、画面は cause で文言を分けます (d08-q19):
+  `direct` は従来どおり「ミュート中／ブロック中のドメインの投稿です」＋ドメイン、`quote` は「ミュート中／ブロック中のドメインの
+  投稿を引用しています」＋「引用元: <ドメイン>」(control のドメイン = 引用元) ＋［この投稿だけ表示］。折りたたんだ返信の行・
+  人の投稿一覧の隠しカードも同じ文言です。両方に該当する (投稿者自身のドメインも引用元も制御対象) ときは producer が
+  `direct` を返す (投稿者自身が優先) ので、画面は cause に従うだけです。引用先 (`QuotedPost`) に hidden は無く
+  (S8 EmbeddedNotePresentation)、引用先が制御対象なら引用した投稿全体が `quote` として隠れ、[この投稿だけ表示] の reveal で
+  引用先も一緒に表示されます (旧記述「reveal しても引用元は隠れたまま」は ShuttlePub #25 で廃止)。隠れている間の応答には
+  本文・作者・引用先の本文は載りません (cause・種別・ドメイン・revision だけ。`bff/content.test.ts`)。引用元・引用者の CW・
+  センシティブ・削除・閲覧権は reveal しても解除せず、本文を出しません。
 - 純粋リポスト: リポスト自体の画面は持たず、カードのリンクは元投稿の URL (通常の単一投稿 reveal) です
   (S8 は boost wrapper の直接 reveal を未決として契約外にしています)。
 - 返信 (3-5): 対象ドメインの返信は「非表示の返信 n 件」に折りたたみ、展開後も 1 件ずつ［表示］。
@@ -87,7 +111,7 @@ producer commit `bd997e6cb64b7f96ce454673f0a278f47db1dcf8`) どおりに表示�
 `PostView.reactionCounts`) → PureScript (`App.Emoji.Emoji`、`App.Post.ReactionCounts`) まで保持します (他サーバーの絵文字の表示は D09 unit、下記)。他サーバーの
 絵文字を常用絵文字にすると 422 `emoji_usage_not_allowed` (`EMOJI_USAGE_NOT_ALLOWED`)、チップの無い他サーバーの絵文字での反応も同じ
 422、別の反応が付いている間の他サーバーの絵文字は 409 `conflict` (`CONFLICT`) です。個人の mute/block (`ActorPolicy.targetActor`、
-Emumet `target_actor`) の表示情報も一覧・作成応答の両方で保持します (表示は後続 unit)。
+Emumet `target_actor`) の表示情報は一覧・作成応答の両方で保持し、アカウントタブの行に表示します (上記)。
 
 データの流れ: mock では Profile の Emumet domain-controls (設定画面と同じ状態 mock) を S8 の純関数投影
 (`bff/rest/content.ts`) に渡し、S8 の応答形 (`TimelineResponse` / `DirectNoteResponse`) を固定 schema で検証してから、
@@ -112,7 +136,7 @@ commit から `bun run openapi:sync-scenarios` で取込) を投影に再生し�
 (`bff/resolvers.ts` の `toEmoji`)、UI は他サーバーの絵文字を**常に `:name:` + 地球マーク**で表示します。`image_state=missing`・
 元サーバーで削除済み・画像が読めない場合も同じ見た目で、押せます (壊れた画像は出しません。自サーバーの画像が
 読み込めなかった場合も `App.Dom.trackImageFailures` が `:name:` に切り替えます)。自サーバー経由の配信 (プロキシ) は別 unit です。
-`RelationActor.iconUrl` も同じ方針で、表示の変更は D08 unit が行います。
+`RelationActor.iconUrl` も同じ方針です (D08 画面手直しで、local も含め BFF が常に null を返し、一覧は代替アイコンを使う。上記)。
 
 元サーバーで削除・期限切れになった外部絵文字は、契約 (ShuttlePub bd997e6、d09-q07) では `availability=available` + `image_state=missing`
 (`unavailable_reason` なし) で、チップが残っていれば押して反応できます (200)。外部絵文字が `unavailable` になるのは自サーバーが

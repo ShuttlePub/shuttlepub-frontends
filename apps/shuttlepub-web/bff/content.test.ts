@@ -157,6 +157,32 @@ describe("one post by its URL (ui-spec 3-1 … 3-4, S8 direct view)", () => {
     });
   });
 
+  test("the quoter's own domain wins when both it and the quoted source are controlled (cause DIRECT, the quoter's control); a quote of an uncontrolled post stays visible", async () => {
+    const app = fresh();
+    // Profile A already mutes noisy.social (the quoted source); block Ken's own domain too.
+    await run(app, `mutation { setDomainControl(profile: "${A}", domain: "other.example", mode: BLOCK) { domain } }`);
+    const both = await run(app, `{ postView(profile: "${A}", id: "post-ken-quote") { ${VIEW} } }`);
+    expect(both.data!.postView).toMatchObject({ post: null, hidden: { cause: "DIRECT", control: { mode: "BLOCK", domain: "other.example" } } });
+    for (const secret of [...SECRETS("post-ken-quote"), ...SECRETS("post-nana-playlist")]) expect(JSON.stringify(both)).not.toContain(secret);
+    // Another Profile controls neither domain: the quote is visible with its target.
+    const other = await run(app, `{ postView(profile: "${B}", id: "post-ken-quote") { ${VIEW} } }`);
+    expect(other.data!.postView).toMatchObject({ hidden: null, post: { id: "post-ken-quote", quoted: { post: { id: "post-nana-playlist" } } } });
+  });
+
+  test("a hidden quote's answer carries nothing of the quote, its author or the quoted post: only cause, mode, domain, revision (no extra field can be asked for)", async () => {
+    const app = fresh();
+    const answer = await run(app, `{ postView(profile: "${A}", id: "post-ken-quote") { id post { id } hidden { cause control { mode domain revision } } restriction operations { reply { domain } } reactionCounts { likes } } }`);
+    expect(answer.errors).toBeUndefined();
+    const control = await controlOf(app, A!, "noisy.social");
+    expect(answer.data!.postView).toEqual({
+      id: "post-ken-quote", post: null, hidden: { cause: "QUOTE", control: { mode: "MUTE", domain: "noisy.social", revision: control!.revision } },
+      restriction: null, operations: null, reactionCounts: null,
+    });
+    // The reveal still obeys the independent gates: a CW on the quote is not cleared by it.
+    const revealed = await run(app, `mutation { revealPost(profile: "${A}", id: "post-deals-cw") { ${VIEW} } }`);
+    expect(revealed.data!.revealPost).toMatchObject({ post: null, restriction: "CW" });
+  });
+
   test("a post that no control matches is simply visible, with nothing locked", async () => {
     const app = fresh();
     const view = await run(app, `{ postView(profile: "${A}", id: "post-mika-picker") { ${VIEW} } }`);

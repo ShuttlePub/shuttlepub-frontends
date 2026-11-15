@@ -30,7 +30,7 @@ export type TargetActor = {
   actorUrl: string;
   status: "resolved" | "pending" | "unavailable";
   displayName: string | null;
-  /** Absolute http(s) URL of the avatar, loaded by the browser directly. */
+  /** Absolute http(s) URL of the avatar as Emumet serves it. Kept here; the BFF never forwards it to the browser (resolvers.ts, d09-q06). */
   iconUrl: string | null;
   /** preferred_username@host without a leading @. */
   acct: string | null;
