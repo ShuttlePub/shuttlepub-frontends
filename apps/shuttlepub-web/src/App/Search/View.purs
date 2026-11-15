@@ -219,9 +219,11 @@ lookupText = case _ of
 resultsView :: Model -> Html Search.Message
 resultsView model = case model.search.results of
   Search.Idle -> HE.div [ HA.class' "sp-search-results", attr "data-state" (if model.search.waiting then "waiting" else "idle"), testId "search-results" ]
-    [ if model.search.waiting then skeletons 3 else emptySlot ]
+    [ if model.search.waiting then skeletons 3 else emptySlot
+    , if model.search.waiting then liveStatus "検索中" else emptySlot
+    ]
   Search.Searching -> HE.div [ HA.class' "sp-search-results", attr "data-state" "searching", attr "aria-busy" "true", testId "search-results" ]
-    [ skeletons 3, visuallyHidden "検索中" ]
+    [ skeletons 3, liveStatus "検索中" ]
   Search.SearchFailed error -> HE.div [ HA.class' "sp-search-results", attr "data-state" "error", testId "search-results" ]
     [ failure error ]
   Search.Found notes tail -> HE.div
@@ -254,6 +256,10 @@ tailValue = case _ of
   Search.NextFailed _ _ -> "failed"
 
 -- | Post-shaped placeholders (initial search: 3, next page: 2).
+-- | The words a screen reader gets for a state (ui-spec §3: the areas that carry a state's text are role=status).
+liveStatus :: String -> Html Search.Message
+liveStatus text = HE.span [ HA.class' "sp-visually-hidden", attr "role" "status", testId "search-status" ] [ HE.text text ]
+
 skeletons :: Int -> Html Search.Message
 skeletons count = HE.div [ HA.class' "sp-search-skeletons", attr "aria-hidden" "true", testId "search-skeleton" ]
   (map (\_ -> skeleton) (range 1 count))
@@ -344,14 +350,14 @@ tailView = case _ of
     [ HE.span [] [ HE.text "ここまでで中断しました" ]
     , continueButton unit
     ]
-  Search.NextFailed _ error -> HE.div [ HA.class' "sp-search-tail sp-search-failed", attr "role" "alert", attr "data-state" "failed", attr "data-error" (errorTag error), testId "search-more-failed" ]
+  Search.NextFailed _ error -> HE.div [ HA.class' "sp-search-tail sp-search-failed", attr "role" "status", attr "data-state" "failed", attr "data-error" (errorTag error), testId "search-more-failed" ]
     [ HE.span [] [ HE.text (searchErrorText error) ]
     , HE.button [ HA.type' "button", HA.class' "sp-btn sp-btn-secondary", HA.onClick Search.LoadMore, testId "search-retry-more" ]
         [ HE.text "再試行" ]
     ]
 
 failure :: ApiError -> Html Search.Message
-failure error = HE.div [ HA.class' "sp-state sp-state-error sp-search-error", attr "role" "alert", attr "data-error" (errorTag error), testId "search-error" ]
+failure error = HE.div [ HA.class' "sp-state sp-state-error sp-search-error", attr "role" "status", attr "data-error" (errorTag error), testId "search-error" ]
   ( [ HE.span [] [ HE.text (searchErrorText error) ] ]
       <> case error of
         NotImplemented _ -> []

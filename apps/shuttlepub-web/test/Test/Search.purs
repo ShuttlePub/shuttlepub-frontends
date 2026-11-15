@@ -348,6 +348,15 @@ testHighlight = do
   assertEqual "final sigma: no match where the mock has none" (hits (highlightSegments "\x03BF\x03C3" "\x039F\x03A3")) []
   assertEqual "Hangul jamo compose" (hits (highlightSegments "\xAC00" "a \x1100\x1161 b")) [ "\x1100\x1161" ]
   assertEqual "Hangul syllable finds jamo text only as the mock does" (hits (highlightSegments "\x1100\x1161" "a \xAC00 b")) [ "\xAC00" ]
+  -- Context-dependent folding reaches only the characters it joins: the rest of the text keeps its own marks.
+  assertEqual "CJK keyword, sigma later in the text" (hits (highlightSegments "検索" "検索結果を説明するΟΣ")) [ "検索" ]
+  assertEqual "Hangul keyword, composed, amid CJK" (hits (highlightSegments "\xAC00" "前\x1100\x1161後")) [ "\x1100\x1161" ]
+  assertEqual "Hangul keyword, jamo, amid CJK" (hits (highlightSegments "\x1100\x1161" "前\xAC00後")) [ "\xAC00" ]
+  assertEqual "a plain letter before a sigma word" (hits (highlightSegments "a" "abc ΟΣ def")) [ "a" ]
+  assertEqual "a sigma word is one piece when it matches" (hits (highlightSegments "ος" "x ΟΣ y")) [ "ΟΣ" ]
+  assertEqual "a letter after the sigma word is not marked" (hits (highlightSegments "y" "x ΟΣ y")) [ "y" ]
+  assertEqual "emoji and CJK around a sigma word" (hits (highlightSegments "🎉" "🎉検索ΟΣ🎉")) [ "🎉", "🎉" ]
+  assertEqual "pieces rebuild a mixed text" (joinWith "" (texts (highlightSegments "検索" "検索結果を説明するΟΣ"))) "検索結果を説明するΟΣ"
   assertEqual "pieces rebuild the folded text" (joinWith "" (texts (highlightSegments "ガ" "あｶﾞい"))) "あｶﾞい"
   assertEqual "no match, one piece" (length (highlightSegments "zzz" "abc")) 1
 
@@ -397,12 +406,23 @@ testScreen = do
   assertContains "the next page shows post skeletons" loadingNext "data-testid=\"search-skeleton\""
   assertNotContains "the next page has no spinner text" loadingNext "読み込み中…"
   searching <- FRS.render (view (base { search = shown { results = Searching } }))
+  assertContains "the first search is a status region" searching "role=\"status\""
+  assertContains "and says it is searching" searching "検索中"
+  assertContains "the status region has its marker" searching "data-testid=\"search-status\""
+  assertNotContains "searching is not an alert" searching "role=\"alert\""
   assertEqual "the first search shows three skeletons" (length (split (Pattern "sp-search-note-skeleton") searching) - 1) 3
   notImplemented <- FRS.render (view (base { search = shown { results = SearchFailed (NotImplemented "501") } }))
   assertContains "501 is a short unimplemented notice" notImplemented "投稿検索はまだ使えません"
   assertNotContains "501 is not shown as zero results" notImplemented "見つかりませんでした"
   failedNext <- FRS.render (view (base { search = found [ note "a" ] (NextFailed "c1" (NetworkError "down")) }))
   assertContains "a failed page" failedNext "読み込めませんでした"
+  assertContains "a failed page is a status region" failedNext "role=\"status\""
+  assertNotContains "a failed page is not an alert" failedNext "role=\"alert\""
+  failedFirst <- FRS.render (view (base { search = shown { results = SearchFailed (NetworkError "down") } }))
+  assertContains "a failed search says so" failedFirst "読み込めませんでした"
+  assertContains "a failed search is a status region" failedFirst "role=\"status\""
+  assertNotContains "a failed search is not an alert" failedFirst "role=\"alert\""
+  assertContains "a failed search retries" failedFirst "data-testid=\"search-retry\""
   assertContains "a failed page retries" failedNext "再試行"
   marked <- FRS.render (view (base { search = (shown { input = "from:@al" }) { suggest = Search.emptySuggestions { open = true, items = [ alice ] } } }))
   assertContains "the typed prefix is marked in a suggestion" marked "data-testid=\"search-suggest-hit\""

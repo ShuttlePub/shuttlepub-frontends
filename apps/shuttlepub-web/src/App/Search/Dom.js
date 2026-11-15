@@ -6,9 +6,12 @@ const fold = (text) => text.normalize("NFKC").toLowerCase();
 // The matching is done on the whole text folded at once (NFKC, then lowercase), the way the mock does
 // (the producer leaves case and word handling undecided, so this is the mock's provisional rule).
 // To mark the original text, it is cut into chunks whose folds, joined, are the fold of the whole
-// text: the finest cutting that holds is used (a base with its combining marks, then words, then
-// the whole text), because folding depends on context (Greek final sigma, Hangul jamo, NFKC
-// composition). A match then marks the chunks its folded characters belong to.
+// text. Folding depends on context in a few places (Greek final sigma, Hangul jamo, NFKC
+// composition), so only the characters such a context joins are put in one chunk; every other
+// character keeps its own position and is never marked because of a neighbour's context.
+
+// A cluster is a code point with the combining marks after it (a point that folds to a mark, like
+// half-width ﾞ, counts).
 const clusters = (text) => {
   const list = [];
   for (const point of Array.from(text)) {
@@ -19,14 +22,41 @@ const clusters = (text) => {
   return list.map((points) => points.join(""));
 };
 
+const REACH = 8;
+
+// The clusters grouped where folding joins them: a boundary is kept apart when folding the clusters
+// around it (REACH each side) gives the same as folding both sides alone.
+const joinedWhereFoldingDepends = (atoms) => {
+  const groups = [];
+  atoms.forEach((atom, index) => {
+    if (index === 0) {
+      groups.push(atom);
+      return;
+    }
+    const left = atoms.slice(Math.max(0, index - REACH), index).join("");
+    const right = atoms.slice(index, index + REACH).join("");
+    if (fold(left + right) === fold(left) + fold(right)) groups.push(atom);
+    else groups[groups.length - 1] += atom;
+  });
+  return groups;
+};
+
 const words = (text) => text.match(/\s+|\S+/gu) ?? [];
 
+// Chunks with their folds (computed once), or the whole text when nothing finer is consistent.
 const chunksOf = (text, whole) => {
-  for (const cut of [clusters, words]) {
-    const chunks = cut(text);
-    if (chunks.map(fold).join("") === whole) return chunks;
+  const atoms = clusters(text);
+  const candidates = [
+    () => atoms,
+    () => joinedWhereFoldingDepends(atoms),
+    () => words(text),
+  ];
+  for (const make of candidates) {
+    const chunks = make();
+    const folds = chunks.map(fold);
+    if (folds.join("") === whole) return { chunks, folds };
   }
-  return [text];
+  return { chunks: [text], folds: [whole] };
 };
 
 // The text cut into [{ text, hit }] pieces; a piece is a hit where the keyword matches.
@@ -35,10 +65,10 @@ export const highlightSegments = (query) => (text) => {
   const needle = fold(query.trim());
   const whole = fold(text);
   if (needle === "" || !whole.includes(needle)) return [{ text, hit: false }];
-  const chunks = chunksOf(text, whole);
+  const { chunks, folds } = chunksOf(text, whole);
   const owner = [];
-  chunks.forEach((chunk, index) => {
-    for (let unit = 0; unit < fold(chunk).length; unit += 1) owner.push(index);
+  folds.forEach((folded, index) => {
+    for (let unit = 0; unit < folded.length; unit += 1) owner.push(index);
   });
   const marked = new Array(chunks.length).fill(false);
   let from = whole.indexOf(needle);
