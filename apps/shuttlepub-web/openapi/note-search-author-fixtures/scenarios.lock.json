@@ -1,0 +1,19 @@
+{
+  "producer": {
+    "repository": "ShuttlePub/ShuttlePub",
+    "commit": "bd997e6cb64b7f96ce454673f0a278f47db1dcf8",
+    "path": "server/tests/fixtures/note_search_author"
+  },
+  "files": [
+    {
+      "file": "projection.json",
+      "sha256": "213b5db6c63cdeee254564ee2260da7b384108a5f81742674968143afb53acc2",
+      "bytes": 22696
+    },
+    {
+      "file": "schema_cases.json",
+      "sha256": "2c5a4dd530eb54d54b37d9667d54af1f54af2850d32a4399b6ec0559b018e10d",
+      "bytes": 20890
+    }
+  ]
+}

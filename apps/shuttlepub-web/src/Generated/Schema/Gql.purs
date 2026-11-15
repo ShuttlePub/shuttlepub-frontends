@@ -17,6 +17,7 @@ import Generated.Schema.Gql.Enum.PolicyMode (PolicyMode)
 import Generated.Schema.Gql.Enum.PostVisibility (PostVisibility)
 import Generated.Schema.Gql.Enum.RelationActorKind (RelationActorKind)
 import Generated.Schema.Gql.Enum.RelationActorStatus (RelationActorStatus)
+import Generated.Schema.Gql.Enum.SearchedNoteKind (SearchedNoteKind)
 import Generated.Schema.Gql.Enum.TimelineKind (TimelineKind)
 import GraphQL.Client.Args (NotNull)
 import GraphQL.Client.AsGql (AsGql)
@@ -84,6 +85,13 @@ newtype Query = Query
       ->
       -- | Individual mutes/blocks of the selected Profile, newest first.
       Array (AsGql "ActorPolicy" ActorPolicy)
+  , resolveSearchAuthor ::
+      { acct :: NotNull (AsGql "String" String)
+      , profile :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
+      }
+      ->
+      -- | Resolves a typed acct (user@host, host-less = this server) to a known author (#27). AUTHOR_AMBIGUOUS on several matches.
+      AsGql "SearchAuthor" SearchAuthor
   , actorBlockImpact ::
       { actorUrl :: NotNull (AsGql "String" String)
       , profile :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
@@ -91,6 +99,18 @@ newtype Query = Query
       ->
       -- | Follows with exactly this actor that an individual block would detach (domain = the actor's host).
       AsGql "DomainBlockImpact" DomainBlockImpact
+  , searchNotes ::
+      { author :: AsGql "String" String
+      , cursor :: AsGql "String" String
+      , limit :: AsGql "Int" Int
+      , profile :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
+      , q :: AsGql "String" String
+      }
+      ->
+      -- | Post search of the selected Profile (ShuttlePub #23). `profile` is the Profile context id the page shows
+      -- | (PROFILE_CHANGED when it is not the selected one any more). `author` is a canonical actor URL; author and q
+      -- | are optional but not both absent (INVALID_REQUEST). A partial result is `page.truncated`; 501 is NOT_IMPLEMENTED.
+      AsGql "NoteSearchResult" NoteSearchResult
   , domainBlockImpact ::
       { domain :: NotNull (AsGql "String" String)
       , profile :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
@@ -98,6 +118,13 @@ newtype Query = Query
       ->
       -- | Follows that a block of this exact domain would detach (pending and accepted).
       AsGql "DomainBlockImpact" DomainBlockImpact
+  , suggestSearchAuthors ::
+      { prefix :: NotNull (AsGql "String" String)
+      , profile :: NotNull (AsGql "ID" GraphQL.Client.ID.ID)
+      }
+      ->
+      -- | Up to 5 author suggestions for a name/acct prefix (ShuttlePub #27); never muted/blocked authors.
+      Array (AsGql "SearchAuthor" SearchAuthor)
   , quickReactionSettings ::
       { profileId :: NotNull (AsGql "ID" GraphQL.Client.ID.ID) }
       ->
@@ -113,6 +140,12 @@ newtype Query = Query
   }
 
 derive instance Data.Newtype.Newtype Query _
+newtype NoteSearchResult = NoteSearchResult
+  { notes :: {} -> Array (AsGql "SearchedNote" SearchedNote)
+  , page :: {} -> AsGql "SearchPage" SearchPage
+  }
+
+derive instance Data.Newtype.Newtype NoteSearchResult _
 newtype Mutation = Mutation
   { selectProfile ::
       { id :: NotNull (AsGql "ID" GraphQL.Client.ID.ID) }
@@ -201,6 +234,15 @@ derive instance Data.Newtype.Newtype ContentControl _
 newtype PolicyRemoval = PolicyRemoval { key :: {} -> AsGql "String" String }
 
 derive instance Data.Newtype.Newtype PolicyRemoval _
+-- | An author of the search (ShuttlePub #27). The avatar URL of the contract never leaves the BFF (d09-q06): the
+-- | UI shows a placeholder icon. `displayName` is null when the author has none.
+newtype SearchAuthor = SearchAuthor
+  { acct :: {} -> AsGql "String" String
+  , actorUrl :: {} -> AsGql "String" String
+  , displayName :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  }
+
+derive instance Data.Newtype.Newtype SearchAuthor _
 -- | An owned Emumet integrated Account/Profile. id is its public Account nanoid; the current API does not expose an internal Profile id.
 newtype Profile = Profile
   { displayName :: {} -> AsGql "String" String
@@ -337,6 +379,19 @@ newtype NoteReaction = NoteReaction
   }
 
 derive instance Data.Newtype.Newtype NoteReaction _
+-- | One Note of a post search (ShuttlePub #23 SearchedNote). The contract carries only the Note id, its author's
+-- | canonical actor URL, the time and either the body or the content warning: no display name, avatar, counts or
+-- | reactions. A content-warned Note has `text` null (its body never leaves the BFF) and `contentWarning` set.
+newtype SearchedNote = SearchedNote
+  { authorActorUrl :: {} -> AsGql "String" String
+  , contentWarning :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , createdAt :: {} -> AsGql "String" String
+  , kind :: {} -> AsGql "SearchedNoteKind" SearchedNoteKind
+  , noteId :: {} -> AsGql "ID" GraphQL.Client.ID.ID
+  , text :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  }
+
+derive instance Data.Newtype.Newtype SearchedNote _
 -- | One post seen directly (S8 DirectNoteResponse), by its provisional id. Exactly one of post /
 -- | hidden / restriction is set. hidden carries only the cause and the control (no text, author
 -- | or quote). operations accompany a visible or restricted post; a reveal never clears a block.
@@ -504,6 +559,13 @@ newtype ProfileContext = ProfileContext
   { activeProfile :: {} -> AsGql "Profile" (Data.Maybe.Maybe (AsGql "Profile" Profile)) }
 
 derive instance Data.Newtype.Newtype ProfileContext _
+-- | `truncated` is a partial result of a time-limited search; `nextCursor` resumes it (or the next page).
+newtype SearchPage = SearchPage
+  { nextCursor :: {} -> AsGql "String" (Data.Maybe.Maybe (AsGql "String" String))
+  , truncated :: {} -> AsGql "Boolean" Boolean
+  }
+
+derive instance Data.Newtype.Newtype SearchPage _
 -- | Maps EmojiRef.
 newtype EmojiInput = EmojiInput
   { kind :: NotNull (AsGql "EmojiKind" EmojiKind), value :: NotNull (AsGql "String" String) }

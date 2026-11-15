@@ -4,6 +4,23 @@ import { createMockContent } from "./content-mock.ts";
 import { QuickReactionStore, type EmojiView, type OperationPath, type QuickReactionOperation, type QuickReactionSettings, type ReactionState } from "./quick-reaction.ts";
 import { interpretReply } from "./quick-reaction-reply.ts";
 import { MOCK_QUICK_REACTION_SETUP, mockReactionSummary } from "./reaction-fixtures.ts";
+import type { ViewerControls } from "../search/author-directory.ts";
+import { resolveAuthor, suggestAuthors } from "../search/author-directory.ts";
+import { MOCK_DIRECTORY, SEARCH_CANDIDATES } from "../search/fixtures.ts";
+import { searchNotes } from "../search/mock-search.ts";
+import { interpretSearchReply } from "../search/reply.ts";
+import type { NoteSearchResponse, ResolveAuthorResponse, SuggestAuthorsResponse } from "../search/types.ts";
+import type { SearchViewer } from "./client.ts";
+
+async function controlsOf(viewer: SearchViewer): Promise<ViewerControls> {
+  const [domains, actors] = await Promise.all([viewer.controls(), viewer.actorControls()]);
+  return {
+    muted_domains: domains.filter((control) => control.mode === "mute").map((control) => control.domain),
+    blocked_domains: domains.filter((control) => control.mode === "block").map((control) => control.domain),
+    muted_actors: actors.filter((control) => control.mode === "mute").map((control) => control.actorUrl),
+    blocked_actors: actors.filter((control) => control.mode === "block").map((control) => control.actorUrl),
+  };
+}
 
 export type MockApi = ShuttlePubApi & {
   /** The stateful S3 model behind the quick reaction operations. */
@@ -57,6 +74,28 @@ export function createMockApi(): MockApi {
     },
     async getCustomEmojis(): Promise<EmojiView[]> {
       return store.catalogueEmojis();
+    },
+    async searchNotes(_auth, _profile, query, viewer) {
+      const [profileId, controls, actorControls] = await Promise.all([viewer.profileId(), viewer.controls(), viewer.actorControls()]);
+      return interpretSearchReply<NoteSearchResponse>("searchPersonalNotes", structuredClone(searchNotes({
+        profileId,
+        query,
+        candidates: SEARCH_CANDIDATES,
+        directory: MOCK_DIRECTORY,
+        controls,
+        actorControls,
+      })));
+    },
+    async resolveSearchAuthor(_auth, _profile, acct, viewer) {
+      const profileId = await viewer.profileId();
+      return interpretSearchReply<ResolveAuthorResponse>("resolveNoteSearchAuthor", structuredClone(resolveAuthor(MOCK_DIRECTORY, profileId, acct)));
+    },
+    async suggestSearchAuthors(_auth, _profile, prefix, viewer) {
+      const profileId = await viewer.profileId();
+      return interpretSearchReply<SuggestAuthorsResponse>(
+        "suggestNoteSearchAuthors",
+        structuredClone(suggestAuthors(MOCK_DIRECTORY, await controlsOf(viewer), profileId, prefix)),
+      );
     },
   };
 }

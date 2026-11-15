@@ -373,6 +373,48 @@ type PolicyRemoval {
   key: String!
 }
 
+"""Kind of a searched Note (a pure repost is never searchable)."""
+enum SearchedNoteKind {
+  POST
+  REPLY
+  QUOTE
+}
+
+"""
+One Note of a post search (ShuttlePub #23 SearchedNote). The contract carries only the Note id, its author's
+canonical actor URL, the time and either the body or the content warning: no display name, avatar, counts or
+reactions. A content-warned Note has `text` null (its body never leaves the BFF) and `contentWarning` set.
+"""
+type SearchedNote {
+  noteId: ID!
+  kind: SearchedNoteKind!
+  authorActorUrl: String!
+  createdAt: String!
+  text: String
+  contentWarning: String
+}
+
+"""`truncated` is a partial result of a time-limited search; `nextCursor` resumes it (or the next page)."""
+type SearchPage {
+  truncated: Boolean!
+  nextCursor: String
+}
+
+type NoteSearchResult {
+  notes: [SearchedNote!]!
+  page: SearchPage!
+}
+
+"""
+An author of the search (ShuttlePub #27). The avatar URL of the contract never leaves the BFF (d09-q06): the
+UI shows a placeholder icon. `displayName` is null when the author has none.
+"""
+type SearchAuthor {
+  actorUrl: String!
+  acct: String!
+  displayName: String
+}
+
 type Mutation {
   """Select an identity from the current viewer's owned Emumet accounts (integrated Profile API)."""
   selectProfile(id: ID!): ProfileContext!
@@ -428,4 +470,14 @@ type Query {
   actorBlockImpact(profile: ID!, actorUrl: String!): DomainBlockImpact!
   """Normalizes a typed domain (URL, @user@host, path, port, case, trailing dot, IDN)."""
   checkDomainInput(input: String!): DomainInputCheck!
+  """
+  Post search of the selected Profile (ShuttlePub #23). `profile` is the Profile context id the page shows
+  (PROFILE_CHANGED when it is not the selected one any more). `author` is a canonical actor URL; author and q
+  are optional but not both absent (INVALID_REQUEST). A partial result is `page.truncated`; 501 is NOT_IMPLEMENTED.
+  """
+  searchNotes(profile: ID!, author: String, q: String, cursor: String, limit: Int): NoteSearchResult!
+  """Up to 5 author suggestions for a name/acct prefix (ShuttlePub #27); never muted/blocked authors."""
+  suggestSearchAuthors(profile: ID!, prefix: String!): [SearchAuthor!]!
+  """Resolves a typed acct (user@host, host-less = this server) to a known author (#27). AUTHOR_AMBIGUOUS on several matches."""
+  resolveSearchAuthor(profile: ID!, acct: String!): SearchAuthor!
 }
