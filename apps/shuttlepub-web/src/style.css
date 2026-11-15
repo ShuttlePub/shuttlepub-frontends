@@ -486,3 +486,81 @@ a.sp-quote:hover { background: color-mix(in srgb, currentColor 4%, transparent);
   .sp-revealed { margin: 12px 0 0; border-left: 0; border-right: 0; border-radius: 0; }
   .sp-page-detail .sp-dtabs + .sp-dpanel .sp-tl { border-bottom: 1px solid var(--sp-line); }
 }
+
+/* ===== Post search (D04): sticky box with the author chip inside the field, dense cards ===== */
+.sp-content:has(> .sp-page-search) { padding-top: 0; }
+.sp-search-box {
+  position: sticky; top: var(--sp-header-h); z-index: 10; padding: 10px 0 8px;
+  background: var(--color-bg-primary);
+}
+.sp-search-field {
+  position: relative; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 40px; padding: 4px 8px 4px 12px;
+  border: 1px solid var(--sp-line); border-radius: var(--radius-theme); background: var(--color-bg-surface);
+}
+.sp-search-field:focus-within { border-color: var(--color-accent); }
+.sp-search-field.is-invalid { border-color: var(--color-error); }
+.sp-search-field > .sp-icon-search { width: 16px; height: 16px; color: var(--color-text-muted); flex-shrink: 0; }
+.sp-search-input {
+  flex: 1 1 120px; min-width: 0; height: 30px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit;
+}
+.sp-search-input:focus-visible { outline: none; }
+.sp-search-input::placeholder { color: var(--color-text-muted); }
+.sp-search-clear, .sp-search-chip-remove {
+  display: grid; place-items: center; width: 24px; height: 24px; flex-shrink: 0; border-radius: 50%; color: var(--color-text-muted);
+}
+.sp-search-clear:hover, .sp-search-chip-remove:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
+.sp-search-clear .sp-icon, .sp-search-chip-remove .sp-icon { width: 14px; height: 14px; }
+.sp-search-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; height: 26px; padding: 0 2px 0 3px;
+  border-radius: 13px; background: color-mix(in srgb, var(--color-accent) 14%, transparent); color: var(--color-accent); font-size: 13px; font-weight: 600;
+}
+.sp-search-chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-search-chip-from { opacity: .7; font-weight: 500; }
+.sp-search-problem { margin: 4px 2px 0; font-size: 12px; color: var(--color-error); }
+.sp-search-suggest {
+  position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20; margin: 0; padding: 4px; list-style: none;
+  border: 1px solid var(--sp-line); border-radius: var(--radius-theme); background: var(--color-bg-primary);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 18%);
+}
+.sp-search-suggest-note { padding: 10px 12px; font-size: 12px; color: var(--color-text-muted); }
+.sp-search-option { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 4px 8px; border-radius: calc(var(--radius-theme) * .75); cursor: pointer; }
+.sp-search-option.is-active, .sp-search-option:hover { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
+.sp-search-option-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-search-option-acct { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--color-text-muted); }
+.sp-search-results { margin-top: 4px; }
+.sp-search-list, .sp-search-skeletons { border: 1px solid var(--sp-line); border-radius: var(--radius-theme-lg); }
+.sp-search-note {
+  display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; padding: 10px 14px; border-bottom: 1px solid var(--sp-line);
+}
+.sp-search-note:last-child { border-bottom: 0; }
+.sp-search-note-main { min-width: 0; }
+.sp-search-note-head { display: flex; align-items: baseline; gap: 6px; min-width: 0; }
+.sp-search-note-name { font-weight: 650; color: var(--color-text-heading); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-search-note-handle { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--color-text-muted); }
+.sp-search-kind { flex-shrink: 0; white-space: nowrap; }
+.sp-search-note-time { margin-left: auto; white-space: nowrap; font-size: 12px; color: var(--color-text-muted); }
+.sp-search-note-text { margin: 2px 0 0; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sp-search-mark { border-radius: 2px; background: color-mix(in srgb, var(--color-accent) 28%, transparent); color: inherit; }
+.sp-search-cw { margin-top: 2px; }
+.sp-search-cw-closed { display: flex; align-items: baseline; gap: 8px; line-height: 1.4; }
+.sp-search-cw-summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; line-height: 1.4; }
+.sp-search-cw-summary::-webkit-details-marker { display: none; }
+.sp-search-cw-text { min-width: 0; overflow-wrap: anywhere; }
+.sp-search-cw-more { flex-shrink: 0; margin-left: auto; padding: 0 8px; font-size: 11px; border-radius: 10px; border: 1px solid var(--sp-line); color: var(--color-text-muted); }
+.sp-search-cw[open] .sp-search-cw-more { display: none; }
+.sp-search-cw[open] .sp-search-note-text { margin-top: 6px; }
+.sp-search-line { display: block; height: 10px; margin: 6px 0; border-radius: 4px; }
+.sp-search-line-short { width: 55%; }
+.sp-search-note-skeleton { padding: 12px 14px; }
+.sp-search-tail { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 44px; padding: 8px 0; font-size: 12px; color: var(--color-text-muted); }
+.sp-search-failed { color: var(--color-error); }
+.sp-search-end { margin: 0; padding: 12px 0; text-align: center; font-size: 12px; color: var(--color-text-muted); }
+.sp-search-error { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+@media (max-width: 767px) {
+  /* Edge to edge on a phone: the content's side padding (12px) is given to the parts instead. */
+  .sp-content:has(> .sp-page-search) { padding-left: 0; padding-right: 0; }
+  .sp-search-box { padding-left: 12px; padding-right: 12px; }
+  .sp-search-list, .sp-search-skeletons { border-left: 0; border-right: 0; border-radius: 0; }
+  .sp-search-note { padding: 10px 12px; }
+  .sp-search-tail, .sp-search-end, .sp-search-problem, .sp-search-error, .sp-search-results > .sp-state { padding-left: 12px; padding-right: 12px; }
+}

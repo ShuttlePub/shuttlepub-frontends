@@ -23,10 +23,12 @@ export type DataState = "populated" | "empty";
  *    marker data-testid="mute-block" on /settings/mute-block/domains.
  *  - remote-emoji: D09 (another server's emoji chips: globe, :name:, picker without them),
  *    detected by the reaction layer's data-remote-emoji="reuse".
+ *  - note-search: D04 post search (the /search screen of host note-search-ui ui-spec v2), detected by the SSR
+ *    marker data-testid="search" on /search (a baseline serves the placeholder there).
  *  - domain-content: D08 second stage (post menu, hidden / revealed posts, 4-1 sheet,
  *    person page), detected by the SSR marker data-testid="user-page" on /users/….
  */
-export type ScreenFeature = "sns-shell" | "quick-reaction" | "emumet-username-ui" | "sns-login" | "emumet-webhook-endpoints" | "mute-block-settings" | "domain-content" | "remote-emoji";
+export type ScreenFeature = "sns-shell" | "quick-reaction" | "emumet-username-ui" | "sns-login" | "emumet-webhook-endpoints" | "mute-block-settings" | "domain-content" | "remote-emoji" | "note-search";
 
 /**
  * ShuttlePub only. A case with a viewer is captured against the real-mode BFF (stub
@@ -131,6 +133,16 @@ const routes = [
   { app: "ShuttlePub", id: "login-failed", path: "/login?error=failed", authenticated: false, data: "populated", requires: "sns-login", viewer: "signed-out" },
   { app: "ShuttlePub", id: "home-signed-out", path: "/", authenticated: false, data: "populated", requires: "sns-login", viewer: "signed-out" },
   { app: "ShuttlePub", id: "home-session-expired", path: "/", authenticated: false, data: "populated", requires: "sns-login", viewer: "session-expired" },
+  // D04 post search (note-search-ui ui-spec v2): the empty box, results of a keyword (marks, a folded content
+  // warning, reply / quote kinds, text that looks like HTML), the author suggestions, the author chip and the
+  // partial result of the time limit with its "continue" button.
+  ...([
+    ["search-empty", "/search"],
+    ["search-results", "/search?q=%E6%A4%9C%E7%B4%A2"],
+    ["search-suggest", "/search"],
+    ["search-author", "/search"],
+    ["search-interrupted", "/search?q=%E6%99%82%E9%96%93%E5%88%87%E3%82%8C"],
+  ] as const).map(([id, path]) => ({ app: "ShuttlePub", id, path, authenticated: false, data: "populated", requires: "note-search" }) as const),
   // D08 mute/block settings (personal-domain-controls-web-ui, UI mock v5): both sub-pages
   // with the stateful mock's seed, and the block confirmation with detached follows.
   { app: "ShuttlePub", id: "mute-block-domains", path: "/settings/mute-block/domains", authenticated: false, data: "populated", requires: "mute-block-settings" },

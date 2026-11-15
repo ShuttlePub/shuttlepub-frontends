@@ -133,13 +133,33 @@ const NONE = { action: "", list: "", value: "" };
 // The app's single keydown handler. Flame delegates bubbling events to its root and
 // runs only the nearest handler, so all keyboard behaviour lives here:
 //  - Escape -> { action: "escape" } (the update decides which layer closes)
+//  - the search combobox: Enter / arrows / Backspace at the start -> "search-*" (not while composing)
 //  - Tab inside an aria-modal dialog -> focus trap
 //  - arrows inside role=menu -> move between items
 //  - ArrowLeft/Right on a role=tab -> { action: "tab", list, value } of the next tab
 export const keydownAction = (event) => () => {
   const target = event.target instanceof Element ? event.target : null;
-  if (event.key === "Escape") return { action: "escape", list: "", value: "" };
+  const composing = event.isComposing || event.keyCode === 229;
+  // Esc while an IME is composing only cancels the composition.
+  if (event.key === "Escape") return composing ? NONE : { action: "escape", list: "", value: "" };
   if (target === null) return NONE;
+  // The search box is a combobox (D04). Enter, the arrows and Backspace at the start are the
+  // app's; none of them while an IME composes (its Enter/Space only confirm the conversion).
+  if (target.id === "sp-search-input") {
+    if (event.key === "Enter") {
+      if (composing) return NONE;
+      event.preventDefault();
+      return { action: "search-enter", list: "", value: "" };
+    }
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      if (composing || target.getAttribute("aria-expanded") !== "true") return NONE;
+      event.preventDefault();
+      return { action: event.key === "ArrowDown" ? "search-down" : "search-up", list: "", value: "" };
+    }
+    if (event.key === "Backspace" && !composing && target.selectionStart === 0 && target.selectionEnd === 0) {
+      return { action: "search-backspace", list: "", value: "" };
+    }
+  }
   if (event.key === "Tab") {
     // Also catch Tab from outside an open modal (e.g. focus still on the opener for a
     // frame): any open aria-modal layer owns the focus.

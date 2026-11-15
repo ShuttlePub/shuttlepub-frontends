@@ -7,19 +7,20 @@ import Data.Argonaut.Decode.Generic (genericDecodeJson)
 import Data.Argonaut.Encode.Class (class EncodeJson)
 import Data.Argonaut.Encode.Generic (genericEncodeJson)
 import Data.Generic.Rep (class Generic)
-import Data.Maybe (Maybe)
+import Data.Maybe (Maybe(..))
 import Data.Show.Generic (genericShow)
 import Routing.Duplex (RouteDuplex', optional, root, segment, string)
 import Routing.Duplex.Generic (noArgs, sum)
 import Routing.Duplex.Generic.Syntax ((/), (?))
 
 -- | Screens of the SNS shell (ui-spec L3 navigation + L4 post detail).
--- | Notifications / Search / Bookmarks exist as navigation targets only; their
--- | contents are later units.
+-- | Notifications / Bookmarks exist as navigation targets only; their contents are later units.
 data Route
   = Home
   | Notifications
-  | Search
+  -- | Post search (D04). The confirmed condition lives in the URL (d04-q16): `q` is the keyword and
+  -- | `from` the author's actor URL (never an acct). Neither a cursor nor results are in it.
+  | Search { q :: Maybe String, from :: Maybe String }
   | Bookmarks
   | Settings
   | PostDetail String
@@ -44,12 +45,16 @@ instance EncodeJson Route where
 instance DecodeJson Route where
   decodeJson = genericDecodeJson
 
+-- | The search screen without a condition (the navigation target).
+searchHome :: Route
+searchHome = Search { q: Nothing, from: Nothing }
+
 -- | Unknown paths parse to Nothing, which the view maps to the shared NotFound.
 routeCodec :: RouteDuplex' Route
 routeCodec = root $ sum
   { "Home": noArgs
   , "Notifications": "notifications" / noArgs
-  , "Search": "search" / noArgs
+  , "Search": "search" ? { q: optional <<< string, from: optional <<< string }
   , "Bookmarks": "bookmarks" / noArgs
   , "Settings": "settings" / noArgs
   , "PostDetail": "posts" / segment

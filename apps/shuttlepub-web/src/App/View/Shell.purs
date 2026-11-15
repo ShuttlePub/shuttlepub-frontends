@@ -25,7 +25,7 @@ import App.Api.Error as Error
 import App.Message (Message(..))
 import App.Model (Model, ProfileMenuState, RemoteData(..), activeProfile)
 import App.Profile (Profile)
-import App.Route (Route(..))
+import App.Route (Route(..), searchHome)
 import App.View.Common (AvatarSize(..), attr, avatar, emptySlot, icon, loginHref, routeLink, testId, visuallyHidden)
 import Data.Array (null)
 import Data.Maybe (Maybe(..), isJust)
@@ -180,7 +180,7 @@ sidebar :: Model -> Html Message
 sidebar model = HE.nav [ HA.class' "sp-sidebar", attr "aria-label" "メインナビゲーション" ]
   [ sideLink model Home "home" "ホーム"
   , sideLink model Notifications "bell" "通知"
-  , sideLink model Search "search" "検索"
+  , sideLink model searchHome "search" "検索"
   , sideLink model Bookmarks "bookmark" "ブックマーク"
   , sideLink model Settings "settings" "設定"
   , HE.button
@@ -199,6 +199,7 @@ isCurrent model route = case model.route, route of
   Just (PostDetail _), Home -> true
   Just MuteBlockAccounts, Settings -> true
   Just MuteBlockDomains, Settings -> true
+  Just (Search _), Search _ -> true
   Just current, _ -> current == route
   Nothing, _ -> false
 
@@ -214,7 +215,7 @@ sideLink model route iconKind label = routeLink route
 tabbar :: Model -> Html Message
 tabbar model = HE.nav [ HA.class' "sp-tabbar", attr "aria-label" "メインナビゲーション" ]
   [ tab Home "home" "ホーム"
-  , tab Search "search" "検索"
+  , tab searchHome "search" "検索"
   , HE.button
       [ HA.type' "button"
       , HA.id composeButtonMobileId

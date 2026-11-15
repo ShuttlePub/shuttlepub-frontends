@@ -21,7 +21,8 @@ mock / real 切替、SSR + hydration、Profile context の型・fixture、visual
 | 投稿詳細 | `/posts/:id` | 投稿と「返信／リアクション」タブ (既定は返信)。本文クリックと投稿時刻リンクから開く (L4) |
 | ユーザー | `/users/:handle` | 名前・自己紹介・ミュート中／ブロック中のドメインのバッジと投稿一覧 (D08 ui-spec 3-6)。投稿者名から開く |
 | 設定 | `/settings` | 「Profile」節 (常用絵文字は quick-reaction-web-ui が差し込む) |
-| 通知 / 検索 / ブックマーク | `/notifications` `/search` `/bookmarks` | ナビゲーション先のみ (中身は後続) |
+| 検索 | `/search?q=&from=` | 投稿検索 (D04、下記)。確定した条件だけを URL に持つ |
+| 通知 / ブックマーク | `/notifications` `/bookmarks` | ナビゲーション先のみ (中身は後続) |
 
 - デスクトップ: ヘッダー 52px (右に通知・投稿用 Profile ボタン = L1)、サイドバー 200px (「投稿する」)、本文列最大 600px。
 - モバイル (767px 以下): ヘッダー 48px (左のアバターで Profile ボトムシート)、下部タブ 48px
@@ -121,6 +122,35 @@ commit から `bun run openapi:sync-scenarios` で取込) を投影に再生し�
 **投稿の実抑制・反応拒否は ShuttlePub 側が未実装 (S8 は全 route 501)** で、real の投稿系は従来どおり
 `NOT_IMPLEMENTED` です。mock の既定 Profile は noisy.social をミュート・bot-farm.example をブロック済みで、
 他の Profile は未設定です (Profile ごとに分かれることを確認できます)。
+
+### 投稿検索 (D04 / shuttlepub-web-note-search-ui)
+
+合意済み UI 仕様 (host `intents/shuttlepub/features/note-search-ui/ui-spec.md` v2・`mocks/index.html`、grill d04-q08〜q18、d09-q06) に従います。
+
+- **BFF**: GraphQL `searchNotes(profile, author, q, cursor, limit)` (ShuttlePub #23 `searchPersonalNotes`)、
+  `suggestSearchAuthors(profile, prefix)` / `resolveSearchAuthor(profile, acct)` (#27 作者 API)。いずれも選択 Profile に
+  スコープし、BFF で本人所有・選択一致を確認します。作者 API の 409 は `AUTHOR_AMBIGUOUS`
+  (リアクションの `CONFLICT` とは別)、429 は `RATE_LIMITED`、503 は `SEARCH_TIMEOUT` / `AUTHOR_LOOKUP_UNAVAILABLE`、
+  501 は `NOT_IMPLEMENTED`。mock と real は同じ型・エラー体系で、real の 501・不正な 200・通信失敗を mock の成功へ
+  フォールバックしません。**現在の real (ShuttlePub) は検索・作者 API とも常に 501** で、画面は短い「未実装」表示になります。
+- **契約に無い項目は出さない**: 検索結果 `SearchedNote` は note_id・author(actor URL)・本文/CW・created_at・kind のみです。
+  表示名・アイコン・件数・リアクションは持たないため、カードにも置きません (mock の仮表示にもしません)。作者の名前は
+  このセッションで見た `SearchAuthor` (候補・resolve・「…」入口) から引き、無ければ actor URL
+  (D08 と同じ display_name → @acct → actor URL の順。URL から名前は推測しない)。外部の `icon_url` はブラウザで読まず
+  (d09-q06)、頭文字の代替アイコンにします。CW 付きの結果は契約が警告文だけを返すため、警告のみを畳んで表示します。
+- **入力欄**: `from:@user@host` を入力欄内の作者チップに変換します。スペース＝変換のみ、Enter＝変換してから検索、
+  2 つ目の `from:` は置換、解決に失敗したら元のテキストを残して短いエラー (検索しない)。`from:@alice` (host 省略) は
+  そのまま BFF へ送り、自サーバーの alice として扱います (ブラウザの hostname は使いません)。作者は任意で最大 1、
+  キーワードのみも可。候補は名前・acct の前方一致で最大 5 (範囲は producer 側)、選択は返却された actor URL で
+  確定し再 resolve しません。IME 変換中の Enter/スペースでは変換も検索もしません。キー操作は `App.Dom.keydownAction` に集約。
+- **結果**: 無限スクロール。一致は `<mark>` (テキストノードのみ。HTML は挿入しません)。`truncated=true` (時間切れ) は
+  途中結果を残して自動読み込みを止め、「途中から続きを読む」で `next_cursor` から再開します。追加ページの通信失敗は
+  途中結果を保ったまま「もう一度」を待ちます。条件変更・Profile 切替で世代が進み、古い検索・候補・resolve の応答は捨てます。
+- **URL**: 確定した条件 (`q` と作者の actor URL `from`) だけを URL に持ち、戻る・共有で再現します。cursor・途中結果は入れません。
+- **入口**: ユーザーページの「…」だけに「@user の投稿を検索」があり、既知の actor URL を作者チップに入れて即検索します
+  (共用の投稿メニューには増やしません)。
+- real E2E (`scripts/e2e-real.sh`) は `EMUMET_READ_TOKEN` 未設定の CI では skip されます。検索の挙動は
+  `apps/ui-catalog/visual/screens/shuttlepub-verify.ts` (mock、desktop/mobile) と BFF / PureScript のテストで確認します。
 
 ### 他サーバーの絵文字 (D09 / shuttlepub-web-remote-emoji-reuse-ui)
 

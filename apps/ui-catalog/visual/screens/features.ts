@@ -10,7 +10,7 @@ export function captureSide(value: string | undefined): CaptureSide {
 }
 
 /** ShuttlePub pages whose SSR HTML carries the feature markers (`/`, `/login`, the mute/block page, a person page). */
-export const SHUTTLEPUB_PROBE_PATHS = ["/", "/login", "/settings/mute-block/domains", "/users/deals%40bot-farm.example"] as const;
+export const SHUTTLEPUB_PROBE_PATHS = ["/", "/login", "/settings/mute-block/domains", "/users/deals%40bot-farm.example", "/search"] as const;
 
 /** SSR markers proving a feature exists in the running app (see cases.ts ScreenFeature). Pass the HTML of SHUTTLEPUB_PROBE_PATHS. */
 export function featuresInShuttlePubHtml(html: string): Set<ScreenFeature> {
@@ -24,6 +24,8 @@ export function featuresInShuttlePubHtml(html: string): Set<ScreenFeature> {
   if (html.includes('data-testid="mute-block"')) features.add("mute-block-settings");
   // Only the person page renders this marker; a baseline without the route serves NotFound there.
   if (html.includes('data-testid="user-page"')) features.add("domain-content");
+  // D04: only the search screen renders this marker; a baseline serves the placeholder (data-testid="placeholder") there.
+  if (html.includes('data-testid="search"')) features.add("note-search");
   return features;
 }
 

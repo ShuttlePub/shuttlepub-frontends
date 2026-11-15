@@ -15,6 +15,9 @@ import App.MuteBlock.Types as MuteBlock
 import App.MuteBlock.Update as MuteBlockUpdate
 import App.Reaction (ReactionMsg(..))
 import App.Route (Route(..), routeCodec)
+import App.Search.Text (rememberAuthor)
+import App.Search.Types as Search
+import App.Search.Update as SearchUpdate
 import App.View.Auth (authActionId, authActionShown)
 import App.View.Compose (composeTextId, visibilityButtonId)
 import App.View.Shell (composeButtonDesktopId, composeButtonMobileId, profileButtonDesktopId, profileButtonMobileId, profileMenuId)
@@ -46,8 +49,12 @@ mkUpdate nav model = case _ of
       closed = closeOverlays left
       entered = (closed.model { route = route }) `enterRoute` route
       Tuple muteBlock muteBlockEffects = enterMuteBlock entered.model
+      -- Arriving at the search screen (menu entry, navigation, a new condition) leaves focus in the box.
+      searchFocus = case route of
+        Just (Search _) -> [ effect (focusById Search.searchInputId) ]
+        _ -> []
     in
-      Tuple muteBlock (leaveEffects <> closed.effects <> [ effect scrollToTop ] <> entered.effects <> muteBlockEffects <> if scrollLocked model then [ syncScrollLock muteBlock ] else [])
+      Tuple muteBlock (leaveEffects <> closed.effects <> [ effect scrollToTop ] <> entered.effects <> muteBlockEffects <> searchFocus <> if scrollLocked model then [ syncScrollLock muteBlock ] else [])
   Hydrated now isMobile ->
     let
       base = model
@@ -101,6 +108,10 @@ mkUpdate nav model = case _ of
         _ -> noMessages model
       "picker" -> QR.selectCategory model action.value true
       _ -> noMessages model
+    "search-enter" -> searchStep nav model Search.EnterPressed
+    "search-down" -> searchStep nav model (Search.MoveActive 1)
+    "search-up" -> searchStep nav model (Search.MoveActive (-1))
+    "search-backspace" -> searchStep nav model Search.BackspaceAtStart
     _ -> noMessages model
   DocumentEscape -> escape model
 
@@ -208,6 +219,24 @@ mkUpdate nav model = case _ of
       in
         Tuple next (effects <> [ syncScrollLock next ] <> back)
     Nothing -> noMessages model
+  -- The person page's "この人の投稿を検索": the person becomes the author chip and is searched at once.
+  MenuSearchAuthor author ->
+    let
+      named =
+        { actorUrl: author.actorUrl
+        , acct: author.handle
+        , displayName: Just author.displayName
+        }
+      closed = model
+        { content = model.content { menu = Nothing }
+        , search = model.search { known = rememberAuthor named model.search.known }
+        }
+    in
+      Tuple closed
+        [ syncScrollLock closed
+        , effect (nav.pushState (unsafeToForeign {}) (print routeCodec (Search { q: Nothing, from: Just author.actorUrl })))
+        ]
+  SearchMsg message -> searchStep nav model message
   SelectDetailTab tab -> selectDetailTab model tab false
 
   OpenCompose opener ->
@@ -303,6 +332,7 @@ enterRoute model = case _ of
   Just Home -> requestContent (fresh model) { timeline = Loading }
   Just (PostDetail _) -> requestContent (fresh model) { detail = Loading, detailTab = RepliesTab }
   Just (UserProfile _) -> requestContent (fresh model) { content { user = Loading } }
+  Just (Search condition) -> searchEnter model { q: condition.q, author: condition.from }
   _ -> { model, effects: [] }
   where
   fresh m = m
@@ -480,6 +510,7 @@ escape :: Model -> Tuple Model (Array (Aff (Maybe Message)))
 escape model = case model.compose of
   _ | isJust model.muteBlock.dialog -> delegate model MuteBlock.CloseDialog
   _ | isJust model.content.menu -> closePostMenu model
+  _ | model.search.suggest.open && searchShown model -> searchStep' model Search.CloseSuggestions
   Just state
     | state.visibilityMenuOpen ->
         Tuple (model { compose = Just state { visibilityMenuOpen = false } })
@@ -510,8 +541,68 @@ profileChanged model =
     -- from scratch: reveals were the previous Profile's.
     changed = contentRoute entered.route && (entered.content.waiting || entered.content.profile /= map _.id (activeProfile entered))
     content = if changed then enterRoute entered entered.route else { model: entered, effects: [] }
+    -- The search follows the Profile like the content does: another Profile (or one that just became
+    -- known) starts a new generation from the URL's condition.
+    searched = case content.model.route of
+      Just (Search condition)
+        | content.model.search.waiting || content.model.search.profile /= searchProfile content.model ->
+            searchEnter content.model { q: condition.q, author: condition.from }
+      _ -> { model: content.model, effects: [] }
   in
-    Tuple content.model (syncEffects <> enterEffects <> content.effects)
+    Tuple searched.model (syncEffects <> enterEffects <> content.effects <> searched.effects)
+
+-- | The Profile context id a search is for: Nothing while the context is not known yet.
+searchProfile :: Model -> Maybe String
+searchProfile model = case model.profileContext of
+  Loaded context -> map _.id context.activeProfile
+  _ -> Nothing
+
+searchShown :: Model -> Boolean
+searchShown model = case model.route of
+  Just (Search _) -> true
+  _ -> false
+
+-- | The search screen is entered for the URL's condition (Step of the screen's own effects).
+searchEnter :: Model -> Search.Condition -> Step
+searchEnter model condition = case model.profileContext of
+  Loaded context | isNothing context.activeProfile ->
+    { model: model { search = SearchUpdate.failed (ProfileUnavailable "No Profile is selected") condition model.search }, effects: [] }
+  Failed error -> { model: model { search = SearchUpdate.failed error condition model.search }, effects: [] }
+  _ ->
+    let
+      step = SearchUpdate.enter (searchProfile model) condition model.search
+    in
+      { model: model { search = step.model }, effects: map (map (map SearchMsg)) step.effects }
+
+searchStep :: PushStateInterface -> Model -> Search.Message -> Tuple Model (Array (Aff (Maybe Message)))
+searchStep nav model message =
+  let
+    step = SearchUpdate.update model.search message
+    next = model { search = step.model }
+    effects = map (map (map SearchMsg)) step.effects
+  in
+    case step.commit of
+      Nothing -> Tuple next effects
+      Just condition ->
+        let
+          route = Search { q: condition.q, from: condition.author }
+        in
+          -- The same URL again is a search again; another one goes through the URL (history, sharing).
+          if next.route == Just route then
+            let
+              entered = searchEnter next condition
+            in
+              Tuple entered.model (effects <> entered.effects)
+          else
+            Tuple next (effects <> [ effect (nav.pushState (unsafeToForeign {}) (print routeCodec route)) ])
+
+-- | The screen's own answers need no navigation; commits cannot happen here.
+searchStep' :: Model -> Search.Message -> Tuple Model (Array (Aff (Maybe Message)))
+searchStep' model message =
+  let
+    step = SearchUpdate.update model.search message
+  in
+    Tuple (model { search = step.model }) (map (map (map SearchMsg)) step.effects)
 
 -- | The mute/block page (D08) loads its lists once it is shown and the selected
 -- | Profile is known; a Profile switch reloads them. A failed Profile context is

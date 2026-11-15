@@ -28,6 +28,15 @@ data ApiError
   | EmojiUsageNotAllowed String
   -- | 409 conflict: an external emoji while the Profile already has a reaction on the Note.
   | Conflict String
+  -- | Post search / author lookup (D04): 400, 404 (no such author), 409 of the author
+  -- | resolve (several accts match: not the reaction Conflict), 429, 503 search_timeout and
+  -- | 503 author_lookup_*.
+  | InvalidRequest String
+  | SearchNotFound String
+  | AuthorAmbiguous String
+  | RateLimited String
+  | SearchTimeout String
+  | AuthorLookupUnavailable String
   | Unavailable String
   | InvalidResponse String
   | NetworkError String
@@ -57,6 +66,12 @@ fromGqlCode code message = case code of
   Just "EMOJI_UNAVAILABLE" -> EmojiUnavailable message
   Just "EMOJI_USAGE_NOT_ALLOWED" -> EmojiUsageNotAllowed message
   Just "CONFLICT" -> Conflict message
+  Just "INVALID_REQUEST" -> InvalidRequest message
+  Just "NOT_FOUND" -> SearchNotFound message
+  Just "AUTHOR_AMBIGUOUS" -> AuthorAmbiguous message
+  Just "RATE_LIMITED" -> RateLimited message
+  Just "SEARCH_TIMEOUT" -> SearchTimeout message
+  Just "AUTHOR_LOOKUP_UNAVAILABLE" -> AuthorLookupUnavailable message
   Just "UPSTREAM_UNAVAILABLE" -> Unavailable message
   Just "INVALID_UPSTREAM_RESPONSE" -> InvalidResponse message
   _ -> Unexpected message
@@ -87,6 +102,12 @@ describe = case _ of
   EmojiUnavailable _ -> "Emoji is unavailable"
   EmojiUsageNotAllowed _ -> "Emoji cannot be used this way"
   Conflict _ -> "Conflicts with the current reaction"
+  InvalidRequest message -> "Invalid request: " <> message
+  SearchNotFound message -> "Not found: " <> message
+  AuthorAmbiguous message -> "Several authors match: " <> message
+  RateLimited message -> "Too many requests: " <> message
+  SearchTimeout message -> "Search timed out: " <> message
+  AuthorLookupUnavailable message -> "Author lookup unavailable: " <> message
   Unavailable message -> "Backend unavailable: " <> message
   InvalidResponse message -> "Invalid backend response: " <> message
   NetworkError message -> "Network error: " <> message
@@ -105,6 +126,12 @@ tag = case _ of
   EmojiUnavailable _ -> "emoji_unavailable"
   EmojiUsageNotAllowed _ -> "emoji_usage_not_allowed"
   Conflict _ -> "conflict"
+  InvalidRequest _ -> "invalid_request"
+  SearchNotFound _ -> "not_found"
+  AuthorAmbiguous _ -> "author_ambiguous"
+  RateLimited _ -> "rate_limited"
+  SearchTimeout _ -> "search_timeout"
+  AuthorLookupUnavailable _ -> "author_lookup_unavailable"
   Unavailable _ -> "unavailable"
   InvalidResponse _ -> "invalid_response"
   NetworkError _ -> "network_error"

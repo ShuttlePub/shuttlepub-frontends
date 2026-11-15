@@ -22,7 +22,7 @@ import App.Post (PostView, TimelineTab, allTimelineTabs, timelineTabLabel, timel
 import App.Route (Route(..))
 import App.View.Common (AvatarSize(..), attr, avatar, emptySlot, errorNote, icon, routeLink, stateNote, testId)
 import App.View.Hidden (hiddenCard, revealButtonId, revealedBar, sourceLine, viewBody)
-import App.View.PostCard (PostCardMode(..), controlLabel, postCard, postMenu)
+import App.View.PostCard (PostCardMode(..), controlLabel, personMenu, postCard)
 import App.View.Shell (isSignedIn)
 import Data.Array (any, elem, filter, find, length, null)
 import Data.Maybe (Maybe(..), fromMaybe, isJust, isNothing)
@@ -312,7 +312,7 @@ userPage model handle = HE.div [ HA.class' "sp-page sp-page-user" ]
                     ]
                 ]
             , HE.div [ HA.class' "sp-user-actions" ]
-                [ postMenu model ("user-" <> handle) page.author
+                [ personMenu model ("user-" <> handle) page.author
                 , followButton page
                 ]
             ]
