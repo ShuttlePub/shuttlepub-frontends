@@ -22,7 +22,7 @@ test("screen inventory covers every app and state at desktop/mobile sizes with s
   const names = SCREEN_CASES.map((item) => item.filename);
   // Then
   expect(new Set(names).size).toBe(SCREEN_CASES.length);
-  expect(SCREEN_CASES).toHaveLength(168);
+  expect(SCREEN_CASES).toHaveLength(178);
   for (const item of SCREEN_CASES) {
     expect(item.filename).toMatch(/^(Booskiff|Emumet|ShuttlePub)-[A-Za-z0-9-]+\.png$/);
     expect(item.path).toMatch(/^\/(?!\/)/);
@@ -70,7 +70,8 @@ test("ShuttlePub cases cover the SNS shell, quick reactions and login at both wi
     "home", "home-session-expired", "home-signed-out",
     "login", "login-denied", "login-failed", "mute-block-account-unblock", "mute-block-accounts", "mute-block-block-dialog", "mute-block-domains",
     "not-found", "post-detail", "profile-menu",
-    "reaction-detail", "reaction-picker", "reaction-picker-no-favorites", "reaction-remote", "reaction-remote-picker", "reaction-settings-menu", "reaction-undo", "settings",
+    "reaction-detail", "reaction-picker", "reaction-picker-no-favorites", "reaction-remote", "reaction-remote-picker", "reaction-settings-menu", "reaction-undo",
+    "search-author", "search-empty", "search-interrupted", "search-results", "search-suggest", "settings",
   ]);
   expect(cases.every((item) => !item.authenticated)).toBe(true);
   for (const item of cases) {
@@ -78,7 +79,7 @@ test("ShuttlePub cases cover the SNS shell, quick reactions and login at both wi
     const viewer = "viewer" in item ? item.viewer : undefined;
     if (["home", "not-found"].includes(item.id)) expect(required).toBeUndefined();
     else expect(required).toBe(viewer ? "sns-login" : item.id.startsWith("reaction-remote") ? "remote-emoji" : item.id.startsWith("reaction-") ? "quick-reaction"
-      : item.id.startsWith("mute-block-") ? "mute-block-settings" : item.id.startsWith("domain-") ? "domain-content" : "sns-shell");
+      : item.id.startsWith("search-") ? "note-search" : item.id.startsWith("mute-block-") ? "mute-block-settings" : item.id.startsWith("domain-") ? "domain-content" : "sns-shell");
     // Only login states use the real-mode BFF without a session / with a stale one.
     expect(viewer === undefined).toBe(!/^(login|home-signed-out|home-session-expired)/.test(item.id));
   }
@@ -95,17 +96,19 @@ test("only the baseline side may skip cases whose screen feature is missing", ()
   const loginHtml = '<div class="sp-page sp-page-login" data-testid="login-page"></div>';
   const muteBlockHtml = '<div data-testid="mute-block"></div>';
   const domainHtml = '<div data-testid="user-page" data-state="loading"></div>';
-  const withLogin = featuresInShuttlePubHtml(shellHtml + loginHtml + muteBlockHtml + domainHtml);
-  const withReaction = featuresInShuttlePubHtml(shellHtml + reactionHtml + muteBlockHtml + domainHtml);
-  const allFeatures = featuresInShuttlePubHtml(shellHtml + reactionHtml + loginHtml + muteBlockHtml + domainHtml);
-  const withoutMuteBlock = featuresInShuttlePubHtml(shellHtml + reactionHtml + loginHtml + domainHtml);
-  const withoutDomain = featuresInShuttlePubHtml(shellHtml + reactionHtml + loginHtml + muteBlockHtml);
+  const searchHtml = '<div class="sp-page sp-page-search" data-testid="search"></div>';
+  const withLogin = featuresInShuttlePubHtml(shellHtml + loginHtml + muteBlockHtml + domainHtml + searchHtml);
+  const withReaction = featuresInShuttlePubHtml(shellHtml + reactionHtml + muteBlockHtml + domainHtml + searchHtml);
+  const allFeatures = featuresInShuttlePubHtml(shellHtml + reactionHtml + loginHtml + muteBlockHtml + domainHtml + searchHtml);
+  const withoutMuteBlock = featuresInShuttlePubHtml(shellHtml + reactionHtml + loginHtml + domainHtml + searchHtml);
+  const withoutDomain = featuresInShuttlePubHtml(shellHtml + reactionHtml + loginHtml + muteBlockHtml + searchHtml);
+  const withoutSearch = featuresInShuttlePubHtml(shellHtml + reactionHtml + loginHtml + muteBlockHtml + domainHtml);
   expect(featuresInShuttlePubHtml(placeholderHtml).size).toBe(0);
   expect([...featuresInShuttlePubHtml(shellHtml)]).toEqual(["sns-shell"]);
-  expect([...withLogin].sort()).toEqual(["domain-content", "mute-block-settings", "sns-login", "sns-shell"]);
-  expect([...withReaction].sort()).toEqual(["domain-content", "mute-block-settings", "quick-reaction", "remote-emoji", "sns-shell"]);
+  expect([...withLogin].sort()).toEqual(["domain-content", "mute-block-settings", "note-search", "sns-login", "sns-shell"]);
+  expect([...withReaction].sort()).toEqual(["domain-content", "mute-block-settings", "note-search", "quick-reaction", "remote-emoji", "sns-shell"]);
   // A baseline with the quick reaction UI but without D09 skips exactly the 4 remote emoji screens.
-  const withoutRemote = featuresInShuttlePubHtml(shellHtml + oldReactionHtml + loginHtml + muteBlockHtml + domainHtml);
+  const withoutRemote = featuresInShuttlePubHtml(shellHtml + oldReactionHtml + loginHtml + muteBlockHtml + domainHtml + searchHtml);
   expect(selectCases(shuttlePub, withoutRemote, "baseline").skipped.map((item) => item.id).sort())
     .toEqual(["reaction-remote", "reaction-remote", "reaction-remote-picker", "reaction-remote-picker"]);
   expect(() => selectCases(shuttlePub, withoutRemote, "branch")).toThrow(/remote-emoji/);
@@ -114,7 +117,7 @@ test("only the baseline side may skip cases whose screen feature is missing", ()
   expect(baseline.skipped).toHaveLength(shuttlePub.length - 4);
   // Feature combinations must not silently drop either concurrent UI's cases.
   const shellOnly = selectCases(shuttlePub, featuresInShuttlePubHtml(shellHtml), "baseline");
-  expect(shellOnly.skipped).toHaveLength(52);
+  expect(shellOnly.skipped).toHaveLength(62);
   expect(selectCases(shuttlePub, withLogin, "baseline").skipped.every((item) => item.id.startsWith("reaction-"))).toBe(true);
   expect(selectCases(shuttlePub, withLogin, "baseline").skipped).toHaveLength(14);
   expect(selectCases(shuttlePub, withReaction, "baseline").skipped.every((item) => "requires" in item && item.requires === "sns-login")).toBe(true);
@@ -133,6 +136,12 @@ test("only the baseline side may skip cases whose screen feature is missing", ()
   expect(noDomain.map((item) => item.id).every((id) => id.startsWith("domain-"))).toBe(true);
   expect(noDomain).toHaveLength(20);
   expect(() => selectCases(shuttlePub, withoutDomain, "branch")).toThrow(/domain-content/);
+  // A baseline serving the placeholder on /search (main before D04) skips exactly the 10 search screens.
+  const noSearch = selectCases(shuttlePub, withoutSearch, "baseline").skipped;
+  expect(noSearch.map((item) => item.id).every((id) => id.startsWith("search-"))).toBe(true);
+  expect(noSearch).toHaveLength(10);
+  expect(() => selectCases(shuttlePub, withoutSearch, "branch")).toThrow(/note-search/);
+  expect(featuresInShuttlePubHtml('<main><p data-testid="placeholder"></p><input data-testid="search-input"></main>').has("note-search")).toBe(false);
   expect(captureSide(undefined)).toBe("branch");
   expect(captureSide("baseline")).toBe("baseline");
   expect(() => captureSide("main")).toThrow();

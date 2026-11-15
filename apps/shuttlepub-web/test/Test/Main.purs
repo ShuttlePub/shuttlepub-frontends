@@ -16,7 +16,7 @@ import Generated.Schema.Gql.Enum.RelationActorKind (RelationActorKind(..))
 import Generated.Schema.Gql.Enum.RelationActorStatus (RelationActorStatus(..))
 import App.Post (Post, PostView, Quoted(..), TimelineTab(..), Visibility(..), allowedOperations, allTimelineTabs, timelineTabFromValue, timelineTabValue)
 import App.Reaction (ToastKind(..))
-import App.Route (Route(..), routeCodec)
+import App.Route (Route(..), routeCodec, searchHome)
 import App.View (view)
 import App.View.Auth (authActionId, authActionShown)
 import App.View.Common (loginHref)
@@ -40,6 +40,7 @@ import Generated.Schema.Gql.Enum.ApiMode (ApiMode(..))
 import Routing.Duplex (parse, print)
 import Server (renderPage)
 import Test.Reaction (testReaction)
+import Test.Search (testSearch)
 
 main :: Effect Unit
 main = do
@@ -52,6 +53,7 @@ main = do
   testSsr
   testMuteBlock
   testReaction
+  testSearch
   testLoginHref
   testLoginScreens
   testLoginFocusTargets
@@ -84,7 +86,7 @@ testRouteCodec = do
     cases =
       [ { path: "/", route: Home }
       , { path: "/notifications", route: Notifications }
-      , { path: "/search", route: Search }
+      , { path: "/search", route: searchHome }
       , { path: "/bookmarks", route: Bookmarks }
       , { path: "/settings", route: Settings }
       , { path: "/posts/post-sora-zine", route: PostDetail "post-sora-zine" }

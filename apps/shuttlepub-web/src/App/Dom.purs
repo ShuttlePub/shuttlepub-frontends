@@ -28,7 +28,8 @@ import Effect (Effect)
 import Web.Event.Event (Event)
 
 -- | Result of the app's single keydown handler (see Dom.js keydownAction).
--- | action: "" | "escape" | "tab". For "tab", list is the tablist's data-tablist and
+-- | action: "" | "escape" | "tab" | "search-enter" | "search-down" | "search-up" | "search-backspace".
+-- | For "tab", list is the tablist's data-tablist and
 -- | value the next tab's data-tab-value.
 type KeyAction = { action :: String, list :: String, value :: String }
 

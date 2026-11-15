@@ -3,9 +3,10 @@ module App.Message where
 import App.Api.Error (ApiError)
 import App.Dom (KeyAction)
 import App.Model (ApiStatus, DetailTab, PostDetailData)
-import App.Post (Post, PostView, TimelineTab, UserPage, Visibility)
+import App.Post (Author, Post, PostView, TimelineTab, UserPage, Visibility)
 import App.Profile (Profile, ProfileContext)
 import App.MuteBlock.Types as MuteBlock
+import App.Search.Types as Search
 import App.Reaction (ReactionMsg)
 import App.Route (Route)
 import Data.Either (Either)
@@ -48,6 +49,9 @@ data Message
   | ClosePostMenu
   -- | A menu item: closes the menu, then runs the mute/block action.
   | MenuAction MuteBlock.Message
+  -- | The person page's "この人の投稿を検索" (D04 q08/q18): searches that person's posts at once.
+  | MenuSearchAuthor Author
+  | SearchMsg Search.Message
   | SelectDetailTab DetailTab
   -- | Compose form (ui-spec L2). The String is the opener's element id.
   | OpenCompose String

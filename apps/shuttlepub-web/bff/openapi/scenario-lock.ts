@@ -30,11 +30,19 @@ export const PRODUCER_PERSONAL_DOMAIN_PATH = "server/tests/fixtures/personal_dom
 export const QUICK_REACTION_SCHEMA_CASES_DIR = join(OPENAPI_DIR, "quick-reaction-schema-cases");
 export const PRODUCER_QUICK_REACTION_PATH = "server/tests/fixtures/quick_reaction";
 
+// The producer's note search author lookup fixtures (#27): schema_cases.json (payloads valid or
+// invalid against the OpenAPI) and projection.json (the TEST-ONLY reference projection: fetched /
+// publicly referable authors, per viewer mute/block, verified acct mappings, and the suggestion and
+// resolve cases). Replayed against the mock's author directory (bff/search/*.test.ts).
+export const NOTE_SEARCH_AUTHOR_DIR = join(OPENAPI_DIR, "note-search-author-fixtures");
+export const PRODUCER_NOTE_SEARCH_AUTHOR_PATH = "server/tests/fixtures/note_search_author";
+
 /** Every vendored fixture set (scripts/sync-reaction-scenarios.ts, scripts/verify-openapi.ts). */
 export const PRODUCER_FIXTURE_SETS = [
   { label: "quick reaction scenarios", directory: SCENARIO_DIR, producerPath: PRODUCER_SCENARIO_PATH },
   { label: "personal domain content fixtures", directory: PERSONAL_DOMAIN_DIR, producerPath: PRODUCER_PERSONAL_DOMAIN_PATH },
   { label: "quick reaction schema cases", directory: QUICK_REACTION_SCHEMA_CASES_DIR, producerPath: PRODUCER_QUICK_REACTION_PATH },
+  { label: "note search author lookup fixtures", directory: NOTE_SEARCH_AUTHOR_DIR, producerPath: PRODUCER_NOTE_SEARCH_AUTHOR_PATH },
 ] as const;
 
 export type ScenarioLock = {

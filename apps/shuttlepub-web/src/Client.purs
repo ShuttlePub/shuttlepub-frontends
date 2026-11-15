@@ -7,6 +7,8 @@ import App.Message (Message(..))
 import App.Reaction (ReactionMsg(..))
 import App.ReactionDom (onPageRestored)
 import App.Route (routeCodec)
+import App.Search.Dom (trackSearchSentinel)
+import App.Search.Types as Search
 import App.View (view)
 import Client.Update (mkUpdate)
 import Data.Either (hush)
@@ -36,6 +38,7 @@ main = do
 
   trackFocus
   trackImageFailures
+  trackSearchSentinel (send appId (SearchMsg Search.SentinelSeen))
   now <- nowMillis
   isMobile <- isMobileViewport
   send appId (Hydrated now isMobile)

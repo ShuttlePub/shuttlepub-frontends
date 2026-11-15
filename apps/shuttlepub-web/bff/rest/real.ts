@@ -3,6 +3,8 @@ import { describeViolations, violationsForResponse } from "../openapi/contract.t
 import { ShuttlePubApiError, missingEndpoint, type ApiStatus, type ErrorBody, type ShuttlePubApi, type ViewerAuth } from "./client.ts";
 import { OPERATIONS, type OperationPath, type QuickReactionOperation, type QuickReactionSettings, type ReactionState } from "./quick-reaction.ts";
 import { interpretReply } from "./quick-reaction-reply.ts";
+import { interpretSearchReply } from "../search/reply.ts";
+import { SEARCH_OPERATIONS, type NoteSearchResponse, type ResolveAuthorResponse, type SearchOperation, type SuggestAuthorsResponse } from "../search/types.ts";
 import type { paths } from "./generated/shuttlepub-api.ts";
 
 export type RealApiOptions = {
@@ -111,7 +113,53 @@ export function createRealApi(options: RealApiOptions): ShuttlePubApi {
     async getCustomEmojis() {
       throw missingEndpoint("getCustomEmojis");
     },
+    // Post search (#23) and the author lookup (#27): the same interpretation as the mock's. No
+    // answer other than a contract-conformant 200 is data (501 stays not_implemented).
+    searchNotes: (auth, profile, query) =>
+      searchRequest<NoteSearchResponse>("searchPersonalNotes", auth, profile, {
+        ...(query.author === undefined ? {} : { author: query.author }),
+        ...(query.q === undefined ? {} : { q: query.q }),
+        ...(query.limit === undefined ? {} : { limit: String(query.limit) }),
+        ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
+      }),
+    resolveSearchAuthor: (auth, profile, acct) =>
+      searchRequest<ResolveAuthorResponse>("resolveNoteSearchAuthor", auth, profile, { acct }),
+    suggestSearchAuthors: (auth, profile, prefix) =>
+      searchRequest<SuggestAuthorsResponse>("suggestNoteSearchAuthors", auth, profile, { prefix }),
   };
+
+  async function searchRequest<T>(
+    operation: SearchOperation,
+    auth: ViewerAuth,
+    profile: string,
+    query: Record<string, string>,
+  ): Promise<T> {
+    const { path: template, method } = SEARCH_OPERATIONS[operation];
+    const search = new URLSearchParams(query).toString();
+    const url = options.baseUrl + template.replace("{profile_nanoid}", encodeURIComponent(profile)) + (search === "" ? "" : `?${search}`);
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (auth.accessToken !== undefined) headers["Authorization"] = `Bearer ${auth.accessToken}`;
+    const sendRequest = options.fetch ?? ((request: Request) => globalThis.fetch(request));
+    let response: Response;
+    try {
+      response = await sendRequest(new Request(url, { method: method.toUpperCase(), headers }));
+    } catch (cause) {
+      throw new ShuttlePubApiError("unavailable", `ShuttlePub API request failed: ${String(cause)}`, { cause });
+    }
+    let text: string;
+    try {
+      text = await response.text();
+    } catch (cause) {
+      throw new ShuttlePubApiError("unavailable", `ShuttlePub API response could not be read: ${String(cause)}`, { cause });
+    }
+    let parsed: unknown;
+    try {
+      parsed = text === "" ? undefined : JSON.parse(text);
+    } catch {
+      parsed = undefined;
+    }
+    return interpretSearchReply<T>(operation, { status: response.status, body: parsed });
+  }
 
   async function quickReaction<T>(
     operation: QuickReactionOperation,

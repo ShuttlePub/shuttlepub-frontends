@@ -5,6 +5,7 @@
 import type { components } from "./generated/shuttlepub-api.ts";
 import type { ContentViewer, CreatePostInput, Post, PostView, TimelineKind, UserPage } from "./posts.ts";
 import type { EmojiRef, EmojiView, QuickReactionSettings, ReactionState, UpdateQuickReactionSettings } from "./quick-reaction.ts";
+import type { ActorControl, NoteSearchQuery, NoteSearchResponse, ResolveAuthorResponse, SuggestAuthorsResponse } from "../search/types.ts";
 import type { NoteReactionSummary } from "./reactions.ts";
 
 export type ApiStatus = components["schemas"]["ApiStatus"];
@@ -28,7 +29,19 @@ export type ShuttlePubApiErrorKind =
   /** The backend could not be reached (connection refused, DNS, timeout...). */
   | "unavailable"
   /** The backend answered 2xx with a body that violates the pinned OpenAPI contract. */
-  | "invalid_response";
+  | "invalid_response"
+  /** 400 invalid_request of the search operations (details name the field: acct, prefix, author, q, cursor). */
+  | "invalid_request"
+  /** 404 not_found of the search operations: the author (or acct) is not a fetched, referable author. */
+  | "not_found"
+  /** 409 conflict of resolveNoteSearchAuthor only: several verified accts match. Not the reaction `conflict`. */
+  | "author_ambiguous"
+  /** 429 rate_limited. */
+  | "rate_limited"
+  /** 503 search_timeout: the note search ran out of time without any resumable progress. */
+  | "search_timeout"
+  /** 503 author_lookup_timeout / author_lookup_unavailable: the internal author lookup, never a missing author. */
+  | "author_lookup_unavailable";
 
 /**
  * Every failure of the real adapter is surfaced as this error. Nothing in the app
@@ -101,7 +114,21 @@ export interface ShuttlePubApi {
    */
   getReactionSummaries(auth: ViewerAuth, profile: string, noteIds: string[]): Promise<NoteReactionSummary[]>;
   getCustomEmojis(auth: ViewerAuth): Promise<EmojiView[]>;
+
+  /**
+   * Post search (D04, ShuttlePub #23) and the author lookup behind `from:@acct` (#27). `profile` is the
+   * acting Profile's profile_nanoid (already checked against the selection). Each resolves only with a
+   * contract-conformant 200 body; every other answer rejects (501 not_implemented, 400/404/409/429/503
+   * as their own kinds) and never becomes mock data. `viewer` is read by the mock only (its
+   * suppression follows the Profile's controls); real mode never uses it.
+   */
+  searchNotes(auth: ViewerAuth, profile: string, query: NoteSearchQuery, viewer: SearchViewer): Promise<NoteSearchResponse>;
+  resolveSearchAuthor(auth: ViewerAuth, profile: string, acct: string, viewer: SearchViewer): Promise<ResolveAuthorResponse>;
+  suggestSearchAuthors(auth: ViewerAuth, profile: string, prefix: string, viewer: SearchViewer): Promise<SuggestAuthorsResponse>;
 }
+
+/** What the mock needs of the viewing Profile (its domain controls and individual mutes/blocks). */
+export type SearchViewer = ContentViewer & { actorControls(): Promise<ActorControl[]> };
 
 /** Error for an operation whose endpoint is not in the pinned OpenAPI schema. */
 export function missingEndpoint(operation: string): ShuttlePubApiError {

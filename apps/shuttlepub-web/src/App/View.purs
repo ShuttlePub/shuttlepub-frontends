@@ -10,6 +10,8 @@ import App.Model (Model, RemoteData(..))
 import App.MuteBlock.Types (Tab(..))
 import App.MuteBlock.View as MuteBlock
 import App.Route (Route(..))
+import App.Route as Route
+import App.Search.View as Search
 import App.View.Auth as Auth
 import App.View.Common (attr, emptySlot, testId)
 import App.View.Compose as Compose
@@ -73,7 +75,7 @@ page model = case model.route of
   Just MuteBlockAccounts -> map MuteBlockMsg (MuteBlock.view AccountsTab model.muteBlock)
   Just MuteBlockDomains -> map MuteBlockMsg (MuteBlock.view DomainsTab model.muteBlock)
   Just Notifications -> Pages.placeholder "通知"
-  Just Search -> Pages.placeholder "検索"
+  Just (Route.Search _) -> Search.view model
   Just Bookmarks -> Pages.placeholder "ブックマーク"
   Just (Login { error }) -> Auth.loginPage model error
   Nothing -> HE.div [ HA.class' "sp-page sp-page-padded" ] [ NotFound.notFound ]

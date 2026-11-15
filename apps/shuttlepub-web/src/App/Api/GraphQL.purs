@@ -1,5 +1,7 @@
 module App.Api.GraphQL
-  ( fetchApiMode
+  ( queryClient
+  , run
+  , fetchApiMode
   , fetchApiStatus
   , fetchProfileContext
   , fetchAvailableProfiles

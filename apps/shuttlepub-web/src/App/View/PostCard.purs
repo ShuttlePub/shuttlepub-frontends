@@ -10,6 +10,7 @@ module App.View.PostCard
   , postCard
   , postCardWith
   , postMenu
+  , personMenu
   , menuButtonId
   , controlLabel
   , shortHandle
@@ -171,7 +172,15 @@ menuButtonId key = "sp-more-" <> key
 -- | each reflects the current setting of the shown Profile (mute → ミュートを解除,
 -- | block → ブロックを解除…). This server's own domain is never offered.
 postMenu :: Model -> String -> Author -> Html Message
-postMenu model key author = HE.div [ HA.class' "sp-more-anchor" ]
+postMenu = menuWith false
+
+-- | The person page's "…": the post menu plus the entry to search this person's posts (D04 q08/q18).
+-- | Only the person page has it; the shared post menu is not extended.
+personMenu :: Model -> String -> Author -> Html Message
+personMenu = menuWith true
+
+menuWith :: Boolean -> Model -> String -> Author -> Html Message
+menuWith withSearch model key author = HE.div [ HA.class' "sp-more-anchor" ]
   [ HE.button
       [ HA.type' "button"
       , HA.id opener
@@ -214,11 +223,25 @@ postMenu model key author = HE.div [ HA.class' "sp-more-anchor" ]
     [ icon iconKind, HE.span [ HA.class' "sp-grow" ] label ]
   mono text = HE.span [ HA.class' "sp-mono" ] [ HE.text text ]
   items = HE.div [ HA.id "sp-post-menu", HA.class' "sp-menu", attr "role" "menu", attr "aria-label" "その他", testId "post-menu" ]
-    ( [ if actorMode MUTE then item "eye" false [ HE.text (user <> " のミュートを解除") ] (MuteBlock.MenuUnmuteActor author.actorUrl)
-        else item "eyeoff" false [ HE.text (user <> " をミュート") ] (MuteBlock.MenuMuteActor author.actorUrl user)
-      , if actorMode BLOCK then item "block" false [ HE.text (user <> " のブロックを解除…") ] (MuteBlock.MenuUnblockActor opener author.actorUrl)
-        else item "userx" false [ HE.text (user <> " をブロック") ] (MuteBlock.MenuBlockActor opener author.actorUrl user)
-      ]
+    ( ( if withSearch then
+          [ HE.button
+              [ HA.type' "button"
+              , HA.class' "sp-menu-item"
+              , attr "role" "menuitem"
+              , HA.onClick (MenuSearchAuthor author)
+              , testId "menu-search-author"
+              ]
+              [ icon "search", HE.span [ HA.class' "sp-grow" ] [ HE.text (user <> " の投稿を検索") ] ]
+          , HE.hr' [ attr "role" "separator", HA.class' "sp-menu-sep" ]
+          ]
+        else []
+      )
+        <>
+          [ if actorMode MUTE then item "eye" false [ HE.text (user <> " のミュートを解除") ] (MuteBlock.MenuUnmuteActor author.actorUrl)
+            else item "eyeoff" false [ HE.text (user <> " をミュート") ] (MuteBlock.MenuMuteActor author.actorUrl user)
+          , if actorMode BLOCK then item "block" false [ HE.text (user <> " のブロックを解除…") ] (MuteBlock.MenuUnblockActor opener author.actorUrl)
+            else item "userx" false [ HE.text (user <> " をブロック") ] (MuteBlock.MenuBlockActor opener author.actorUrl user)
+          ]
         <>
           if author.local then []
           else

@@ -386,6 +386,8 @@ async function prepareShuttlePubShell(page: Page, item: ScreenCase) {
     await prepareQuickReaction(page, item);
   } else if (item.id.startsWith("domain-")) {
     await prepareDomainContent(page, item);
+  } else if (item.id.startsWith("search-")) {
+    await prepareSearch(page, item);
   } else if (item.id.startsWith("mute-block-")) {
     // Rows come from the BFF's stateful mock through GraphQL after hydration.
     const panel = item.id === "mute-block-accounts" || item.id === "mute-block-account-unblock" ? "account-panel" : "domain-panel";
@@ -409,6 +411,35 @@ async function prepareShuttlePubShell(page: Page, item: ScreenCase) {
       await page.getByTestId("block-impact").locator("summary").click();
       await expect(page.getByTestId("block-dialog")).toContainText("example.social をブロックしますか？");
     }
+  }
+}
+
+/**
+ * D04 post search (host note-search-ui ui-spec v2): waits for the results of the URL's condition, or opens
+ * the author suggestions / converts a typed `from:@acct` into the chip. Nothing is written.
+ */
+async function prepareSearch(page: Page, item: ScreenCase) {
+  const input = page.getByTestId("search-input");
+  await expect(input).toBeVisible();
+  if (item.id === "search-empty") {
+    await expect(page.getByTestId("search-results")).toHaveAttribute("data-state", "idle");
+  } else if (item.id === "search-results") {
+    await expect(page.getByTestId("search-results")).toHaveAttribute("data-tail", "end");
+    await expect(page.getByTestId("search-note")).toHaveCount(7);
+  } else if (item.id === "search-suggest") {
+    await input.pressSequentially("from:@so", { delay: 20 });
+    await expect(page.getByTestId("author-suggestion")).toHaveCount(1);
+  } else if (item.id === "search-author") {
+    await input.pressSequentially("from:@sor", { delay: 20 });
+    await expect(page.getByTestId("author-suggestion")).toHaveCount(1);
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("author-chip")).toBeVisible();
+    // The case's URL must stay: the chip is converted but nothing is searched yet (a pick only converts).
+    await input.fill("ZINE");
+    await expect(page.getByTestId("search-results")).toHaveAttribute("data-state", "idle");
+  } else if (item.id === "search-interrupted") {
+    await expect(page.getByTestId("search-interrupted")).toBeVisible();
   }
 }
 

@@ -7,15 +7,16 @@ import App.Emoji (Emoji)
 import App.Post (Post, PostView, TimelineTab(..), UserPage, Visibility(..))
 import App.Profile (Profile, ProfileContext)
 import App.MuteBlock.Types as MuteBlock
+import App.Search.Types as Search
 import App.Reaction (DetailFilter(..), NoteWrite, PendingRemoval, PickerState, PostReactions, QuickSettings, SettingsProblem, Toast)
-import App.Route (Route)
+import App.Route (Route(..))
 import Data.Argonaut.Decode.Class (class DecodeJson)
 import Data.Argonaut.Decode.Generic (genericDecodeJson)
 import Data.Argonaut.Encode.Class (class EncodeJson)
 import Data.Argonaut.Encode.Generic (genericEncodeJson)
 import Data.Either (Either(..))
 import Data.Generic.Rep (class Generic)
-import Data.Maybe (Maybe(..))
+import Data.Maybe (Maybe(..), fromMaybe)
 import Data.Show.Generic (genericShow)
 import Generated.Schema.Gql.Enum.ApiMode (ApiMode)
 
@@ -160,6 +161,7 @@ type Model =
   , compose :: Maybe ComposeState
   , profileMenu :: Maybe ProfileMenuState
   , muteBlock :: MuteBlock.Model
+  , search :: Search.Model
   , content :: ContentState
   , reaction :: ReactionModel
   -- Transport lifetime is independent of the visible Profile/epoch.
@@ -242,10 +244,22 @@ initialModel route =
   , compose: Nothing
   , profileMenu: Nothing
   , muteBlock: MuteBlock.init
+  , search: searchFor route
   , content: initialContent
   , reaction: initialReactionModel
   , reactionWrites: { notes: [], versions: [], settings: [] }
   }
+
+-- | The search screen of a route: the condition of its URL is shown in the box and the chip from the
+-- | start (SSR and the client agree); nothing is searched before the client has the Profile context.
+searchFor :: Maybe Route -> Search.Model
+searchFor = case _ of
+  Just (Search condition) -> Search.init
+    { input = fromMaybe "" condition.q
+    , author = map (\actorUrl -> { actorUrl, acct: "", displayName: Nothing }) condition.from
+    , condition = { q: condition.q, author: condition.from }
+    }
+  _ -> Search.init
 
 emptyCompose :: String -> ComposeState
 emptyCompose opener =

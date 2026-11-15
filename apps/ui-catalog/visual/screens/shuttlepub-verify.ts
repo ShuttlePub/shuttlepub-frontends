@@ -1700,6 +1700,360 @@ async function switchProfile(page: Page, name: string) {
   await expect(page.getByTestId("domain-panel").locator("section")).toHaveAttribute("data-state", "loaded");
 }
 
+/** GraphQL operations of the post search (D04), by the names the PureScript client sends. */
+const searchCount = (ops: string[], name: string) => ops.filter((op) => op === name).length;
+
+/** An answer of the BFF's GraphQL with one error code (the page must show it as such). */
+const searchGqlError = (code: string) => ({ status: 200, contentType: "application/json",
+  body: JSON.stringify({ data: null, errors: [{ message: code, extensions: { code } }] }) });
+
+/**
+ * D04 post search (host note-search-ui ui-spec v2, grill d04-q08..q18), at both widths, mock mode:
+ *  - Enter searches, the URL keeps the condition (not the cursor) and back / forward restore it;
+ *  - the match is marked with text elements only, a content warning is folded, HTML-looking text stays text;
+ *  - muted / blocked people leave no trace (count, rows, marks);
+ *  - from:@acct becomes a chip: space only converts, Enter converts then searches, a second from replaces,
+ *    a failure keeps the text and searches nothing, a host-less acct goes to the server as typed, a chosen
+ *    suggestion is never resolved again, IME composition neither converts nor searches;
+ *  - infinite scroll ends without duplicates, a time limit keeps the partial result and waits for the
+ *    button, a failed page waits for its button, 501 / 429 / 503 are shown as what they are;
+ *  - late answers (search, suggestions) never overwrite newer input, the person page's menu entry searches
+ *    that person at once, SSR is hydrated without losing the condition, a Profile switch searches again,
+ *    and no request leaves the origin.
+ */
+async function verifySearch(browser: Browser, server: AppServer, viewport: Viewport) {
+  await resetMock(server);
+  const { context, page, errors } = await openPage(browser, server, viewport);
+  const external: string[] = [];
+  page.on("request", (request) => {
+    const url = request.url();
+    if (!url.startsWith(server.url) && !url.startsWith("data:") && !url.startsWith("about:")) external.push(url);
+  });
+  const ops = recordOperations(page);
+  const posts: string[] = [];
+  page.on("request", (request) => { if (request.url().endsWith("/graphql") && request.method() === "POST") posts.push(request.postData() ?? ""); });
+  const sora = "https://shuttlepub.example/users/sora";
+  const aoi = "https://shuttlepub.example/users/aoi";
+  const input = page.getByTestId("search-input");
+  const notes = page.getByTestId("search-note");
+  const toBottom = () => page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  const noteIds = () => notes.evaluateAll((elements) => elements.map((element) => element.getAttribute("data-note-id")));
+  const search = async (text: string) => { await input.fill(text); await input.press("Enter"); };
+  try {
+    // SSR already carries the box and the chip of the URL's condition; hydration keeps them.
+    const ssr = await (await fetch(server.url + "/search?q=ZINE&from=" + encodeURIComponent(sora))).text();
+    expect(ssr).toContain('value="ZINE"');
+    expect(ssr).toContain('data-actor-url="' + sora + '"');
+    expect(ssr).not.toContain('data-testid="search-note"');
+    await page.goto("/search?q=ZINE&from=" + encodeURIComponent(sora), { waitUntil: "networkidle" });
+    await expect(page.getByTestId("app-shell")).toHaveAttribute("data-hydration", "hydrated");
+    await expect(page.locator("main#app")).toHaveCount(1);
+    await expect(page.locator("#content h1")).toHaveCount(1);
+    await expect(input).toHaveValue("ZINE");
+    await expect(page.getByTestId("author-chip")).toHaveAttribute("data-actor-url", sora);
+    await expect(notes.first()).toBeVisible();
+    expect(await noteIds()).toHaveLength(20);
+
+    // Keyword only, from the empty box: Enter searches; the URL is the condition.
+    await page.goto("/search", { waitUntil: "networkidle" });
+    await expect(input).toHaveAttribute("role", "combobox");
+    await expect(page.getByTestId("search-results")).toHaveAttribute("data-state", "idle");
+    await expect(page.getByRole("button", { name: /投稿者を追加|\+ ?投稿者/ })).toHaveCount(0);
+    await search("ZINE");
+    await expect(page).toHaveURL(/\/search\?q=ZINE$/);
+    await expect(notes.first()).toBeVisible();
+    // Infinite scroll to the end: every page once, no duplicates, nothing after the end.
+    const before = searchCount(ops, "SearchNotes");
+    await expect.poll(async () => { await toBottom(); return page.getByTestId("search-results").getAttribute("data-tail"); }, { timeout: 20_000 }).toBe("end");
+    const ids = (await noteIds()) as string[];
+    expect(ids.length).toBeGreaterThanOrEqual(41);
+    expect(new Set(ids).size).toBe(ids.length);
+    const pages = searchCount(ops, "SearchNotes") - before;
+    expect(pages).toBeGreaterThanOrEqual(2);
+    await page.waitForTimeout(500);
+    expect(searchCount(ops, "SearchNotes") - before, "nothing loads after the end").toBe(pages);
+    for (const mark of await page.getByTestId("search-mark").allTextContents()) expect(mark.toLowerCase()).toBe("zine");
+
+    // A new condition replaces the results; back / forward restore the condition from the URL.
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await search("検索");
+    await expect(page).toHaveURL(/\/search\?q=%E6%A4%9C%E7%B4%A2$/);
+    await expect(page.getByTestId("search-results")).toHaveAttribute("data-tail", "end");
+    // Everything shown: nothing more is said (no "ここまで").
+    await expect(page.getByTestId("search-results")).not.toContainText("ここまで");
+    await expect(notes).toHaveCount(7);
+    // The page never scrolls sideways (the long actor-URL names are cut, the kind badge keeps its line).
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), "no horizontal overflow").toBe(true);
+    const content = page.locator("#content");
+    // Muted / blocked people leave no trace: not in the rows, not in the marks.
+    await expect(content).not.toContainText("ミュート中のドメイン");
+    await expect(content).not.toContainText("検索の話を引用します");
+    // Highlight: text elements only, several matches in one note, emoji and Japanese intact.
+    await expect(content).toContainText("検索テスト 🔍🎉 日本語の検索語、検索 検索 検索");
+    expect(await page.getByTestId("search-note").filter({ hasText: "検索テスト" }).getByTestId("search-mark").count()).toBe(5);
+    // HTML-looking text is text.
+    await expect(content).toContainText('<script>alert("検索")</script> <b>太字</b> &amp; &lt;img src=x onerror=alert(1)&gt; 検索');
+    await expect(content.locator("script, b, img")).toHaveCount(0);
+    // A content-warned note is folded: only the (marked) warning is shown, never its body (the contract gives none).
+    const folded = page.getByTestId("search-note-cw");
+    await expect(folded).toHaveCount(1);
+    await expect(folded).toContainText("ネタバレ注意: 検索");
+    await expect(folded.getByTestId("search-mark")).toHaveCount(1);
+    await expect(content).not.toContainText("本文にも 検索 が入っています");
+    // No avatar image of another origin is requested (d09-q06): letters only.
+    await expect(content.locator("img")).toHaveCount(0);
+
+    await page.goBack();
+    await expect(page).toHaveURL(/\/search\?q=ZINE$/);
+    await expect(input).toHaveValue("ZINE");
+    await expect(notes.first()).toBeVisible();
+    await page.goForward();
+    await expect(input).toHaveValue("検索");
+    await expect(notes).toHaveCount(7);
+    // Nothing found is its own message.
+    await search("zzzz存在しない語");
+    await expect(page.getByTestId("search-empty")).toHaveText("見つかりませんでした");
+    await expect(page.getByTestId("search-empty-timeout")).toHaveCount(0);
+
+    // from:@acct. Suggestions follow the typed prefix; a space only converts (no search).
+    await page.goto("/search", { waitUntil: "networkidle" });
+    // The agreed box (ui-spec 2): placeholder "検索", 36px field, a click in its margin focuses the input.
+    await expect(input).toHaveAttribute("placeholder", "検索");
+    const field = page.getByTestId("search-field");
+    expect((await field.boundingBox())?.height).toBe(36);
+    await input.evaluate((element) => (element as HTMLInputElement).blur());
+    await field.click({ position: { x: 4, y: 18 } });
+    await expect(input).toBeFocused();
+    await input.pressSequentially("from:@sor", { delay: 20 });
+    await expect(page.getByTestId("author-suggestion")).toHaveCount(1);
+    await expect(input).toHaveAttribute("aria-expanded", "true");
+    // The typed prefix is marked in the suggestion (text only).
+    await expect(page.getByTestId("search-suggest-hit").first()).toHaveText(/^sor/i);
+    expect(await page.getByTestId("author-suggestion").evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(viewport.name === "mobile" ? 44 : 36);
+    await input.pressSequentially("a ", { delay: 20 });
+    await expect(page.getByTestId("author-chip")).toHaveAttribute("data-actor-url", sora);
+    // The chip: 26px (30px on a phone), its remove button 24px (30px), the full acct for readers.
+    // (offset sizes: the chip is still scaling in while highlighted)
+    expect(await page.getByTestId("author-chip").evaluate((element) => (element as HTMLElement).offsetHeight)).toBe(viewport.name === "mobile" ? 30 : 26);
+    expect(await page.getByTestId("author-chip-remove").evaluate((element) => (element as HTMLElement).offsetWidth)).toBe(viewport.name === "mobile" ? 30 : 24);
+    await expect(page.getByTestId("author-chip")).toHaveAttribute("title", /@sora@/);
+    await expect(page.getByTestId("author-chip")).toHaveClass(/is-just-/);
+    await expect(input).toHaveValue("");
+    await expect(page).toHaveURL(/\/search$/);
+    expect(searchCount(ops, "ResolveSearchAuthor")).toBeGreaterThan(0);
+    await expect(page.getByTestId("search-results")).toHaveAttribute("data-state", "idle");
+    // Enter searches the author only (author is optional, the keyword may be empty).
+    await input.press("Enter");
+    await expect(page).toHaveURL(new RegExp("/search\\?from=" + encodeURIComponent(sora).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$"));
+    await expect(notes.first()).toBeVisible();
+    // A second from replaces the first; Enter converts and then searches.
+    await input.fill("from:@aoi");
+    await input.press("Enter");
+    await expect(page.getByTestId("author-chip")).toHaveCount(1);
+    await expect(page.getByTestId("author-chip")).toHaveAttribute("data-actor-url", aoi);
+    await expect(page).toHaveURL(new RegExp("from=" + encodeURIComponent(aoi).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$"));
+    // A host-less acct is the server's own; the browser's host is never sent.
+    const resolved = posts.filter((body) => body.includes("ResolveSearchAuthor")).at(-1) ?? "";
+    expect(resolved).toContain("aoi");
+    expect(resolved).not.toContain("127.0.0.1");
+    // A failure keeps the text, shows one short line and searches nothing.
+    const searchesBefore = searchCount(ops, "SearchNotes");
+    await input.fill("kw from:@nobody@gone.example");
+    await input.press("Enter");
+    await expect(page.getByTestId("search-problem")).toBeVisible();
+    await expect(input).toHaveValue("kw from:@nobody@gone.example");
+    await expect(page.getByTestId("author-chip")).toHaveAttribute("data-actor-url", aoi);
+    await expect(page).toHaveURL(/from=/);
+    expect(searchCount(ops, "SearchNotes")).toBe(searchesBefore);
+    // An ambiguous acct (409 of the author lookup) is not a reaction conflict.
+    await input.fill("from:@pat@dup.example");
+    await input.press("Enter");
+    await expect(page.getByTestId("search-problem")).toContainText("複数");
+    // A chosen suggestion is the returned actor, never resolved again; it only converts.
+    await input.fill("");
+    const resolveBefore = searchCount(ops, "ResolveSearchAuthor");
+    await input.pressSequentially("from:@sor", { delay: 20 });
+    await expect(page.getByTestId("author-suggestion")).toHaveCount(1);
+    await page.keyboard.press("ArrowDown");
+    await expect(input).toHaveAttribute("aria-activedescendant", /sp-search-option-0/);
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("author-chip")).toHaveAttribute("data-actor-url", sora);
+    await expect(input).toHaveValue("");
+    await expect(page).toHaveURL(new RegExp("from=" + encodeURIComponent(aoi).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$"));
+    expect(searchCount(ops, "ResolveSearchAuthor")).toBe(resolveBefore);
+    // Esc closes the list; Backspace at the start removes the chip.
+    await input.pressSequentially("from:@ao", { delay: 20 });
+    await expect(page.getByTestId("author-suggestions")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("author-suggestions")).toHaveCount(0);
+    await input.fill("");
+    await input.press("Backspace");
+    await expect(page.getByTestId("author-chip")).toHaveCount(0);
+
+    // IME: a composing Enter / space neither converts nor searches; the confirmed text does.
+    await page.goto("/search", { waitUntil: "networkidle" });
+    const composingBefore = searchCount(ops, "SearchNotes");
+    const resolvesBefore = searchCount(ops, "ResolveSearchAuthor");
+    await input.focus();
+    await input.evaluate((element) => {
+      const field = element as HTMLInputElement;
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+      field.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+      setter.call(field, "from:@sora ");
+      field.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertCompositionText", isComposing: true }));
+      field.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", keyCode: 229, isComposing: true, bubbles: true, cancelable: true }));
+      field.dispatchEvent(new KeyboardEvent("keydown", { key: "Process", keyCode: 229, isComposing: true, bubbles: true, cancelable: true }));
+    });
+    await page.waitForTimeout(400);
+    expect(searchCount(ops, "SearchNotes")).toBe(composingBefore);
+    expect(searchCount(ops, "ResolveSearchAuthor")).toBe(resolvesBefore);
+    await expect(page.getByTestId("author-chip")).toHaveCount(0);
+    await input.evaluate((element) => element.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "from:@sora " })));
+    await expect(page.getByTestId("author-chip")).toHaveAttribute("data-actor-url", sora);
+    await page.getByTestId("search-clear").click();
+    await expect(page.getByTestId("author-chip")).toHaveCount(0);
+
+    // A late answer never overwrites newer input: hold the first search, make a newer one, release.
+    await page.goto("/search", { waitUntil: "networkidle" });
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolveGate) => { release = resolveGate; });
+    let held = false;
+    await page.route(server.url + "/graphql", async (route) => {
+      const body = route.request().postData() ?? "";
+      if (!held && body.includes("SearchNotes") && body.includes("ZINE")) {
+        held = true;
+        await gate;
+        return route.continue().catch(() => undefined);
+      }
+      return route.continue();
+    });
+    await search("ZINE");
+    await expect.poll(() => held).toBe(true);
+    await search("検索");
+    await expect(notes).toHaveCount(7);
+    release();
+    await page.waitForTimeout(600);
+    await expect(notes).toHaveCount(7);
+    await expect(input).toHaveValue("検索");
+    await expect(page).toHaveURL(/q=%E6%A4%9C%E7%B4%A2$/);
+    await page.unroute(server.url + "/graphql");
+    // ...nor does a late suggestion list reopen over a box that moved on.
+    let suggestHeld = false;
+    let releaseSuggest: () => void = () => {};
+    const suggestGate = new Promise<void>((resolveGate) => { releaseSuggest = resolveGate; });
+    await page.route(server.url + "/graphql", async (route) => {
+      if (!suggestHeld && (route.request().postData() ?? "").includes("SuggestSearchAuthors")) {
+        suggestHeld = true;
+        await suggestGate;
+      }
+      return route.continue().catch(() => undefined);
+    });
+    await input.fill("");
+    await input.pressSequentially("from:@so", { delay: 20 });
+    await expect.poll(() => suggestHeld).toBe(true);
+    await input.fill("keyword");
+    releaseSuggest();
+    await page.waitForTimeout(600);
+    await expect(page.getByTestId("author-suggestions")).toHaveCount(0);
+    await expect(page.getByTestId("author-suggestions-note")).toHaveCount(0);
+    await page.unroute(server.url + "/graphql");
+
+    // Time limit (d04-q17): the partial result stays, nothing loads by itself, the button resumes.
+    await page.goto("/search?q=" + encodeURIComponent("時間切れ"), { waitUntil: "networkidle" });
+    await expect(page.getByTestId("search-interrupted")).toBeVisible();
+    await expect(notes).toHaveCount(5);
+    const interruptedBefore = searchCount(ops, "SearchNotes");
+    await toBottom();
+    await page.waitForTimeout(700);
+    expect(searchCount(ops, "SearchNotes"), "an interrupted search loads nothing by itself").toBe(interruptedBefore);
+    await page.getByTestId("search-continue").click();
+    await expect(notes).toHaveCount(10);
+    await expect(page.getByTestId("search-interrupted")).toBeVisible();
+    await page.getByTestId("search-continue").click();
+    await expect(page.getByTestId("search-results")).toHaveAttribute("data-tail", "end");
+    expect(new Set(await noteIds()).size).toBe(12);
+
+    // A failed extra page keeps the notes and waits for its button; it never retries by itself.
+    await page.goto("/search?q=ZINE", { waitUntil: "networkidle" });
+    await expect(notes).toHaveCount(20);
+    await page.route(server.url + "/graphql", (route) =>
+      (route.request().postData() ?? "").includes("cursor") ? route.abort() : route.continue());
+    await toBottom();
+    await expect(page.getByTestId("search-more-failed")).toBeVisible();
+    await expect(notes).toHaveCount(20);
+    const failedBefore = searchCount(ops, "SearchNotes");
+    await toBottom();
+    await page.waitForTimeout(700);
+    expect(searchCount(ops, "SearchNotes"), "a failed page is not retried by itself").toBe(failedBefore);
+    await page.unroute(server.url + "/graphql");
+    await page.getByTestId("search-retry-more").click();
+    await expect.poll(async () => { await toBottom(); return notes.count(); }, { timeout: 20_000 }).toBeGreaterThan(20);
+
+    // 501 / 429 / 503 are shown as what they are, never as an empty or partial result.
+    for (const [code, text, retry] of [
+      ["NOT_IMPLEMENTED", "投稿検索はまだ使えません", false],
+      ["RATE_LIMITED", "リクエストが多すぎます", true],
+      ["SEARCH_TIMEOUT", "検索がタイムアウトしました", true],
+    ] as const) {
+      await page.route(server.url + "/graphql", (route) =>
+        (route.request().postData() ?? "").includes("SearchNotes") ? route.fulfill(searchGqlError(code)) : route.continue());
+      await page.goto("/search?q=ZINE", { waitUntil: "networkidle" });
+      const failure = page.getByTestId("search-error");
+      await expect(failure).toContainText(text);
+      await expect(failure).toHaveAttribute("data-error", /.+/);
+      await expect(page.getByTestId("search-empty")).toHaveCount(0);
+      await expect(notes).toHaveCount(0);
+      await expect(page.getByTestId("search-retry")).toHaveCount(retry ? 1 : 0);
+      await page.unroute(server.url + "/graphql");
+    }
+    // The author lookup's own failures (429 / 503) are one short line of the box.
+    await page.goto("/search", { waitUntil: "networkidle" });
+    await page.route(server.url + "/graphql", (route) =>
+      (route.request().postData() ?? "").includes("ResolveSearchAuthor") ? route.fulfill(searchGqlError("RATE_LIMITED")) : route.continue());
+    await search("from:@sora");
+    await expect(page.getByTestId("search-problem")).toContainText("リクエストが多すぎます");
+    await expect(input).toHaveValue("from:@sora");
+    await page.unroute(server.url + "/graphql");
+
+    // The person page's "…" has the entry (and only there); it searches that person at once.
+    await page.goto("/users/sora%40shuttlepub.example", { waitUntil: "networkidle" });
+    await expect(page.getByTestId("user-page")).toHaveAttribute("data-state", "loaded");
+    await page.locator("[id^='sp-more-user-']").click();
+    const menu = page.getByTestId("post-menu");
+    await expect(menu.getByRole("menuitem").first()).toHaveText("@sora の投稿を検索");
+    await menu.getByTestId("menu-search-author").click();
+    await expect(page).toHaveURL(new RegExp("/search\\?from=" + encodeURIComponent(sora).replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "$"));
+    await expect(page.getByTestId("author-chip")).toContainText("sora");
+    await expect(notes.first()).toBeVisible();
+    await expect(page.getByTestId("search-note-author").first()).toHaveText("sora");
+    await expect(input).toBeFocused();
+    // The shared post menu is not extended.
+    await page.goto("/", { waitUntil: "networkidle" });
+    await expect(page.getByTestId("timeline")).toHaveAttribute("data-state", "loaded");
+    await page.locator("#sp-more-post-mika-picker").click();
+    await expect(page.getByTestId("post-menu").getByTestId("menu-search-author")).toHaveCount(0);
+    await page.keyboard.press("Escape");
+
+    // A Profile switch searches again for the new Profile (the old Profile's list is dropped).
+    await page.goto("/search?q=ZINE", { waitUntil: "networkidle" });
+    await expect(notes.first()).toBeVisible();
+    const switchBefore = searchCount(ops, "SearchNotes");
+    await visible(page, /投稿用 Profile を切り替え/).click();
+    await page.getByTestId("profile-menu").getByRole("menuitemradio", { name: /Fixture Dev/ }).click();
+    await expect(visible(page, /投稿用 Profile を切り替え（現在: Fixture Dev）/)).toHaveCount(1);
+    await expect.poll(() => searchCount(ops, "SearchNotes")).toBeGreaterThan(switchBefore);
+    await expect(notes.first()).toBeVisible();
+    await expect(input).toHaveValue("ZINE");
+
+    expect(external, "no request leaves the origin (no external avatar or emoji)").toEqual([]);
+    // The only console error is the extra page this check aborted on purpose.
+    expect(errors.filter((message) => message !== "Console: Failed to load resource: net::ERR_FAILED"), "search " + viewport.name + ": browser errors").toEqual([]);
+    console.info("OK post search: Enter / space / IME, from chip, suggestions, URL, paging, time limit, errors, menu entry at " + viewport.name);
+  } finally {
+    await context.close();
+  }
+}
+
 async function verifyMock(browser: Browser, frontendRoot: string, coreURL: string) {
   const server = await startApp(frontendRoot, "ShuttlePub", coreURL);
   try {
@@ -1767,6 +2121,8 @@ async function verifyMock(browser: Browser, frontendRoot: string, coreURL: strin
       } finally {
         await domainContent.context.close();
       }
+      // D04 post search.
+      await verifySearch(browser, server, viewport);
     }
     await resetMock(server);
     await verifySharedAcrossSessions(browser, server);

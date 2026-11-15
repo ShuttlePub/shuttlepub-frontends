@@ -3,7 +3,8 @@ import { AuthError } from "./auth-error.ts";
 import { activeProfileId, policyError, policyResolvers } from "./policy/resolvers.ts";
 import { PolicyError, type ProfilePolicySource } from "./policy/source.ts";
 import type { ProfileContextSource } from "./profile.ts";
-import { ShuttlePubApiError, type ShuttlePubApi, type ShuttlePubApiErrorKind, type ViewerAuth } from "./rest/client.ts";
+import { ShuttlePubApiError, type SearchViewer, type ShuttlePubApi, type ShuttlePubApiErrorKind, type ViewerAuth } from "./rest/client.ts";
+import type { ActorControl, NoteSearchItem, SearchAuthor } from "./search/types.ts";
 import type { DomainControlRef } from "./rest/content.ts";
 import type { ContentControl, ContentViewer, HiddenContent, Post, PostOperations, PostReactionCounts, PostView, PostVisibility, QuotedPost, TimelineKind, UserPage } from "./rest/posts.ts";
 import type { EmojiRef, EmojiView } from "./rest/quick-reaction.ts";
@@ -29,6 +30,12 @@ export const ERROR_CODES: Record<ShuttlePubApiErrorKind, string> = {
   conflict: "CONFLICT",
   unavailable: "UPSTREAM_UNAVAILABLE",
   invalid_response: "INVALID_UPSTREAM_RESPONSE",
+  invalid_request: "INVALID_REQUEST",
+  not_found: "NOT_FOUND",
+  author_ambiguous: "AUTHOR_AMBIGUOUS",
+  rate_limited: "RATE_LIMITED",
+  search_timeout: "SEARCH_TIMEOUT",
+  author_lookup_unavailable: "AUTHOR_LOOKUP_UNAVAILABLE",
 };
 
 /**
@@ -120,6 +127,32 @@ const userPageOut = (page: UserPage) => ({
   control: controlOut(page.control),
   hidden: controlOut(page.hidden),
   posts: page.posts.map(viewOut),
+});
+
+/**
+ * The viewer of a search: the shown Profile (checked like the mute/block settings), its domain controls
+ * and, for the mock's suppression and suggestions, its individual mutes/blocks. Real mode never asks.
+ */
+function searchViewer(context: GraphQLContext, shown: string): SearchViewer {
+  const viewer = contentViewer(context, shown);
+  return {
+    ...viewer,
+    async actorControls(): Promise<ActorControl[]> {
+      const profile = await viewer.profileId();
+      return (await context.policy.listActorPolicies(profile)).map((policy) => ({ actorUrl: policy.actorUrl, mode: policy.mode }));
+    },
+  };
+}
+
+const searchAuthorOut = (author: SearchAuthor) => ({ actorUrl: author.actor_url, acct: author.acct, displayName: author.display_name });
+
+const searchedNoteOut = (item: NoteSearchItem) => ({
+  noteId: item.note.note_id,
+  kind: item.kind.toUpperCase(),
+  authorActorUrl: item.note.author,
+  createdAt: item.note.created_at,
+  text: item.note.body.display === "text" ? item.note.body.content : null,
+  contentWarning: item.note.body.display === "content_warning" ? item.note.body.content_warning : null,
 });
 
 const TIMELINE_KINDS: Record<string, TimelineKind> = { HOME: "home", LOCAL: "local", FEDERATED: "federated" };
@@ -223,6 +256,37 @@ export const resolvers = {
         return page === null ? null : userPageOut(page);
       }),
     ...policyResolvers.Query,
+    searchNotes: (
+      _root: unknown,
+      args: { profile: string; author?: string | null; q?: string | null; cursor?: string | null; limit?: number | null },
+      context: GraphQLContext,
+    ) =>
+      guarded(async () => {
+        const viewer = searchViewer(context, args.profile);
+        const profileId = await viewer.profileId();
+        const response = await context.api.searchNotes(await context.viewerAuth(), profileId, {
+          ...(args.author == null ? {} : { author: args.author }),
+          ...(args.q == null ? {} : { q: args.q }),
+          ...(args.cursor == null ? {} : { cursor: args.cursor }),
+          ...(args.limit == null ? {} : { limit: args.limit }),
+        }, viewer);
+        return {
+          notes: response.items.map(searchedNoteOut),
+          page: { truncated: response.page.truncated, nextCursor: response.page.next_cursor ?? null },
+        };
+      }),
+    suggestSearchAuthors: (_root: unknown, args: { profile: string; prefix: string }, context: GraphQLContext) =>
+      guarded(async () => {
+        const viewer = searchViewer(context, args.profile);
+        const response = await context.api.suggestSearchAuthors(await context.viewerAuth(), await viewer.profileId(), args.prefix, viewer);
+        return response.items.map(searchAuthorOut);
+      }),
+    resolveSearchAuthor: (_root: unknown, args: { profile: string; acct: string }, context: GraphQLContext) =>
+      guarded(async () => {
+        const viewer = searchViewer(context, args.profile);
+        const response = await context.api.resolveSearchAuthor(await context.viewerAuth(), await viewer.profileId(), args.acct, viewer);
+        return searchAuthorOut(response.author);
+      }),
     availableProfiles: (_root: unknown, _args: unknown, context: GraphQLContext) =>
       guarded(() => context.profiles.availableProfiles()),
     apiMode: (_root: unknown, _args: unknown, context: GraphQLContext) => context.api.mode.toUpperCase(),
