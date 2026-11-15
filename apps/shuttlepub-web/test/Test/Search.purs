@@ -6,6 +6,7 @@ module Test.Search (testSearch) where
 import Prelude
 
 import App.Api.Error (ApiError(..))
+import App.Message as App
 import App.Model (RemoteData(..), initialModel)
 import App.Route (Route(..), routeCodec, searchHome)
 import App.Search.Dom (highlightSegments)
@@ -18,7 +19,9 @@ import Data.Array (filter, length)
 import Data.Either (Either(..), hush)
 import Data.Maybe (Maybe(..))
 import Data.String (Pattern(..), contains)
+import Data.Tuple (Tuple(..))
 import Data.String.Common (joinWith)
+import Client.Update (mkUpdate)
 import Effect (Effect)
 import Effect.Class.Console (log)
 import Effect.Exception (throw)
@@ -26,6 +29,7 @@ import Flame.Renderer.String as FRS
 import Generated.Schema.Gql.Enum.ApiMode (ApiMode(..))
 import Routing.Duplex (parse, print) as Routing
 import Server (renderPage)
+import Unsafe.Coerce (unsafeCoerce)
 
 assertEqual :: forall a. Eq a => Show a => String -> a -> a -> Effect Unit
 assertEqual label actual expected =
@@ -228,6 +232,40 @@ testStaleAnswers = do
   assertEqual "a resolve cancelled by typing is dropped"
     (step typedAgain (ResolveDone resolving.next.gen (unsafeResolving resolving.next) true (Right alice))).next.author
     Nothing
+  -- An IME that starts composing cancels the resolve (success and failure answers are dropped), and
+  -- nothing new is asked while composing.
+  let composing = step resolving.next CompositionStarted
+  assertEqual "composition cancels the resolve" composing.next.resolving Nothing
+  assertEqual "composition asks nothing" composing.effects 0
+  assertEqual "a success after composition started is dropped"
+    (step composing.next (ResolveDone resolving.next.gen (unsafeResolving resolving.next) true (Right alice))).next.author
+    Nothing
+  assertEqual "a success after composition started does not search"
+    (step composing.next (ResolveDone resolving.next.gen (unsafeResolving resolving.next) true (Right alice))).commit
+    Nothing
+  assertEqual "a failure after composition started shows no error"
+    (step composing.next (ResolveDone resolving.next.gen (unsafeResolving resolving.next) true (Left (SearchNotFound "x")))).next.problem
+    Nothing
+  let composingText = step composing.next (InputChanged "from:@あ")
+  assertEqual "typing while composing asks nothing" composingText.effects 0
+  assertEqual "typing while composing resolves nothing" composingText.next.resolving Nothing
+  -- Leaving the screen while a resolve is in flight: the late answer must not bring /search back.
+  let
+    update = mkUpdate (unsafeCoerce unit)
+    onSearch = (initialModel (Just searchHome)) { isHydrated = true, search = resolving.next }
+    leftSearch = case update onSearch (App.UrlChanged (Just Home)) of
+      Tuple model _ -> model
+    afterLate = case update leftSearch (App.SearchMsg (ResolveDone resolving.next.gen (unsafeResolving resolving.next) true (Right alice))) of
+      Tuple model effects -> { model, effects: length effects }
+  assertEqual "leaving search drops the request" (leftSearch.search.resolving) Nothing
+  assertEqual "the late resolve does not navigate (no effect)" afterLate.effects 0
+  assertEqual "the late resolve keeps the screen" afterLate.model.route (Just Home)
+  assertEqual "the late resolve leaves no author" afterLate.model.search.author Nothing
+  assertEqual "a late search message on another screen is ignored"
+    ( case update leftSearch (App.SearchMsg (SearchLoaded 0 (Right { notes: [ note "z" ], truncated: false, nextCursor: Nothing }))) of
+        Tuple model _ -> model.search.results
+    )
+    Idle
   assertEqual "a failed lookup keeps the box and makes no result"
     (SearchUpdate.failed (NotImplemented "x") { q: Just "a", author: Nothing } shown).results
     (SearchFailed (NotImplemented "x"))
@@ -261,6 +299,21 @@ testPaging = do
   assertEqual "resuming asks once" resumed.effects 1
   let cutAgain = step resumed.next (MoreLoaded resumed.next.gen "t1" (Right { notes: [ note "b" ], truncated: true, nextCursor: Just "t2" }))
   assertEqual "it can be interrupted again" cutAgain.next.results (Found [ note "a", note "b" ] (Interrupted "t2"))
+  -- After an interruption the rest stays manual until a new condition is confirmed (d04-q17).
+  let resumedOk = step resumed.next (MoreLoaded resumed.next.gen "t1" (Right { notes: [ note "b" ], truncated: false, nextCursor: Just "t2" }))
+  assertEqual "a page that ends in time still waits for the button" resumedOk.next.results (Found [ note "a", note "b" ] (Interrupted "t2"))
+  assertEqual "and does not load by itself" (step resumedOk.next SentinelSeen).effects 0
+  let resumedTwice = step (step resumedOk.next LoadMore).next (MoreLoaded resumedOk.next.gen "t2" (Right { notes: [ note "c" ], truncated: false, nextCursor: Just "t3" }))
+  assertEqual "it stays manual page after page" resumedTwice.next.results (Found [ note "a", note "b", note "c" ] (Interrupted "t3"))
+  let resumedEnd = step (step resumedOk.next LoadMore).next (MoreLoaded resumedOk.next.gen "t2" (Right { notes: [ note "c" ], truncated: false, nextCursor: Nothing }))
+  assertEqual "the end is the end" resumedEnd.next.results (Found [ note "a", note "b", note "c" ] End)
+  let failedMore = step resumed.next (MoreLoaded resumed.next.gen "t1" (Left (NetworkError "down")))
+  let afterFail = step (step failedMore.next LoadMore).next (MoreLoaded failedMore.next.gen "t1" (Right { notes: [ note "b" ], truncated: false, nextCursor: Just "t2" }))
+  assertEqual "a failed page then a success is still manual" afterFail.next.results (Found [ note "a", note "b" ] (Interrupted "t2"))
+  let newCondition = SearchUpdate.enter (Just "profile-1") { q: Just "other", author: Nothing } resumedOk.next
+  assertEqual "a new condition leaves manual mode" newCondition.model.manual false
+  let ordinary = step newCondition.model (SearchLoaded newCondition.model.gen (Right { notes: [ note "n" ], truncated: false, nextCursor: Just "n1" }))
+  assertEqual "and loads by itself again" ordinary.next.results (Found [ note "n" ] (Next "n1"))
   -- An error or a 501 is never turned into a partial or empty result.
   let failedFirst = step (shown { results = Searching }) (SearchLoaded shown.gen (Left (NotImplemented "501")))
   assertEqual "501 is its own state" failedFirst.next.results (SearchFailed (NotImplemented "501"))
@@ -282,7 +335,15 @@ testHighlight = do
   assertEqual "emoji is whole" (hits (highlightSegments "🎉" "a🎉b🎉")) [ "🎉", "🎉" ]
   assertEqual "markup is plain text" (hits (highlightSegments "b" "<b>x</b> & \"b\"")) [ "b", "b", "b" ]
   assertEqual "markup stays in its pieces" (joinWith "" (texts (highlightSegments "script" "<script>alert(1)</script>"))) "<script>alert(1)</script>"
-  assertEqual "several words mark each" (hits (highlightSegments "foo bar" "bar and foo")) [ "bar", "foo" ]
+  -- The same rule as the mock (NFKC + lowercase of the whole keyword); a match maps back to the original text.
+  assertEqual "several words are one substring" (hits (highlightSegments "foo bar" "bar and foo")) []
+  assertEqual "the substring of several words" (hits (highlightSegments "foo bar" "x foo bar y")) [ "foo bar" ]
+  assertEqual "half-width kana with a mark" (hits (highlightSegments "ガ" "あｶﾞい")) [ "ｶﾞ" ]
+  assertEqual "full-width kana finds half-width keyword" (hits (highlightSegments "ｶﾞ" "あガい")) [ "ガ" ]
+  assertEqual "ligature" (hits (highlightSegments "ff" "a\xFB00 b")) [ "\xFB00" ]
+  assertEqual "composed keyword, decomposed text" (hits (highlightSegments "\xE9" "ae\x0301 b")) [ "e\x0301" ]
+  assertEqual "decomposed keyword, composed text" (hits (highlightSegments "e\x0301" "a\xE9 b")) [ "\xE9" ]
+  assertEqual "pieces rebuild the folded text" (joinWith "" (texts (highlightSegments "ガ" "あｶﾞい"))) "あｶﾞい"
   assertEqual "no match, one piece" (length (highlightSegments "zzz" "abc")) 1
 
 testScreen :: Effect Unit

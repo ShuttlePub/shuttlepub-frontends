@@ -25,7 +25,7 @@ import App.Search.Api (resolveAuthor, searchNotes, suggestAuthors)
 import App.Search.Text (keyword, knownAuthor, lastFrom, parse, rememberAuthor, spaceConversion, suggestionPrefix, withoutFrom)
 import App.Search.Types (Author, Condition, Message(..), Model, Note, Page, Problem(..), Results(..), Tail(..), emptyCondition, emptySuggestions, searchInputId)
 import Data.Array (any, foldl, length, snoc, (!!))
-import Data.Either (Either(..))
+import Data.Either (Either(..), either)
 import Data.Maybe (Maybe(..), isJust, isNothing)
 import Data.Time.Duration (Milliseconds(..))
 import Effect.Aff (Aff, delay)
@@ -72,6 +72,7 @@ clearState model = model
   , resolving = Nothing
   , problem = Nothing
   , results = Idle
+  , manual = false
   , waiting = false
   }
 
@@ -128,9 +129,9 @@ closeSuggestions model =
 update :: Model -> Message -> Step
 update model = case _ of
   InputChanged text
-    | model.composing -> stay (model { input = text })
+    | model.composing -> stay (cancelResolve model { input = text })
     | otherwise -> typed text model
-  CompositionStarted -> stay (model { composing = true })
+  CompositionStarted -> stay (cancelResolve model { composing = true })
   CompositionEnded text -> typed text (model { composing = false })
 
   EnterPressed -> case model.suggest.active >>= \index -> model.suggest.items !! index of
@@ -194,8 +195,9 @@ update model = case _ of
     | gen == model.gen && model.results == Searching -> stay
         ( model
             { results = case result of
-                Right page -> Found (dedupe [] page.notes) (tailOf page)
+                Right page -> Found (dedupe [] page.notes) (tailOf false page)
                 Left error -> SearchFailed error
+            , manual = either (const false) _.truncated result
             }
         )
     | otherwise -> stay model
@@ -214,8 +216,9 @@ update model = case _ of
         Found notes (LoadingNext waiting) | waiting == cursor -> stay
           ( model
               { results = case result of
-                  Right page -> Found (dedupe notes page.notes) (tailOf page)
+                  Right page -> Found (dedupe notes page.notes) (tailOf model.manual page)
                   Left error -> Found notes (NextFailed cursor error)
+              , manual = model.manual || either (const false) _.truncated result
               }
           )
         _ -> stay model
@@ -223,10 +226,12 @@ update model = case _ of
 
   NoSearchOp -> stay model
 
-tailOf :: Page -> Tail
-tailOf page = case page.nextCursor of
+-- | After an interruption (`manual`) the rest of the search keeps waiting for its button, even
+-- | when a later page ends in time.
+tailOf :: Boolean -> Page -> Tail
+tailOf manual page = case page.nextCursor of
   Nothing -> End
-  Just cursor | page.truncated -> Interrupted cursor
+  Just cursor | page.truncated || manual -> Interrupted cursor
   Just cursor -> Next cursor
 
 -- | Notes appended without any the list already has (the same Note twice is never shown twice).
@@ -261,6 +266,10 @@ typed text model = case spaceConversion parsed of
   parsed = parse text
   cancelled = nextSeq model
   typedModel = cancelled.model { input = text, resolving = Nothing, problem = Nothing }
+
+-- | A resolve in flight is dropped (its answer, success or failure, finds no request to answer).
+cancelResolve :: Model -> Model
+cancelResolve model = model { resolving = Nothing, problem = Nothing }
 
 -- | Hand-typed `from:@acct` is resolved by the server (ResolveNoteSearchAuthor); nothing else
 -- | turns text into an author.

@@ -158,6 +158,9 @@ type Model =
   -- | Bumped when text becomes a chip (the chip is highlighted for a moment).
   , flash :: Int
   , results :: Results
+  -- | Set once a search was interrupted (time limit): the rest of that search is loaded by the
+  -- | button only (d04-q17) until a new condition is confirmed.
+  , manual :: Boolean
   }
 
 -- | The id of the search box (focus returns here; the combobox of ui-spec 2 検索欄).
@@ -183,6 +186,7 @@ init =
   , problem: Nothing
   , flash: 0
   , results: Idle
+  , manual: false
   }
 
 -- | Everything the search screen can be told. Key actions come from App.Dom.keydownAction

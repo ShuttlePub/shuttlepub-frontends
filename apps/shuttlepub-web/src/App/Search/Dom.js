@@ -1,64 +1,53 @@
 // DOM-free helpers of the search screen (highlighting) and the one scroll observer that loads
 // the next page. Everything is safe to import during SSR: nothing touches the DOM at load.
 
-const fold = (point) => point.normalize("NFKC").toLowerCase();
+const fold = (text) => text.normalize("NFKC").toLowerCase();
 
-const occurrences = (haystack, needle) => {
-  const found = [];
-  if (needle.length === 0) return found;
-  let start = 0;
-  while (start + needle.length <= haystack.length) {
-    let matches = true;
-    for (let offset = 0; offset < needle.length; offset += 1) {
-      if (haystack[start + offset] !== needle[offset]) {
-        matches = false;
-        break;
-      }
-    }
-    if (matches) {
-      found.push([start, start + needle.length]);
-      start += needle.length;
-    } else {
-      start += 1;
-    }
+// A cluster is a code point with the combining marks after it (a point that folds to a mark, like
+// half-width ﾞ, counts), the unit that is folded (NFKC composes a base with its marks, so
+// e + U+0301 is é). Each cluster remembers the UTF-16 units
+// of its folded form, so a match found in the folded text maps back to the original text.
+const clusters = (text) => {
+  const list = [];
+  for (const point of Array.from(text)) {
+    const last = list[list.length - 1];
+    if (last !== undefined && /^\p{M}/u.test(fold(point))) last.text += point;
+    else list.push({ text: point });
   }
-  return found;
+  return list;
 };
 
-const merge = (ranges) => {
-  const sorted = ranges.slice().sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-  const merged = [];
-  for (const range of sorted) {
-    const last = merged[merged.length - 1];
-    if (last !== undefined && range[0] <= last[1]) last[1] = Math.max(last[1], range[1]);
-    else merged.push([range[0], range[1]]);
-  }
-  return merged;
-};
-
-// The text cut into [{ text, hit }] pieces; a piece is a hit where the query matches, ignoring
-// case and width. The server does not fix whether a keyword of several words is one substring
-// or all words, so the whole keyword is marked where it occurs and, when it does not, each word.
+// The text cut into [{ text, hit }] pieces; a piece is a hit where the keyword matches as the
+// mock (and the producer) match it: the whole keyword as one substring after NFKC and lowercase,
+// so ガ and ｶﾞ, ff and ﬀ, é and e + U+0301 are the same. Whether a keyword of several words is
+// one substring or all words is not fixed by the contract, so words are not split.
 // The pieces become text nodes (never markup), so nothing in a note can inject HTML.
 export const highlightSegments = (query) => (text) => {
-  const points = Array.from(text);
-  const haystack = points.map(fold);
-  const trimmed = query.trim();
-  const needle = (word) => Array.from(word).map(fold);
-  let ranges = occurrences(haystack, needle(trimmed));
-  if (ranges.length === 0) {
-    const parts = trimmed.split(/[\s\u3000]+/).filter((word) => word !== "");
-    ranges = merge(parts.flatMap((word) => occurrences(haystack, needle(word))));
+  const needle = fold(query.trim());
+  if (needle === "") return [{ text, hit: false }];
+  const list = clusters(text);
+  let folded = "";
+  const owner = [];
+  list.forEach((cluster, index) => {
+    const part = fold(cluster.text);
+    for (let unit = 0; unit < part.length; unit += 1) owner.push(index);
+    folded += part;
+  });
+  const marked = new Array(list.length).fill(false);
+  let found = false;
+  let from = folded.indexOf(needle);
+  while (from !== -1) {
+    found = true;
+    for (let unit = from; unit < from + needle.length; unit += 1) marked[owner[unit]] = true;
+    from = folded.indexOf(needle, from + needle.length);
   }
-  if (ranges.length === 0) return [{ text, hit: false }];
+  if (!found) return [{ text, hit: false }];
   const segments = [];
-  let position = 0;
-  for (const [start, end] of ranges) {
-    if (start > position) segments.push({ text: points.slice(position, start).join(""), hit: false });
-    segments.push({ text: points.slice(start, end).join(""), hit: true });
-    position = end;
-  }
-  if (position < points.length) segments.push({ text: points.slice(position).join(""), hit: false });
+  list.forEach((cluster, index) => {
+    const last = segments[segments.length - 1];
+    if (last !== undefined && last.hit === marked[index]) last.text += cluster.text;
+    else segments.push({ text: cluster.text, hit: marked[index] });
+  });
   return segments;
 };
 

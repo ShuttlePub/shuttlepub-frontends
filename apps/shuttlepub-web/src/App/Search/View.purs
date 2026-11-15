@@ -85,6 +85,9 @@ searchBox model = HE.div [ HA.class' "sp-search-box", attr "role" "search", attr
               <> case search.suggest.active of
                 Just index | listShown -> [ attr "aria-activedescendant" (optionId index) ]
                 _ -> []
+              <> case search.problem of
+                Just _ -> [ attr "aria-invalid" "true", attr "aria-describedby" problemId ]
+                Nothing -> []
           )
       , if search.input /= "" || isJust search.author then
           HE.button
@@ -100,13 +103,16 @@ searchBox model = HE.div [ HA.class' "sp-search-box", attr "role" "search", attr
       , suggestionList search
       ]
   , case search.problem of
-      Just problem -> HE.p [ HA.class' "sp-search-problem", attr "role" "alert", testId "search-problem" ] [ HE.text (problemText problem) ]
+      Just problem -> HE.p [ HA.id problemId, HA.class' "sp-search-problem", attr "role" "alert", testId "search-problem" ] [ HE.text (problemText problem) ]
       Nothing -> emptySlot
   , if isJust search.resolving then visuallyHidden "投稿者を確認しています" else emptySlot
   ]
   where
   search = model.search
   listShown = search.suggest.open && length search.suggest.items > 0
+
+problemId :: String
+problemId = "sp-search-problem"
 
 compositionEnded :: Event -> Effect (Maybe Search.Message)
 compositionEnded event = do
@@ -115,7 +121,14 @@ compositionEnded event = do
 
 -- | The author chip of the field: the name, the person's `@acct` apart when it is known.
 chip :: Search.Author -> Html Search.Message
-chip author = HE.span [ HA.class' "sp-search-chip", testId "author-chip", attr "data-actor-url" author.actorUrl ]
+chip author = HE.span
+  [ HA.class' "sp-search-chip"
+  , testId "author-chip"
+  , attr "data-actor-url" author.actorUrl
+  , HA.title (authorName author <> if author.acct == "" then "" else " " <> authorHandle author)
+  , attr "role" "group"
+  , attr "aria-label" ("投稿者 " <> authorName author <> if author.acct == "" then "" else " " <> authorHandle author)
+  ]
   [ authorAvatar AvatarTiny author
   , HE.span [ HA.class' "sp-search-chip-text" ]
       [ HE.span [ HA.class' "sp-search-chip-from" ] [ HE.text "from:" ]

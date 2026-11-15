@@ -53,8 +53,11 @@ mkUpdate nav model = case _ of
       searchFocus = case route of
         Just (Search _) -> [ effect (focusById Search.searchInputId) ]
         _ -> []
+      -- Leaving the search screen drops its state and every request in flight: a late answer (a
+      -- resolve that would commit, a page) carries the old generation and must not bring it back.
+      settled = if searchShown model && not (searchShown muteBlock) then muteBlock { search = SearchUpdate.clearState muteBlock.search } else muteBlock
     in
-      Tuple muteBlock (leaveEffects <> closed.effects <> [ effect scrollToTop ] <> entered.effects <> muteBlockEffects <> searchFocus <> if scrollLocked model then [ syncScrollLock muteBlock ] else [])
+      Tuple settled (leaveEffects <> closed.effects <> [ effect scrollToTop ] <> entered.effects <> muteBlockEffects <> searchFocus <> if scrollLocked model then [ syncScrollLock muteBlock ] else [])
   Hydrated now isMobile ->
     let
       base = model
@@ -236,7 +239,9 @@ mkUpdate nav model = case _ of
         [ syncScrollLock closed
         , effect (nav.pushState (unsafeToForeign {}) (print routeCodec (Search { q: Nothing, from: Just author.actorUrl })))
         ]
-  SearchMsg message -> searchStep nav model message
+  SearchMsg message
+    | searchShown model -> searchStep nav model message
+    | otherwise -> noMessages model
   SelectDetailTab tab -> selectDetailTab model tab false
 
   OpenCompose opener ->
