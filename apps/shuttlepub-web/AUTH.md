@@ -157,12 +157,13 @@ Emumet と同様に再現します（booskiff の既定値は従来の false）�
 A logout 後に B の Kratos credentials を入れ、`prompt` を外した対照では A、
 通常の認可開始では B の consent/callback になることを検証します。
 別の Chromium 試験では sibling Domain cookie に旧 `__Secure-` 名が通る対照を確認した上で、
-新 `__Host-` 名の注入が拒否されることを検証します。この試験は private checkout 不要で常時 CI 実行します。
+新 `__Host-` 名の注入が拒否されることを検証します。この試験は Docker 不要で CI の `shuttlepub-cookie-isolation` ジョブが常時実行します。
 新しい identity の本人一覧は空です（作成/編集は範囲外）。成功した所有Profile選択・再読取は
 BFF の API 契約テストで検証し、実 E2E では存在しないProfileの選択拒否を検証します。
 本格 UI/SSR hydration は既存 visual CI に任せ、この E2E は BFF-only image を使用します。
 ログイン UI は visual CI が real モードの BFF（stub backend）で撮影・検証します（未ログイン・期限切れ・
 `/login` と各理由、「Emumet でログイン」→実 `/auth/login`→stub provider の拒否→実 callback→`/login?error=denied`）。
 ログイン済みの権限不足・Profile 消失の表示は `spago test` の view テストで検証します。
-CI は既存 e2e 同様、private checkout 用 `EMUMET_READ_TOKEN` 不在なら明示的に skip。
-skip と実スタックでの成功を混同せず、PR に実際のローカル実行結果を記録してください。
+CI の `shuttlepub-real-e2e` ジョブは、公開リポジトリの ShuttlePub/Emumet を `e2e/emumet-revision` の revision で
+鍵なしに checkout し、PR ごとに毎回この実スタック E2E を実行します（skip しません）。
+Emumet の pin を更新するときは `e2e/emumet-revision` を変え、この E2E が通ることを CI で確認してください。
