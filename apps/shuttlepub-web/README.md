@@ -149,7 +149,7 @@ commit から `bun run openapi:sync-scenarios` で取込) を投影に再生し�
 - **URL**: 確定した条件 (`q` と作者の actor URL `from`) だけを URL に持ち、戻る・共有で再現します。cursor・途中結果は入れません。
 - **入口**: ユーザーページの「…」だけに「@user の投稿を検索」があり、既知の actor URL を作者チップに入れて即検索します
   (共用の投稿メニューには増やしません)。
-- real E2E (`scripts/e2e-real.sh`) は `EMUMET_READ_TOKEN` 未設定の CI では skip されます。検索の挙動は
+- real E2E (`scripts/e2e-real.sh`) は専用 secret 不要で CI が毎回実行します。検索の挙動は
   `apps/ui-catalog/visual/screens/shuttlepub-verify.ts` (mock、desktop/mobile) と BFF / PureScript のテストで確認します。
 
 ### 他サーバーの絵文字 (D09 / shuttlepub-web-remote-emoji-reuse-ui)
