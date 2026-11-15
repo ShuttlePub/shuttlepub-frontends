@@ -18,7 +18,7 @@ import App.View (view)
 import Data.Array (filter, length)
 import Data.Either (Either(..), hush)
 import Data.Maybe (Maybe(..))
-import Data.String (Pattern(..), contains)
+import Data.String (Pattern(..), contains, split)
 import Data.Tuple (Tuple(..))
 import Data.String.Common (joinWith)
 import Client.Update (mkUpdate)
@@ -343,6 +343,11 @@ testHighlight = do
   assertEqual "ligature" (hits (highlightSegments "ff" "a\xFB00 b")) [ "\xFB00" ]
   assertEqual "composed keyword, decomposed text" (hits (highlightSegments "\xE9" "ae\x0301 b")) [ "e\x0301" ]
   assertEqual "decomposed keyword, composed text" (hits (highlightSegments "e\x0301" "a\xE9 b")) [ "\xE9" ]
+  -- Context-dependent folding follows the whole-text rule (final sigma, Hangul jamo), as the mock does.
+  assertEqual "final sigma: the whole text decides" (hits (highlightSegments "\x03BF\x03C2" "\x039F\x03A3")) [ "\x039F\x03A3" ]
+  assertEqual "final sigma: no match where the mock has none" (hits (highlightSegments "\x03BF\x03C3" "\x039F\x03A3")) []
+  assertEqual "Hangul jamo compose" (hits (highlightSegments "\xAC00" "a \x1100\x1161 b")) [ "\x1100\x1161" ]
+  assertEqual "Hangul syllable finds jamo text only as the mock does" (hits (highlightSegments "\x1100\x1161" "a \xAC00 b")) [ "\xAC00" ]
   assertEqual "pieces rebuild the folded text" (joinWith "" (texts (highlightSegments "ガ" "あｶﾞい"))) "あｶﾞい"
   assertEqual "no match, one piece" (length (highlightSegments "zzz" "abc")) 1
 
@@ -366,7 +371,9 @@ testScreen = do
   assertNotContains "no raw markup from a note" html "<b>ZINE"
   assertContains "the content warning is folded" html "<details"
   assertContains "the author is named" html "Alice"
-  assertContains "the end" html "ここまで"
+  assertContains "the end is marked for the tests" html "data-tail=\"end\""
+  assertNotContains "nothing is said at the end" html "ここまで"
+  assertNotContains "no end element" html "search-end"
   assertNotContains "no avatar image" html "<img"
   let cut = (found [ note "a" ] (Interrupted "t1")) { known = [ alice ] }
   cutHtml <- FRS.render (view (base { search = cut }))
@@ -376,10 +383,35 @@ testScreen = do
   nextHtml <- FRS.render (view (base { search = found [ note "a" ] (Next "c1") }))
   assertContains "the sentinel exists while it loads by itself" nextHtml "data-search-sentinel=\"c1\""
   empty <- FRS.render (view (base { search = found [] End }))
-  assertContains "zero results" empty "該当する投稿はありません"
+  assertContains "zero results" empty "見つかりませんでした"
+  assertContains "zero results has its own marker" empty "data-testid=\"search-empty\""
+  assertNotContains "zero results is not the time-limit message" empty "時間内に見つかりませんでした"
+  assertNotContains "zero results says nothing about the end" empty "ここまで"
+  timedOut <- FRS.render (view (base { search = found [] (Interrupted "t1") }))
+  assertContains "time-limit zero results" timedOut "時間内に見つかりませんでした"
+  assertContains "time-limit zero results has its own marker" timedOut "data-testid=\"search-empty-timeout\""
+  assertNotContains "time-limit zero results is not the plain zero" timedOut "data-testid=\"search-empty\""
+  assertContains "the time-limit zero state still resumes" timedOut "途中から続きを読む"
+  assertNotContains "no interrupted notice without notes" timedOut "ここまでで中断しました"
+  loadingNext <- FRS.render (view (base { search = found [ note "a" ] (LoadingNext "c1") }))
+  assertContains "the next page shows post skeletons" loadingNext "data-testid=\"search-skeleton\""
+  assertNotContains "the next page has no spinner text" loadingNext "読み込み中…"
+  searching <- FRS.render (view (base { search = shown { results = Searching } }))
+  assertEqual "the first search shows three skeletons" (length (split (Pattern "sp-search-note-skeleton") searching) - 1) 3
   notImplemented <- FRS.render (view (base { search = shown { results = SearchFailed (NotImplemented "501") } }))
   assertContains "501 is a short unimplemented notice" notImplemented "投稿検索はまだ使えません"
-  assertNotContains "501 is not shown as zero results" notImplemented "該当する投稿はありません"
+  assertNotContains "501 is not shown as zero results" notImplemented "見つかりませんでした"
+  failedNext <- FRS.render (view (base { search = found [ note "a" ] (NextFailed "c1" (NetworkError "down")) }))
+  assertContains "a failed page" failedNext "読み込めませんでした"
+  assertContains "a failed page retries" failedNext "再試行"
+  marked <- FRS.render (view (base { search = (shown { input = "from:@al" }) { suggest = Search.emptySuggestions { open = true, items = [ alice ] } } }))
+  assertContains "the typed prefix is marked in a suggestion" marked "data-testid=\"search-suggest-hit\""
+  chipped <- FRS.render (view (base { search = shown { author = Just alice, flash = 1 } }))
+  assertContains "the new chip is highlighted" chipped "is-just-a"
+  assertContains "the chip is named in full" chipped "Alice @alice@shuttle.example"
+  plainChip <- FRS.render (view (base { search = shown { author = Just alice } }))
+  assertNotContains "a chip that was not just made is not highlighted" plainChip "is-just-"
+  assertContains "the field has the agreed placeholder" plainChip "placeholder=\"検索\""
   where
   cardNote id text = (note id) { text = Just text }
   cwNote = (note "n2") { contentWarning = Just "ネタバレ ZINE", text = Just "本文" }

@@ -194,6 +194,7 @@ init =
 data Message
   = InputChanged String
   | CompositionStarted
+  | FieldClicked
   | CompositionEnded String
   | EnterPressed
   | MoveActive Int

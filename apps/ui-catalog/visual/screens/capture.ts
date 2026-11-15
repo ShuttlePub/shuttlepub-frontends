@@ -424,7 +424,7 @@ async function prepareSearch(page: Page, item: ScreenCase) {
   if (item.id === "search-empty") {
     await expect(page.getByTestId("search-results")).toHaveAttribute("data-state", "idle");
   } else if (item.id === "search-results") {
-    await expect(page.getByTestId("search-end")).toBeVisible();
+    await expect(page.getByTestId("search-results")).toHaveAttribute("data-tail", "end");
     await expect(page.getByTestId("search-note")).toHaveCount(7);
   } else if (item.id === "search-suggest") {
     await input.pressSequentially("from:@so", { delay: 20 });

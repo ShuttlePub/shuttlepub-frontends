@@ -73,6 +73,7 @@ clearState model = model
   , problem = Nothing
   , results = Idle
   , manual = false
+  , flash = 0
   , waiting = false
   }
 
@@ -89,6 +90,8 @@ enter profile condition model = case profile of
     { profile = profile
     -- Names learned for one Profile (its suggestions leave out what it mutes) are not carried to another.
     , known = if isNothing model.profile || model.profile == profile then model.known else []
+    -- The chip that was just made from text keeps its highlight when the URL then confirms the same author.
+    , flash = if isJust condition.author && map _.actorUrl model.author == condition.author then model.flash else 0
     , input = fromMaybeText condition.q
     , author = map (knownAuthor (if isNothing model.profile || model.profile == profile then model.known else [])) condition.author
     , condition = condition
@@ -132,6 +135,7 @@ update model = case _ of
     | model.composing -> stay (cancelResolve model { input = text })
     | otherwise -> typed text model
   CompositionStarted -> stay (cancelResolve model { composing = true })
+  FieldClicked -> withEffects [ focusInput ] model
   CompositionEnded text -> typed text (model { composing = false })
 
   EnterPressed -> case model.suggest.active >>= \index -> model.suggest.items !! index of

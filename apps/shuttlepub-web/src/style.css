@@ -494,28 +494,47 @@ a.sp-quote:hover { background: color-mix(in srgb, currentColor 4%, transparent);
   background: var(--color-bg-primary);
 }
 .sp-search-field {
-  position: relative; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-height: 40px; padding: 4px 8px 4px 12px;
-  border: 1px solid var(--sp-line); border-radius: var(--radius-theme); background: var(--color-bg-surface);
+  position: relative; display: flex; align-items: center; gap: 6px; min-height: 36px; padding: 0 6px 0 10px; cursor: text;
+  border: 1px solid var(--sp-line); border-radius: calc(var(--radius-theme) * .75); background: var(--color-bg-surface);
 }
 .sp-search-field:focus-within { border-color: var(--color-accent); }
 .sp-search-field.is-invalid { border-color: var(--color-error); }
 .sp-search-field > .sp-icon-search { width: 16px; height: 16px; color: var(--color-text-muted); flex-shrink: 0; }
 .sp-search-input {
-  flex: 1 1 120px; min-width: 0; height: 30px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit;
+  flex: 1 1 auto; min-width: 72px; height: 34px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; font-size: 14px;
 }
 .sp-search-input:focus-visible { outline: none; }
 .sp-search-input::placeholder { color: var(--color-text-muted); }
 .sp-search-clear, .sp-search-chip-remove {
-  display: grid; place-items: center; width: 24px; height: 24px; flex-shrink: 0; border-radius: 50%; color: var(--color-text-muted);
+  display: grid; place-items: center; width: 28px; height: 28px; flex-shrink: 0; border-radius: 50%; color: var(--color-text-muted);
 }
+.sp-search-chip-remove { width: 24px; height: 24px; border-radius: 4px; color: inherit; }
 .sp-search-clear:hover, .sp-search-chip-remove:hover { background: color-mix(in srgb, currentColor 10%, transparent); }
-.sp-search-clear .sp-icon, .sp-search-chip-remove .sp-icon { width: 14px; height: 14px; }
+.sp-search-clear .sp-icon { width: 16px; height: 16px; }
+.sp-search-chip-remove .sp-icon { width: 14px; height: 14px; }
 .sp-search-chip {
-  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; height: 26px; padding: 0 2px 0 3px;
-  border-radius: 13px; background: color-mix(in srgb, var(--color-accent) 14%, transparent); color: var(--color-accent); font-size: 13px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 4px; min-width: 0; max-width: 62%; flex: 0 1 auto; height: 26px; padding: 0 0 0 3px;
+  border-radius: calc(var(--radius-theme) * .5); background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 45%, transparent); color: var(--color-accent); font-size: 12px; font-weight: 650;
+}
+.sp-search-chip .sp-avatar-xs { width: 18px; height: 18px; font-size: 9px; border-radius: 4px; }
+/* The chip just made from text is highlighted for about 1.4s (two classes alternate to restart the animation). */
+.sp-search-chip.is-just-a { animation: sp-chip-just-a 1.4s ease-out; }
+.sp-search-chip.is-just-b { animation: sp-chip-just-b 1.4s ease-out; }
+@keyframes sp-chip-just-a {
+  0% { transform: scale(.85); opacity: .3; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 40%, transparent); background: color-mix(in srgb, var(--color-accent) 26%, transparent); }
+  25%, 65% { transform: none; opacity: 1; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 40%, transparent); background: color-mix(in srgb, var(--color-accent) 26%, transparent); }
+  100% { transform: none; opacity: 1; box-shadow: 0 0 0 0 transparent; }
+}
+@keyframes sp-chip-just-b {
+  0% { transform: scale(.85); opacity: .3; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 40%, transparent); background: color-mix(in srgb, var(--color-accent) 26%, transparent); }
+  25%, 65% { transform: none; opacity: 1; box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 40%, transparent); background: color-mix(in srgb, var(--color-accent) 26%, transparent); }
+  100% { transform: none; opacity: 1; box-shadow: 0 0 0 0 transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .sp-search-chip.is-just-a, .sp-search-chip.is-just-b { animation: none; }
 }
 .sp-search-chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sp-search-chip-from { opacity: .7; font-weight: 500; }
 .sp-search-problem { margin: 4px 2px 0; font-size: 12px; color: var(--color-error); }
 .sp-search-suggest {
   position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 20; margin: 0; padding: 4px; list-style: none;
@@ -525,6 +544,7 @@ a.sp-quote:hover { background: color-mix(in srgb, currentColor 4%, transparent);
 .sp-search-suggest-note { padding: 10px 12px; font-size: 12px; color: var(--color-text-muted); }
 .sp-search-option { display: flex; align-items: center; gap: 8px; min-height: 40px; padding: 4px 8px; border-radius: calc(var(--radius-theme) * .75); cursor: pointer; }
 .sp-search-option.is-active, .sp-search-option:hover { background: color-mix(in srgb, var(--color-accent) 12%, transparent); }
+.sp-search-option-hit { color: var(--color-accent); font-weight: 700; }
 .sp-search-option-name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sp-search-option-acct { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--color-text-muted); }
 .sp-search-results { margin-top: 4px; }
@@ -550,11 +570,14 @@ a.sp-quote:hover { background: color-mix(in srgb, currentColor 4%, transparent);
 .sp-search-cw[open] .sp-search-cw-more { display: none; }
 .sp-search-cw[open] .sp-search-note-text { margin-top: 6px; }
 .sp-search-line { display: block; height: 10px; margin: 6px 0; border-radius: 4px; }
-.sp-search-line-short { width: 55%; }
+.sp-search-line-name { width: 38%; }
+.sp-search-line-wide { width: 92%; }
+.sp-search-line-short { width: 64%; }
 .sp-search-note-skeleton { padding: 12px 14px; }
 .sp-search-tail { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 44px; padding: 8px 0; font-size: 12px; color: var(--color-text-muted); }
 .sp-search-failed { color: var(--color-error); }
-.sp-search-end { margin: 0; padding: 12px 0; text-align: center; font-size: 12px; color: var(--color-text-muted); }
+.sp-search-sentinel { min-height: 1px; }
+.sp-search-state { display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 48px 16px; font-size: 13px; text-align: center; color: var(--color-text-muted); margin: 0; }
 .sp-search-error { display: flex; flex-direction: column; align-items: center; gap: 8px; }
 @media (max-width: 767px) {
   /* Edge to edge on a phone: the content's side padding (12px) is given to the parts instead. */
@@ -562,5 +585,9 @@ a.sp-quote:hover { background: color-mix(in srgb, currentColor 4%, transparent);
   .sp-search-box { padding-left: 12px; padding-right: 12px; }
   .sp-search-list, .sp-search-skeletons { border-left: 0; border-right: 0; border-radius: 0; }
   .sp-search-note { padding: 10px 12px; }
-  .sp-search-tail, .sp-search-end, .sp-search-problem, .sp-search-error, .sp-search-results > .sp-state { padding-left: 12px; padding-right: 12px; }
+  .sp-search-tail, .sp-search-problem, .sp-search-error, .sp-search-results > .sp-state { padding-left: 12px; padding-right: 12px; }
+  .sp-search-clear { width: 32px; height: 32px; }
+  .sp-search-chip { height: 30px; }
+  .sp-search-chip-remove { width: 30px; height: 30px; }
+  .sp-search-option { min-height: 44px; }
 }

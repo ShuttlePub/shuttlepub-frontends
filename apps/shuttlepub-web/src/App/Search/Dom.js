@@ -3,50 +3,54 @@
 
 const fold = (text) => text.normalize("NFKC").toLowerCase();
 
-// A cluster is a code point with the combining marks after it (a point that folds to a mark, like
-// half-width ﾞ, counts), the unit that is folded (NFKC composes a base with its marks, so
-// e + U+0301 is é). Each cluster remembers the UTF-16 units
-// of its folded form, so a match found in the folded text maps back to the original text.
+// The matching is done on the whole text folded at once (NFKC, then lowercase), the way the mock does
+// (the producer leaves case and word handling undecided, so this is the mock's provisional rule).
+// To mark the original text, it is cut into chunks whose folds, joined, are the fold of the whole
+// text: the finest cutting that holds is used (a base with its combining marks, then words, then
+// the whole text), because folding depends on context (Greek final sigma, Hangul jamo, NFKC
+// composition). A match then marks the chunks its folded characters belong to.
 const clusters = (text) => {
   const list = [];
   for (const point of Array.from(text)) {
     const last = list[list.length - 1];
-    if (last !== undefined && /^\p{M}/u.test(fold(point))) last.text += point;
-    else list.push({ text: point });
+    if (last !== undefined && /^\p{M}/u.test(fold(point))) last.push(point);
+    else list.push([point]);
   }
-  return list;
+  return list.map((points) => points.join(""));
 };
 
-// The text cut into [{ text, hit }] pieces; a piece is a hit where the keyword matches as the
-// mock (and the producer) match it: the whole keyword as one substring after NFKC and lowercase,
-// so ガ and ｶﾞ, ff and ﬀ, é and e + U+0301 are the same. Whether a keyword of several words is
-// one substring or all words is not fixed by the contract, so words are not split.
+const words = (text) => text.match(/\s+|\S+/gu) ?? [];
+
+const chunksOf = (text, whole) => {
+  for (const cut of [clusters, words]) {
+    const chunks = cut(text);
+    if (chunks.map(fold).join("") === whole) return chunks;
+  }
+  return [text];
+};
+
+// The text cut into [{ text, hit }] pieces; a piece is a hit where the keyword matches.
 // The pieces become text nodes (never markup), so nothing in a note can inject HTML.
 export const highlightSegments = (query) => (text) => {
   const needle = fold(query.trim());
-  if (needle === "") return [{ text, hit: false }];
-  const list = clusters(text);
-  let folded = "";
+  const whole = fold(text);
+  if (needle === "" || !whole.includes(needle)) return [{ text, hit: false }];
+  const chunks = chunksOf(text, whole);
   const owner = [];
-  list.forEach((cluster, index) => {
-    const part = fold(cluster.text);
-    for (let unit = 0; unit < part.length; unit += 1) owner.push(index);
-    folded += part;
+  chunks.forEach((chunk, index) => {
+    for (let unit = 0; unit < fold(chunk).length; unit += 1) owner.push(index);
   });
-  const marked = new Array(list.length).fill(false);
-  let found = false;
-  let from = folded.indexOf(needle);
+  const marked = new Array(chunks.length).fill(false);
+  let from = whole.indexOf(needle);
   while (from !== -1) {
-    found = true;
     for (let unit = from; unit < from + needle.length; unit += 1) marked[owner[unit]] = true;
-    from = folded.indexOf(needle, from + needle.length);
+    from = whole.indexOf(needle, from + needle.length);
   }
-  if (!found) return [{ text, hit: false }];
   const segments = [];
-  list.forEach((cluster, index) => {
+  chunks.forEach((chunk, index) => {
     const last = segments[segments.length - 1];
-    if (last !== undefined && last.hit === marked[index]) last.text += cluster.text;
-    else segments.push({ text: cluster.text, hit: marked[index] });
+    if (last !== undefined && last.hit === marked[index]) last.text += chunk;
+    else segments.push({ text: chunk, hit: marked[index] });
   });
   return segments;
 };

@@ -1,8 +1,8 @@
 -- | The post search screen (D04). Structure and wording follow the agreed UI mock (host
 -- | intents/shuttlepub/features/note-search-ui/ui-spec.md v2 and mocks/index.html): a sticky search
 -- | box whose author is a chip inside the field, a one-line problem, dense result cards with the
--- | match marked, and a tail that is either the auto-loading sentinel, "ここまで", or the
--- | interrupted / failed notice with its button. Explanations are left out on purpose (the help
+-- | match marked, and a tail that is the auto-loading sentinel (nothing is shown at the end), the
+-- | skeleton of the next page, or the interrupted / failed notice with its button. Explanations are left out on purpose (the help
 -- | owns them).
 -- |
 -- | Highlighting builds text nodes and <mark> elements from pieces of text (App.Search.Dom); no
@@ -17,11 +17,12 @@ import App.Dom (relativeTime)
 import App.Message (Message(..))
 import App.Model (Model)
 import App.Search.Dom (highlightSegments, inputValue)
-import App.Search.Text (authorHandle, authorInitial, authorName, knownAuthor)
+import App.Search.Text (authorHandle, authorInitial, authorName, knownAuthor, parse, suggestionPrefix)
 import App.Search.Types as Search
 import App.View.Common (AvatarSize(..), attr, avatar, emptySlot, icon, testId, visuallyHidden)
-import Data.Array (length, mapWithIndex, null)
+import Data.Array (length, mapWithIndex, null, range, uncons)
 import Data.Maybe (Maybe(..), fromMaybe, isJust)
+import Data.String (drop, take)
 import Flame (Html)
 import Flame.Html.Attribute as HA
 import Flame.Html.Element as HE
@@ -55,22 +56,22 @@ authorAvatar size author = avatar size { id: author.actorUrl, displayName: autho
 
 searchBox :: Model -> Html Search.Message
 searchBox model = HE.div [ HA.class' "sp-search-box", attr "role" "search", attr "aria-label" "投稿検索" ]
-  [ HE.div [ HA.class' ("sp-search-field" <> if isJust search.problem then " is-invalid" else ""), testId "search-field" ]
+  [ HE.div [ HA.class' ("sp-search-field" <> if isJust search.problem then " is-invalid" else ""), HA.onClick Search.FieldClicked, testId "search-field" ]
       [ icon "search"
       , case search.author of
-          Just author -> chip author
+          Just author -> chip search.flash author
           Nothing -> emptySlot
       , HE.input
           ( [ HA.type' "text"
             , HA.id Search.searchInputId
             , HA.class' "sp-search-input"
             , HA.value search.input
-            , HA.placeholder (if isJust search.author then "キーワード" else "キーワード、from:@ユーザー")
+            , HA.placeholder "検索"
             , HA.onInput Search.InputChanged
             , HA.createRawEvent "compositionstart" (\_ -> pure (Just Search.CompositionStarted))
             , HA.createRawEvent "compositionend" compositionEnded
             , attr "role" "combobox"
-            , attr "aria-label" "投稿を検索"
+            , attr "aria-label" "検索"
             , attr "aria-autocomplete" "list"
             , attr "aria-haspopup" "listbox"
             , attr "aria-controls" listboxId
@@ -120,29 +121,35 @@ compositionEnded event = do
   pure (Just (Search.CompositionEnded value))
 
 -- | The author chip of the field: the name, the person's `@acct` apart when it is known.
-chip :: Search.Author -> Html Search.Message
-chip author = HE.span
-  [ HA.class' "sp-search-chip"
+-- | `flash` counts the conversions of text into a chip: the chip that was just made is highlighted for
+-- | a moment (two alternating classes restart the animation for the next one).
+chip :: Int -> Search.Author -> Html Search.Message
+chip flash author = HE.span
+  [ HA.class' ("sp-search-chip" <> if flash <= 0 then "" else if flash `mod` 2 == 1 then " is-just-a" else " is-just-b")
   , testId "author-chip"
   , attr "data-actor-url" author.actorUrl
-  , HA.title (authorName author <> if author.acct == "" then "" else " " <> authorHandle author)
+  , HA.title full
   , attr "role" "group"
-  , attr "aria-label" ("投稿者 " <> authorName author <> if author.acct == "" then "" else " " <> authorHandle author)
+  , attr "aria-label" ("投稿者: " <> full)
   ]
   [ authorAvatar AvatarTiny author
   , HE.span [ HA.class' "sp-search-chip-text" ]
-      [ HE.span [ HA.class' "sp-search-chip-from" ] [ HE.text "from:" ]
-      , HE.text (if author.acct == "" then authorName author else authorHandle author)
-      ]
+      [ HE.text (if author.acct == "" then authorName author else authorHandle author) ]
   , HE.button
       [ HA.type' "button"
       , HA.class' "sp-search-chip-remove"
-      , attr "aria-label" (authorName author <> " を外す")
+      , attr "aria-label" ("投稿者の指定を外す（" <> authorName author <> "）")
       , HA.onClick Search.RemoveAuthor
       , testId "author-chip-remove"
       ]
       [ icon "close" ]
   ]
+  where
+  -- The name and the whole acct, for the title and for screen readers (the chip itself shows the short `@user`).
+  full
+    | author.acct == "" = authorName author
+    | authorName author == "@" <> author.acct = authorName author
+    | otherwise = authorName author <> " @" <> author.acct
 
 suggestionList :: Search.Model -> Html Search.Message
 suggestionList search
@@ -155,7 +162,7 @@ suggestionList search
         , attr "aria-label" "投稿者の候補"
         , testId "author-suggestions"
         ]
-        (mapWithIndex (suggestionOption search) search.suggest.items)
+        (mapWithIndex (suggestionOption search (fromMaybe "" (suggestionPrefix (parse search.input)))) search.suggest.items)
   | otherwise = HE.div [ HA.class' "sp-search-suggest sp-search-suggest-note", attr "role" "status", testId "author-suggestions-note" ]
       [ HE.text
           ( if search.suggest.loading then "候補を探しています…"
@@ -164,8 +171,18 @@ suggestionList search
           )
       ]
 
-suggestionOption :: Search.Model -> Int -> Search.Author -> Html Search.Message
-suggestionOption search index author = HE.li
+-- | The typed prefix is marked where the name or the acct starts with it (the way the producer matches;
+-- | the text stays text nodes).
+leadingMark :: String -> String -> Array (Html Search.Message)
+leadingMark prefix text
+  | take 1 text == "@" = [ HE.text "@" ] <> leadingMark prefix (drop 1 text)
+  | prefix == "" = [ HE.text text ]
+  | otherwise = case uncons (highlightSegments prefix text) of
+      Just { head, tail } | head.hit -> [ HE.b [ HA.class' "sp-search-option-hit", testId "search-suggest-hit" ] [ HE.text head.text ] ] <> map (\segment -> HE.text segment.text) tail
+      _ -> [ HE.text text ]
+
+suggestionOption :: Search.Model -> String -> Int -> Search.Author -> Html Search.Message
+suggestionOption search prefix index author = HE.li
   [ HA.id (optionId index)
   , HA.class' ("sp-search-option" <> if search.suggest.active == Just index then " is-active" else "")
   , attr "role" "option"
@@ -177,8 +194,8 @@ suggestionOption search index author = HE.li
   , testId "author-suggestion"
   ]
   [ authorAvatar AvatarSmall author
-  , HE.span [ HA.class' "sp-search-option-name" ] [ HE.text (authorName author) ]
-  , if author.acct /= "" && author.displayName /= Nothing then HE.span [ HA.class' "sp-search-option-acct" ] [ HE.text ("@" <> author.acct) ] else emptySlot
+  , HE.span [ HA.class' "sp-search-option-name" ] (leadingMark prefix (authorName author))
+  , if author.acct /= "" && author.displayName /= Nothing then HE.span [ HA.class' "sp-search-option-acct" ] (leadingMark prefix ("@" <> author.acct)) else emptySlot
   ]
 
 problemText :: Search.Problem -> String
@@ -202,38 +219,58 @@ lookupText = case _ of
 resultsView :: Model -> Html Search.Message
 resultsView model = case model.search.results of
   Search.Idle -> HE.div [ HA.class' "sp-search-results", attr "data-state" (if model.search.waiting then "waiting" else "idle"), testId "search-results" ]
-    [ if model.search.waiting then skeletons else emptySlot ]
+    [ if model.search.waiting then skeletons 3 else emptySlot ]
   Search.Searching -> HE.div [ HA.class' "sp-search-results", attr "data-state" "searching", attr "aria-busy" "true", testId "search-results" ]
-    [ skeletons, visuallyHidden "検索中" ]
+    [ skeletons 3, visuallyHidden "検索中" ]
   Search.SearchFailed error -> HE.div [ HA.class' "sp-search-results", attr "data-state" "error", testId "search-results" ]
     [ failure error ]
   Search.Found notes tail -> HE.div
     [ HA.class' "sp-search-results"
     , attr "data-state" "found"
     , attr "data-count" (show (length notes))
+    , attr "data-tail" (tailValue tail)
     , testId "search-results"
     ]
-    ( [ if null notes then emptyNote tail else list model notes ]
-        <> [ tailView tail ]
+    ( if null notes then case tail of
+        -- Nothing found, or nothing yet because the time limit cut the search (the button still resumes).
+        Search.End -> [ HE.p [ HA.class' "sp-search-state", attr "role" "status", testId "search-empty" ] [ HE.text "見つかりませんでした" ] ]
+        Search.Interrupted _ ->
+          [ HE.div [ HA.class' "sp-search-state", attr "role" "status", testId "search-empty-timeout" ]
+              [ HE.span [] [ HE.text "時間内に見つかりませんでした" ]
+              , continueButton unit
+              ]
+          ]
+        _ -> [ tailView tail ]
+      else [ list model notes, tailView tail ]
     )
 
-skeletons :: Html Search.Message
-skeletons = HE.div [ HA.class' "sp-search-skeletons", attr "aria-hidden" "true", testId "search-skeleton" ]
-  (map (\_ -> skeleton) [ 1, 2, 3, 4 ])
+-- | What follows the notes, as a value for the tests (the end shows nothing).
+tailValue :: Search.Tail -> String
+tailValue = case _ of
+  Search.End -> "end"
+  Search.Next _ -> "next"
+  Search.LoadingNext _ -> "loading"
+  Search.Interrupted _ -> "interrupted"
+  Search.NextFailed _ _ -> "failed"
+
+-- | Post-shaped placeholders (initial search: 3, next page: 2).
+skeletons :: Int -> Html Search.Message
+skeletons count = HE.div [ HA.class' "sp-search-skeletons", attr "aria-hidden" "true", testId "search-skeleton" ]
+  (map (\_ -> skeleton) (range 1 count))
   where
   skeleton = HE.div [ HA.class' "sp-search-note sp-search-note-skeleton" ]
     [ HE.span [ HA.class' "sp-avatar sp-avatar-sm sp-skeleton" ] []
     , HE.div [ HA.class' "sp-search-note-main" ]
-        [ HE.span [ HA.class' "sp-search-line sp-skeleton" ] []
+        [ HE.span [ HA.class' "sp-search-line sp-search-line-name sp-skeleton" ] []
+        , HE.span [ HA.class' "sp-search-line sp-search-line-wide sp-skeleton" ] []
         , HE.span [ HA.class' "sp-search-line sp-search-line-short sp-skeleton" ] []
         ]
     ]
 
--- | Zero shown notes: nothing found, or nothing yet while the time limit cut the search.
-emptyNote :: Search.Tail -> Html Search.Message
-emptyNote = case _ of
-  Search.End -> HE.p [ HA.class' "sp-state", attr "role" "status", testId "search-empty" ] [ HE.text "該当する投稿はありません" ]
-  _ -> emptySlot
+-- | A function, not a constant: `map` over a shared Html value would wrap its handler again at every render.
+continueButton :: Unit -> Html Search.Message
+continueButton _ = HE.button [ HA.type' "button", HA.class' "sp-btn sp-btn-secondary", HA.onClick Search.LoadMore, testId "search-continue" ]
+  [ HE.text "途中から続きを読む" ]
 
 list :: Model -> Array Search.Note -> Html Search.Message
 list model notes = HE.div [ HA.class' "sp-search-list", testId "search-list" ] (map (card model) notes)
@@ -296,22 +333,21 @@ kindValue = case _ of
 
 tailView :: Search.Tail -> Html Search.Message
 tailView = case _ of
-  Search.End -> HE.p [ HA.class' "sp-search-end", testId "search-end" ] [ HE.text "ここまで" ]
+  -- Everything is shown: nothing more (the results carry data-tail="end").
+  Search.End -> emptySlot
   -- Only this tail loads by itself: the sentinel is what the scroll observer waits for.
-  Search.Next cursor -> HE.div [ HA.class' "sp-search-tail", attr sentinelAttr cursor, attr "data-state" "next", testId "search-sentinel" ]
-    [ HE.span [ HA.class' "sp-muted" ] [ HE.text "読み込み中…" ] ]
-  Search.LoadingNext _ -> HE.div [ HA.class' "sp-search-tail", attr "role" "status", attr "aria-busy" "true", attr "data-state" "loading", testId "search-loading" ]
-    [ HE.span [ HA.class' "sp-muted" ] [ HE.text "読み込み中…" ] ]
+  Search.Next cursor -> HE.div [ HA.class' "sp-search-sentinel", attr sentinelAttr cursor, attr "data-state" "next", testId "search-sentinel" ] []
+  Search.LoadingNext _ -> HE.section [ attr "role" "status", attr "aria-busy" "true", attr "data-state" "loading", testId "search-loading" ]
+    [ skeletons 2, visuallyHidden "続きを読み込み中" ]
   -- The time limit cut the search: what was found stays, nothing loads by itself (d04-q17).
   Search.Interrupted _ -> HE.div [ HA.class' "sp-search-tail sp-search-interrupted", attr "role" "status", attr "data-state" "interrupted", testId "search-interrupted" ]
     [ HE.span [] [ HE.text "ここまでで中断しました" ]
-    , HE.button [ HA.type' "button", HA.class' "sp-btn sp-btn-secondary", HA.onClick Search.LoadMore, testId "search-continue" ]
-        [ HE.text "途中から続きを読む" ]
+    , continueButton unit
     ]
   Search.NextFailed _ error -> HE.div [ HA.class' "sp-search-tail sp-search-failed", attr "role" "alert", attr "data-state" "failed", attr "data-error" (errorTag error), testId "search-more-failed" ]
     [ HE.span [] [ HE.text (searchErrorText error) ]
     , HE.button [ HA.type' "button", HA.class' "sp-btn sp-btn-secondary", HA.onClick Search.LoadMore, testId "search-retry-more" ]
-        [ HE.text "もう一度" ]
+        [ HE.text "再試行" ]
     ]
 
 failure :: ApiError -> Html Search.Message
@@ -319,7 +355,7 @@ failure error = HE.div [ HA.class' "sp-state sp-state-error sp-search-error", at
   ( [ HE.span [] [ HE.text (searchErrorText error) ] ]
       <> case error of
         NotImplemented _ -> []
-        _ -> [ HE.button [ HA.type' "button", HA.class' "sp-btn sp-btn-secondary", HA.onClick Search.Retry, testId "search-retry" ] [ HE.text "もう一度" ] ]
+        _ -> [ HE.button [ HA.type' "button", HA.class' "sp-btn sp-btn-secondary", HA.onClick Search.Retry, testId "search-retry" ] [ HE.text "再試行" ] ]
   )
 
 errorTag :: ApiError -> String
@@ -345,5 +381,4 @@ searchErrorText = case _ of
   Unauthenticated _ -> "ログインが必要です"
   SessionExpired _ -> "ログインの有効期限が切れました"
   ProfileUnavailable _ -> "Profile を選択してください"
-  NetworkError _ -> "通信に失敗しました"
-  _ -> "検索できませんでした"
+  _ -> "読み込めませんでした"

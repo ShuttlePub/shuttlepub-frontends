@@ -1764,7 +1764,7 @@ async function verifySearch(browser: Browser, server: AppServer, viewport: Viewp
     await expect(notes.first()).toBeVisible();
     // Infinite scroll to the end: every page once, no duplicates, nothing after the end.
     const before = searchCount(ops, "SearchNotes");
-    await expect.poll(async () => { await toBottom(); return page.getByTestId("search-end").count(); }, { timeout: 20_000 }).toBe(1);
+    await expect.poll(async () => { await toBottom(); return page.getByTestId("search-results").getAttribute("data-tail"); }, { timeout: 20_000 }).toBe("end");
     const ids = (await noteIds()) as string[];
     expect(ids.length).toBeGreaterThanOrEqual(41);
     expect(new Set(ids).size).toBe(ids.length);
@@ -1778,7 +1778,9 @@ async function verifySearch(browser: Browser, server: AppServer, viewport: Viewp
     await page.evaluate(() => window.scrollTo(0, 0));
     await search("検索");
     await expect(page).toHaveURL(/\/search\?q=%E6%A4%9C%E7%B4%A2$/);
-    await expect(page.getByTestId("search-end")).toHaveCount(1);
+    await expect(page.getByTestId("search-results")).toHaveAttribute("data-tail", "end");
+    // Everything shown: nothing more is said (no "ここまで").
+    await expect(page.getByTestId("search-results")).not.toContainText("ここまで");
     await expect(notes).toHaveCount(7);
     // The page never scrolls sideways (the long actor-URL names are cut, the kind badge keeps its line).
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), "no horizontal overflow").toBe(true);
@@ -1810,15 +1812,32 @@ async function verifySearch(browser: Browser, server: AppServer, viewport: Viewp
     await expect(notes).toHaveCount(7);
     // Nothing found is its own message.
     await search("zzzz存在しない語");
-    await expect(page.getByTestId("search-empty")).toHaveText("該当する投稿はありません");
+    await expect(page.getByTestId("search-empty")).toHaveText("見つかりませんでした");
+    await expect(page.getByTestId("search-empty-timeout")).toHaveCount(0);
 
     // from:@acct. Suggestions follow the typed prefix; a space only converts (no search).
     await page.goto("/search", { waitUntil: "networkidle" });
+    // The agreed box (ui-spec 2): placeholder "検索", 36px field, a click in its margin focuses the input.
+    await expect(input).toHaveAttribute("placeholder", "検索");
+    const field = page.getByTestId("search-field");
+    expect((await field.boundingBox())?.height).toBe(36);
+    await input.evaluate((element) => (element as HTMLInputElement).blur());
+    await field.click({ position: { x: 4, y: 18 } });
+    await expect(input).toBeFocused();
     await input.pressSequentially("from:@sor", { delay: 20 });
     await expect(page.getByTestId("author-suggestion")).toHaveCount(1);
     await expect(input).toHaveAttribute("aria-expanded", "true");
+    // The typed prefix is marked in the suggestion (text only).
+    await expect(page.getByTestId("search-suggest-hit").first()).toHaveText(/^sor/i);
+    expect(await page.getByTestId("author-suggestion").evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(viewport.name === "mobile" ? 44 : 36);
     await input.pressSequentially("a ", { delay: 20 });
     await expect(page.getByTestId("author-chip")).toHaveAttribute("data-actor-url", sora);
+    // The chip: 26px (30px on a phone), its remove button 24px (30px), the full acct for readers.
+    // (offset sizes: the chip is still scaling in while highlighted)
+    expect(await page.getByTestId("author-chip").evaluate((element) => (element as HTMLElement).offsetHeight)).toBe(viewport.name === "mobile" ? 30 : 26);
+    expect(await page.getByTestId("author-chip-remove").evaluate((element) => (element as HTMLElement).offsetWidth)).toBe(viewport.name === "mobile" ? 30 : 24);
+    await expect(page.getByTestId("author-chip")).toHaveAttribute("title", /@sora@/);
+    await expect(page.getByTestId("author-chip")).toHaveClass(/is-just-/);
     await expect(input).toHaveValue("");
     await expect(page).toHaveURL(/\/search$/);
     expect(searchCount(ops, "ResolveSearchAuthor")).toBeGreaterThan(0);
@@ -1951,7 +1970,7 @@ async function verifySearch(browser: Browser, server: AppServer, viewport: Viewp
     await expect(notes).toHaveCount(10);
     await expect(page.getByTestId("search-interrupted")).toBeVisible();
     await page.getByTestId("search-continue").click();
-    await expect(page.getByTestId("search-end")).toHaveCount(1);
+    await expect(page.getByTestId("search-results")).toHaveAttribute("data-tail", "end");
     expect(new Set(await noteIds()).size).toBe(12);
 
     // A failed extra page keeps the notes and waits for its button; it never retries by itself.
