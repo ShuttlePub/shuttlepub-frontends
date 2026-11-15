@@ -5,84 +5,114 @@ const fold = (text) => text.normalize("NFKC").toLowerCase();
 
 // The matching is done on the whole text folded at once (NFKC, then lowercase), the way the mock does
 // (the producer leaves case and word handling undecided, so this is the mock's provisional rule).
-// To mark the original text, it is cut into chunks whose folds, joined, are the fold of the whole
-// text. Folding depends on context in a few places (Greek final sigma, Hangul jamo, NFKC
-// composition), so only the characters such a context joins are put in one chunk; every other
-// character keeps its own position and is never marked because of a neighbour's context.
+// To mark the original text, the fold is built piece by piece so that every folded character knows
+// the part of the original text it came from:
+//  1. NFKC is applied per normalization segment (a base with what composes with it: marks, Hangul
+//     jamo, ...). Whole-text NFKC is the concatenation of the segments' NFKC, so a segment's output
+//     belongs to exactly that segment's original text.
+//  2. Lowercasing is applied per code point, except the one context-dependent case JS has, Final_Sigma
+//     (U+03A3): it is decided with the Unicode condition on the whole NFKC text.
+// If the pieces do not add up to the whole fold (they always should), nothing is marked.
 
-// A cluster is a code point with the combining marks after it (a point that folds to a mark, like
-// half-width ﾞ, counts).
+const CASED = /\p{Cased}/u;
+const IGNORABLE = /\p{Case_Ignorable}/u;
+const MARK = /^\p{M}/u;
+
+const nfkc = (text) => text.normalize("NFKC");
+
+// A code point with the combining marks after it (a point that normalizes to a mark, like half-width ﾞ, counts).
 const clusters = (text) => {
   const list = [];
   for (const point of Array.from(text)) {
     const last = list[list.length - 1];
-    if (last !== undefined && /^\p{M}/u.test(fold(point))) last.push(point);
+    const mark = point.charCodeAt(0) >= 0x300 && (MARK.test(point) || MARK.test(nfkc(point)));
+    if (last !== undefined && mark) last.push(point);
     else list.push([point]);
   }
   return list.map((points) => points.join(""));
 };
 
-const REACH = 8;
-
-// The clusters grouped where folding joins them: a boundary is kept apart when folding the clusters
-// around it (REACH each side) gives the same as folding both sides alone.
-const joinedWhereFoldingDepends = (atoms) => {
+// The clusters grouped into normalization segments: a cluster starts a new segment when normalizing
+// it together with the segment before gives the two normalized apart (nothing composes across).
+const segments = (text) => {
   const groups = [];
-  atoms.forEach((atom, index) => {
-    if (index === 0) {
-      groups.push(atom);
-      return;
+  let current = null;
+  for (const atom of clusters(text)) {
+    const out = nfkc(atom);
+    if (current === null) {
+      current = { text: atom, out };
+      continue;
     }
-    const left = atoms.slice(Math.max(0, index - REACH), index).join("");
-    const right = atoms.slice(index, index + REACH).join("");
-    if (fold(left + right) === fold(left) + fold(right)) groups.push(atom);
-    else groups[groups.length - 1] += atom;
-  });
+    const joined = nfkc(current.text + atom);
+    if (joined === current.out + out) {
+      groups.push(current);
+      current = { text: atom, out };
+    } else {
+      current.text += atom;
+      current.out = joined;
+    }
+  }
+  if (current !== null) groups.push(current);
   return groups;
 };
 
-const words = (text) => text.match(/\s+|\S+/gu) ?? [];
+// Unicode's Final_Sigma condition: a cased letter before and none after, case-ignorable characters
+// being skipped on both sides. A character that is both (U+0345) is skipped: that is how ICU, which the
+// engines' toLowerCase is built on, reads it.
+const finalSigma = (points, index) => {
+  let before = index - 1;
+  while (before >= 0 && IGNORABLE.test(points[before])) before -= 1;
+  if (before < 0 || !CASED.test(points[before])) return false;
+  let after = index + 1;
+  while (after < points.length && IGNORABLE.test(points[after])) after += 1;
+  return !(after < points.length && CASED.test(points[after]));
+};
 
-// Chunks with their folds (computed once), or the whole text when nothing finer is consistent.
-const chunksOf = (text, whole) => {
-  const atoms = clusters(text);
-  const candidates = [
-    () => atoms,
-    () => joinedWhereFoldingDepends(atoms),
-    () => words(text),
-  ];
-  for (const make of candidates) {
-    const chunks = make();
-    const folds = chunks.map(fold);
-    if (folds.join("") === whole) return { chunks, folds };
-  }
-  return { chunks: [text], folds: [whole] };
+// { groups, folded, owner }: the folded text, and for each of its UTF-16 units the index of the
+// segment (of the original text) it came from. Null when the pieces do not add up to the whole fold.
+export const alignedFold = (text) => {
+  const groups = segments(text);
+  const points = [];
+  const pointGroup = [];
+  groups.forEach((group, index) => {
+    for (const point of group.out) {
+      points.push(point);
+      pointGroup.push(index);
+    }
+  });
+  let folded = "";
+  const owner = [];
+  points.forEach((point, index) => {
+    const lower = point === "\u03A3" ? (finalSigma(points, index) ? "\u03C2" : "\u03C3") : point.toLowerCase();
+    for (let unit = 0; unit < lower.length; unit += 1) owner.push(pointGroup[index]);
+    folded += lower;
+  });
+  if (folded !== fold(text)) return null;
+  return { groups, folded, owner };
 };
 
 // The text cut into [{ text, hit }] pieces; a piece is a hit where the keyword matches.
 // The pieces become text nodes (never markup), so nothing in a note can inject HTML.
 export const highlightSegments = (query) => (text) => {
   const needle = fold(query.trim());
-  const whole = fold(text);
-  if (needle === "" || !whole.includes(needle)) return [{ text, hit: false }];
-  const { chunks, folds } = chunksOf(text, whole);
-  const owner = [];
-  folds.forEach((folded, index) => {
-    for (let unit = 0; unit < folded.length; unit += 1) owner.push(index);
-  });
-  const marked = new Array(chunks.length).fill(false);
-  let from = whole.indexOf(needle);
+  const plain = [{ text, hit: false }];
+  if (needle === "" || !fold(text).includes(needle)) return plain;
+  const aligned = alignedFold(text);
+  if (aligned === null) return plain;
+  const { groups, folded, owner } = aligned;
+  const marked = new Array(groups.length).fill(false);
+  let from = folded.indexOf(needle);
   while (from !== -1) {
     for (let unit = from; unit < from + needle.length; unit += 1) marked[owner[unit]] = true;
-    from = whole.indexOf(needle, from + needle.length);
+    from = folded.indexOf(needle, from + needle.length);
   }
-  const segments = [];
-  chunks.forEach((chunk, index) => {
-    const last = segments[segments.length - 1];
-    if (last !== undefined && last.hit === marked[index]) last.text += chunk;
-    else segments.push({ text: chunk, hit: marked[index] });
+  const pieces = [];
+  groups.forEach((group, index) => {
+    const last = pieces[pieces.length - 1];
+    if (last !== undefined && last.hit === marked[index]) last.text += group.text;
+    else pieces.push({ text: group.text, hit: marked[index] });
   });
-  return segments;
+  return pieces;
 };
 
 export const inputValue = (event) => () => (event.target instanceof HTMLInputElement ? event.target.value : "");
